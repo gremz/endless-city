@@ -1,0 +1,25 @@
+{
+  "name": "3d-game-ow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Endless procedural city first-person shooter with Counter-Strike style movement and gunplay",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "simplex-noise": "^4.0.3",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}
