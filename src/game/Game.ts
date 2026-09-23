@@ -24,6 +24,8 @@ import { WorkerChunkSource } from '../world/WorkerChunkSource';
 import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
 import { EncounterManager } from '../ai/EncounterManager';
+import { AudioEngine } from '../audio/AudioEngine';
+import { SoundEvents } from '../audio/sounds';
 import { buy, buyZoneStatus, owned, priceOf, type BuyItem } from '../sim/buy';
 import { BuyMenu } from '../ui/BuyMenu';
 import { SettingsMenu } from '../ui/SettingsMenu';
@@ -58,6 +60,10 @@ export class Game {
   readonly encounters: EncounterManager | null;
   private death: { killer: number; text: string } | null = null;
   private buyMenu: BuyMenu;
+  readonly audio = new AudioEngine();
+  private sounds = new SoundEvents(this.audio);
+  private fwd = new THREE.Vector3();
+  private up = new THREE.Vector3();
   private settingsMenu: SettingsMenu;
   private saveTimer = 0;
   private loop: FixedLoop;
@@ -107,6 +113,7 @@ export class Game {
       onChunkVisibility: () => {},
       onChunkUnloaded: (key) => this.presentation.onChunkUnloaded(key),
     });
+    this.presentation.sinks.push(this.sounds);
     this.presentation.sinks.push({
       handle: (e) => {
         if (e.type === 'money') this.hud.flashMoney(e.amount);
@@ -170,6 +177,7 @@ export class Game {
     this.renderer.setRenderScale(s.renderScale);
     this.chunkRenderer.setShadows(s.shadows > 0);
     this.sim.opts.autoBhop = s.autoBhop;
+    this.audio.setVolume(s.masterVolume);
     if (this.debug) {
       const want = this.params.debug || s.showFps;
       if (want !== this.debug.visible) this.debug.toggle();
@@ -278,6 +286,8 @@ export class Game {
   private async play(fullscreen: boolean): Promise<void> {
     if (this.loading) return;
     this.menu.setStatus('');
+    // Audio may only start from a user gesture.
+    void this.audio.unlock();
     if (fullscreen && !document.fullscreenElement) {
       try {
         await document.documentElement.requestFullscreen();
@@ -345,6 +355,14 @@ export class Game {
     this.presentation.update(this.sim, alpha, frameMs / 1000);
     const cam = this.renderer.camera;
     this.camCtl.update(cam, p, alpha, this.input.yaw, this.input.pitch);
+    // Audio listener follows the camera.
+    cam.getWorldDirection(this.fwd);
+    this.up.set(0, 1, 0).applyQuaternion(cam.quaternion);
+    this.sounds.listener.x = cam.position.x;
+    this.sounds.listener.y = cam.position.y;
+    this.sounds.listener.z = cam.position.z;
+    this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, this.fwd.x, this.fwd.y, this.fwd.z, this.up.x, this.up.y, this.up.z);
+    this.sounds.tick(frameMs / 1000);
     this.presentation.handleEvents(this.sim);
     this.focus.set(this.camCtl.position.x, 0, this.camCtl.position.z);
     this.renderer.updateSun(this.focus);
@@ -478,6 +496,7 @@ export class Game {
     this.input.dispose();
     this.streamer.dispose();
     this.presentation.dispose();
+    this.audio.dispose();
     this.chunkRenderer.dispose();
     this.materials.dispose();
     this.renderer.dispose();

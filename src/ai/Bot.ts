@@ -76,6 +76,8 @@ const va = vec3();
 const vb = vec3();
 const tgt = vec3();
 const recoil = { pitch: 0, yaw: 0 };
+const moveDir = { x: 0, z: 0 };
+const lookHeights = [0, 0, 0];
 
 /**
  * A bot: an Actor driven by a brain that produces a UserCmd every tick, then runs the same
@@ -210,7 +212,10 @@ export class Bot {
         va.x = ex;
         va.y = ey;
         va.z = ez;
-        for (const h of [eyeHeight(p.move) + 0.05, 1.2 * k, 0.4]) {
+        lookHeights[0] = eyeHeight(p.move) + 0.05;
+        lookHeights[1] = 1.2 * k;
+        lookHeights[2] = 0.4;
+        for (const h of lookHeights) {
           vb.x = p.move.pos.x;
           vb.y = p.move.pos.y + h;
           vb.z = p.move.pos.z;
@@ -480,7 +485,9 @@ export class Bot {
     }
     this.wasVisible = engaged;
 
-    const move = { x: 0, z: 0 };
+    const move = moveDir;
+    move.x = 0;
+    move.z = 0;
     let walk = false;
     let crouch = false;
     let wantFire = false;
