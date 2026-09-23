@@ -1,6 +1,6 @@
 import { clamp, DEG } from '../core/math';
 import { BUTTON_KEYS, LAST_WEAPON_KEY, LOCKED_DUCK_KEYS, MOVE_KEYS, SLOT_KEYS } from './bindings';
-import { Buttons, type UserCmd } from './UserCmd';
+import { Buttons, SELECT_LAST, SELECT_NEXT, SELECT_PREV, type UserCmd } from './UserCmd';
 
 /** CS m_yaw / m_pitch: degrees per mouse count at sensitivity 1. */
 const M_YAW = 0.022;
@@ -111,7 +111,7 @@ export class Input {
       }
     }
     if (down && code in SLOT_KEYS) this.weaponSelect = SLOT_KEYS[code];
-    if (down && code === LAST_WEAPON_KEY) this.weaponSelect = 100;
+    if (down && code === LAST_WEAPON_KEY) this.weaponSelect = SELECT_LAST;
   }
 
   private onMouseMove(e: MouseEvent): void {
@@ -171,7 +171,7 @@ export class Input {
     cmd.attackYaw = this.attackLatched ? this.attackYaw : this.yaw;
     cmd.attackPitch = this.attackLatched ? this.attackPitch : this.pitch;
     cmd.weaponSelect = active ? this.weaponSelect : -1;
-    if (active && this.wheel !== 0) cmd.weaponSelect = this.wheel > 0 ? 101 : 102;
+    if (active && this.wheel !== 0) cmd.weaponSelect = this.wheel > 0 ? SELECT_NEXT : SELECT_PREV;
     this.pressed = 0;
     this.attackLatched = false;
     this.weaponSelect = -1;
@@ -185,8 +185,3 @@ export class Input {
     this.exitLock();
   }
 }
-
-/** Weapon-select sentinels in UserCmd.weaponSelect. */
-export const SELECT_LAST = 100;
-export const SELECT_NEXT = 101;
-export const SELECT_PREV = 102;

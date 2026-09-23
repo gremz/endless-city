@@ -179,3 +179,355 @@ kbd {
 .speedo.air {
   color: #9fd6ff;
 }
+
+/* ---------- HUD ---------- */
+.hud {
+  position: absolute;
+  inset: 0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.crosshair {
+  --ch-gap: 4px;
+  --ch-size: 6px;
+  --ch-thick: 2px;
+  --ch-color: #4dff6a;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+
+.ch-line,
+.ch-dot {
+  position: absolute;
+  background: var(--ch-color);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.ch-0,
+.ch-1 {
+  width: var(--ch-size);
+  height: var(--ch-thick);
+  top: calc(var(--ch-thick) / -2);
+}
+
+.ch-0 {
+  right: var(--ch-gap);
+}
+
+.ch-1 {
+  left: var(--ch-gap);
+}
+
+.ch-2,
+.ch-3 {
+  width: var(--ch-thick);
+  height: var(--ch-size);
+  left: calc(var(--ch-thick) / -2);
+}
+
+.ch-2 {
+  bottom: var(--ch-gap);
+}
+
+.ch-3 {
+  top: var(--ch-gap);
+}
+
+.ch-dot {
+  width: var(--ch-thick);
+  height: var(--ch-thick);
+  left: calc(var(--ch-thick) / -2);
+  top: calc(var(--ch-thick) / -2);
+}
+
+.hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  transition: opacity 0.08s;
+}
+
+.hitmarker.show {
+  opacity: 1;
+}
+
+.hm {
+  position: absolute;
+  width: 10px;
+  height: 2px;
+  background: #fff;
+  box-shadow: 0 0 2px #000;
+}
+
+.hitmarker.head .hm {
+  background: #ffd84d;
+}
+
+.hitmarker.kill .hm {
+  background: #ff4d4d;
+  width: 14px;
+}
+
+.hm-0 {
+  transform: translate(-16px, -12px) rotate(45deg);
+}
+
+.hm-1 {
+  transform: translate(6px, -12px) rotate(-45deg);
+}
+
+.hm-2 {
+  transform: translate(-16px, 10px) rotate(-45deg);
+}
+
+.hm-3 {
+  transform: translate(6px, 10px) rotate(45deg);
+}
+
+.hud-vitals {
+  position: absolute;
+  left: 24px;
+  bottom: 20px;
+}
+
+.hud-row {
+  display: flex;
+  gap: 26px;
+}
+
+.hud-vital {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.hud-vital.none {
+  opacity: 0.35;
+}
+
+.hud-icon {
+  font-size: 22px;
+  color: #f0e6c8;
+}
+
+.hud-num {
+  font-size: 34px;
+  color: #f4f1e6;
+  min-width: 56px;
+}
+
+.hud-num.low {
+  color: #ff5a4a;
+}
+
+.hud-helmet {
+  font-size: 16px;
+}
+
+.hud-money {
+  position: relative;
+  font-size: 24px;
+  font-weight: 700;
+  color: #9dffa0;
+  margin-bottom: 4px;
+}
+
+.money-pop {
+  position: absolute;
+  left: 100%;
+  margin-left: 12px;
+  top: 0;
+  white-space: nowrap;
+  color: #9dffa0;
+  animation: moneypop 1.6s ease-out forwards;
+}
+
+.money-pop.neg {
+  color: #ff8a7a;
+}
+
+@keyframes moneypop {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-24px);
+  }
+}
+
+.hud-ammo-box {
+  position: absolute;
+  right: 28px;
+  bottom: 20px;
+  text-align: right;
+}
+
+.hud-weapon {
+  font-size: 14px;
+  color: #cfd6db;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.hud-ammo {
+  font-size: 40px;
+  font-weight: 800;
+  color: #f4f1e6;
+}
+
+.hud-ammo.low {
+  color: #ff5a4a;
+}
+
+.hud-reserve {
+  font-size: 20px;
+  color: #b8c0c5;
+  margin-left: 6px;
+}
+
+.killfeed {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.feed-entry {
+  background: rgba(0, 0, 0, 0.55);
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 14px;
+  transition: opacity 0.3s;
+}
+
+.feed-entry.mine {
+  border: 1px solid rgba(255, 70, 70, 0.8);
+}
+
+.feed-weapon {
+  color: #f0c060;
+}
+
+.scope {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, transparent 0, transparent 38vh, rgba(0, 0, 0, 0.9) 38.2vh, #000 40vh);
+}
+
+.scope-h,
+.scope-v {
+  position: absolute;
+  background: #000;
+}
+
+.scope-h {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+
+.scope-v {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+.center-msg {
+  position: absolute;
+  left: 50%;
+  top: 28%;
+  transform: translateX(-50%);
+  font-size: 26px;
+  font-weight: 700;
+  color: #ffe08a;
+  opacity: 0;
+  transition: opacity 0.3s;
+  white-space: nowrap;
+}
+
+.center-msg.show {
+  opacity: 1;
+}
+
+.center-msg.bad {
+  color: #ff8a7a;
+}
+
+.damage-flash {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 120px rgba(200, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.damage-flash.show {
+  opacity: 1;
+}
+
+.dmg-arcs {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+}
+
+.dmg-arc {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  border-top: 6px solid rgba(255, 40, 40, 0.85);
+  border-right: 6px solid transparent;
+  border-left: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  animation: arcfade 1.2s ease-out forwards;
+}
+
+@keyframes arcfade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.compass {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  width: 420px;
+  height: 22px;
+  transform: translateX(-50%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.compass-mark {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.buy-hint {
+  position: absolute;
+  left: 24px;
+  bottom: 120px;
+  font-size: 13px;
+  color: #9dffa0;
+}

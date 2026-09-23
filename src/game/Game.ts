@@ -11,13 +11,16 @@ import { ChunkRenderer } from '../render/ChunkRenderer';
 import { MaterialLibrary } from '../render/materials';
 import { Renderer } from '../render/Renderer';
 import { teleport } from '../sim/Actor';
+import { makeInventory } from '../weapons/Inventory';
 import { Simulation } from '../sim/Simulation';
 import { DebugOverlay } from '../ui/DebugOverlay';
+import { Hud } from '../ui/Hud';
 import { MainMenu } from '../ui/Menus';
 import { worldToChunk } from '../world/chunkMath';
 import { DISTRICT_NAMES } from '../world/gen/ChunkData';
 import { generateGymChunk } from '../world/gen/gymGen';
 import { SyncChunkSource, WorldStreamer } from '../world/WorldStreamer';
+import { Presentation } from './Presentation';
 
 type State = 'menu' | 'playing' | 'paused';
 
@@ -38,6 +41,8 @@ export class Game {
   private camCtl = new CameraController();
   private debug: DebugOverlay;
   private menu: MainMenu;
+  private hud: Hud;
+  private presentation: Presentation;
   private loop: FixedLoop;
   private cmd = makeCmd();
   private state: State = 'menu';
@@ -67,6 +72,14 @@ export class Game {
     this.streamer.addListener(this.chunkRenderer);
 
     this.input = new Input(canvas);
+    this.hud = new Hud(ui, this.settings);
+    this.hud.setVisible(false);
+    this.presentation = new Presentation(this.renderer, this.hud, this.camCtl, this.input, this.settings);
+    this.streamer.addListener({
+      onChunkLoaded: () => {},
+      onChunkVisibility: () => {},
+      onChunkUnloaded: (key) => this.presentation.onChunkUnloaded(key),
+    });
     this.debug = new DebugOverlay(ui, params.debug || this.settings.showFps);
     this.menu = new MainMenu(ui, {
       onPlay: (fs) => void this.play(fs),
@@ -84,6 +97,8 @@ export class Game {
     this.input.sensitivity = s.sensitivity;
     this.input.invertY = s.invertY;
     this.renderer.setFovFromHorizontal43(s.fov);
+    this.presentation?.setBaseFov(this.renderer.camera.fov);
+    this.presentation?.applySettings();
     this.renderer.setShadowMapSize(s.shadows);
     this.renderer.setRenderScale(s.renderScale);
     this.chunkRenderer.setShadows(s.shadows > 0);
@@ -92,11 +107,32 @@ export class Game {
   }
 
   private spawnPlayer(): void {
-    const x = this.params.spawnCx * CHUNK + 32;
-    const z = this.params.spawnCz * CHUNK + 20;
-    this.streamer.preload(x, z, 1);
-    teleport(this.sim.player, x, 0.05, z);
-    this.input.yaw = Math.PI; // face +Z (towards the test course)
+    if (this.params.world === 'range') {
+      // Shooting range lives in gym chunk (1, 0).
+      const ox = CHUNK;
+      this.streamer.preload(ox + 5, 30, 1);
+      teleport(this.sim.player, ox + 5, 0.05, 30);
+      this.input.yaw = -Math.PI / 2; // face +X down the lanes
+      const d = (x: number, z: number, armor = 0, helmet = false) =>
+        this.sim.spawnDummy(ox + x, 0.05, z, Math.PI / 2, armor, helmet);
+      d(20, 18);
+      d(35, 18, 100, false);
+      d(55, 18, 100, true);
+      d(15, 30);
+      d(24, 32, 100, true); // behind the wooden panel
+      d(40, 30);
+      d(58, 42, 100, true);
+      d(28, 42);
+      d(40, 55); // through the doorway
+      this.sim.player.inv = makeInventory('glock', 'ak47');
+    } else {
+      const x = this.params.spawnCx * CHUNK + 32;
+      const z = this.params.spawnCz * CHUNK + 20;
+      this.streamer.preload(x, z, 1);
+      teleport(this.sim.player, x, 0.05, z);
+      this.input.yaw = Math.PI; // face +Z (towards the test course)
+      this.sim.spawnDummy(32, 0.05, 30, 0, 100, true);
+    }
     this.input.pitch = 0;
     this.menu.setReady(true);
   }
@@ -110,6 +146,7 @@ export class Game {
       if (document.pointerLockElement === this.canvas) {
         this.state = 'playing';
         this.menu.hide();
+        this.hud.setVisible(true);
         this.loop.reset();
       } else if (this.state === 'playing') {
         this.pause();
@@ -202,8 +239,10 @@ export class Game {
     this.streamer.update(p.move.pos.x, p.move.pos.z, this.input.yaw);
     this.streamer.apply(1);
 
+    this.presentation.update(this.sim, alpha, frameMs / 1000);
     const cam = this.renderer.camera;
     this.camCtl.update(cam, p, alpha, this.input.yaw, this.input.pitch);
+    this.presentation.handleEvents(this.sim);
     this.focus.set(this.camCtl.position.x, 0, this.camCtl.position.z);
     this.renderer.updateSun(this.focus);
     this.renderer.render();
@@ -243,6 +282,7 @@ export class Game {
     for (const d of this.disposers) d();
     this.input.dispose();
     this.streamer.dispose();
+    this.presentation.dispose();
     this.chunkRenderer.dispose();
     this.materials.dispose();
     this.renderer.dispose();

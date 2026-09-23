@@ -51,3 +51,8 @@ export function clearCmd(c: UserCmd): UserCmd {
   c.weaponSelect = -1;
   return c;
 }
+
+/** Weapon-select sentinels in UserCmd.weaponSelect (numbers 0-9 are slot keys). */
+export const SELECT_LAST = 100;
+export const SELECT_NEXT = 101;
+export const SELECT_PREV = 102;
