@@ -20,6 +20,7 @@ export const MATERIAL_TILE: Record<number, number> = {
   [Material.Metal]: 2,
   [Material.Dev]: 2,
   [Material.Wood]: 2,
+  [Material.Paint]: 2,
 };
 
 /** Container / painted-metal colors chosen by brush tint. */

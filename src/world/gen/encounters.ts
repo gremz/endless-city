@@ -1,0 +1,108 @@
+import { CHUNK } from '../../core/config';
+import type { Rand } from '../../core/rng';
+import { NAV_CELL, NAV_RES, NavFlag } from './ChunkData';
+import type { NavBake } from './navBake';
+
+export interface EncounterData {
+  spawns: Float32Array;
+  perches: Float32Array;
+  patrol: Float32Array;
+  hasEncounter: boolean;
+}
+
+/**
+ * Pick bot spawn slots (reachable, off-street, preferring cover and interiors, spaced apart),
+ * a patrol loop, and valid perches. Positions are converted to world meters.
+ */
+export function placeEncounters(
+  r: Rand,
+  nav: NavBake,
+  cx: number,
+  cz: number,
+  level: number,
+  rawPerches: number[],
+): EncounterData {
+  const N = NAV_RES;
+  const ox = cx * CHUNK;
+  const oz = cz * CHUNK;
+  // Candidate cells packed as (score << 14 | cellIndex) so a typed-array sort ranks them.
+  const keys = new Int32Array(N * N);
+  let count = 0;
+  for (let j = 2; j < N - 2; j++) {
+    for (let i = 2; i < N - 2; i++) {
+      const f = nav.flags[j * N + i];
+      if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & NavFlag.Street) continue;
+      let score = r();
+      if (f & NavFlag.CoverFull) score += 2;
+      else if (f & NavFlag.CoverHalf) score += 1.5;
+      if (f & NavFlag.Indoor) score += 1;
+      if (f & NavFlag.NearWall && !(f & (NavFlag.CoverHalf | NavFlag.CoverFull))) score -= 0.5;
+      keys[count++] = (Math.max(0, Math.floor((score + 1) * 1000)) << 14) | (j * N + i);
+    }
+  }
+  const ranked = keys.subarray(0, count).sort().reverse();
+  const cellOf = (k: number) => k & 0x3fff;
+
+  const spawns: number[] = [];
+  const slotCells: number[] = [];
+  const minSpacing2 = (3.5 / NAV_CELL) ** 2;
+  const MAX_SLOTS = 10;
+  for (let c = 0; c < ranked.length && slotCells.length < MAX_SLOTS; c++) {
+    const cell = cellOf(ranked[c]);
+    const ci = cell % N;
+    const cj = (cell - ci) / N;
+    let ok = true;
+    for (const sc of slotCells) {
+      const si = sc % N;
+      const sj = (sc - si) / N;
+      if ((si - ci) ** 2 + (sj - cj) ** 2 < minSpacing2) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    slotCells.push(cell);
+    spawns.push(ox + (ci + 0.5) * NAV_CELL, nav.floor[cell] / 100 + 0.02, oz + (cj + 0.5) * NAV_CELL);
+  }
+
+  // Patrol loop: farthest-point sampling over reachable open cells.
+  const patrol: number[] = [];
+  if (count) {
+    const pts: number[] = [cellOf(ranked[Math.floor(r() * Math.min(count, 40))])];
+    for (let k = 1; k < 4; k++) {
+      let best = pts[0];
+      let bestD = -1;
+      for (let s = 0; s < count; s += 7) {
+        const cell = cellOf(ranked[s]);
+        const ci = cell % N;
+        const cj = (cell - ci) / N;
+        let d = Infinity;
+        for (const p of pts) d = Math.min(d, (p % N - ci) ** 2 + (Math.floor(p / N) - cj) ** 2);
+        if (d > bestD) {
+          bestD = d;
+          best = cell;
+        }
+      }
+      pts.push(best);
+    }
+    for (const p of pts) {
+      const pi = p % N;
+      const pj = (p - pi) / N;
+      patrol.push(ox + (pi + 0.5) * NAV_CELL, nav.floor[p] / 100 + 0.02, oz + (pj + 0.5) * NAV_CELL);
+    }
+  }
+
+  const perches: number[] = [];
+  for (let k = 0; k < rawPerches.length; k += 3) {
+    perches.push(ox + rawPerches[k], rawPerches[k + 1], oz + rawPerches[k + 2]);
+  }
+
+  const nearSpawn = Math.max(Math.abs(cx), Math.abs(cz)) <= 1;
+  const hasEncounter = !nearSpawn && spawns.length >= 4 * 3 && r() < 0.55 + 0.03 * level;
+  return {
+    spawns: new Float32Array(spawns),
+    perches: new Float32Array(perches),
+    patrol: new Float32Array(patrol),
+    hasEncounter,
+  };
+}

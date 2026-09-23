@@ -5,6 +5,9 @@ import type { GameParams } from '../core/urlParams';
 import type { UserCmd } from '../input/UserCmd';
 import { makeCmd } from '../input/UserCmd';
 import { CollisionWorld } from '../physics/CollisionWorld';
+import { MASK_PLAYER } from '../physics/brush';
+import { makeTrace } from '../physics/trace';
+import { STAND_MAXS, STAND_MINS } from '../player/movementConfig';
 import { playerMove } from '../player/pmove';
 import { makeInventory, makeWeaponState } from '../weapons/Inventory';
 import { updateWeapon, type HitInfo, type WeaponContext } from '../weapons/WeaponSystem';
@@ -60,6 +63,13 @@ export class Simulation implements WeaponContext {
 
   getActor(id: number): Actor | undefined {
     return this.actors.find((a) => a.id === id);
+  }
+
+  /** Height a standing hull comes to rest at when dropped at (x, z) from fromY. */
+  findFloor(x: number, z: number, fromY: number): number {
+    const tr = makeTrace();
+    this.world.traceBox(tr, vec3(x, fromY, z), vec3(x, fromY - 60, z), STAND_MINS, STAND_MAXS, MASK_PLAYER);
+    return tr.fraction < 1 ? tr.endY : 0.05;
   }
 
   /** Static respawning target for the shooting range. */

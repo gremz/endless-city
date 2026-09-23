@@ -16,9 +16,10 @@ export const Material = {
   Metal: 6,
   Dev: 7,
   Wood: 8,
+  Paint: 9,
 } as const;
 export type MaterialId = (typeof Material)[keyof typeof Material];
-export const MATERIAL_COUNT = 9;
+export const MATERIAL_COUNT = 10;
 
 /** Packed word layout: bits 0-2 ramp, 3-7 material, 8-15 contents. */
 export const packBrushWord = (ramp: number, material: number, contents: number) =>

@@ -200,6 +200,7 @@ const IMPACT_COLORS: Record<number, [number, number, number]> = {
   [Material.Wood]: [0.5, 0.34, 0.16],
   [Material.Metal]: [1, 0.85, 0.5],
   [Material.Dev]: [0.7, 0.68, 0.64],
+  [Material.Paint]: [0.3, 0.3, 0.3],
 };
 
 /** Impact dust, sparks and blood: one Points object with CPU-simulated particles. */

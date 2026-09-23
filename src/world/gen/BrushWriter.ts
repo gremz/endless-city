@@ -79,6 +79,8 @@ export class BrushWriter {
     material: number,
     stepHeight = 0.25,
     tint = 128,
+    /** Whether the clip ramp counts as navigable floor for the bot nav bake. */
+    nav = true,
   ): void {
     const rise = y1 - y0;
     const steps = Math.max(1, Math.round(rise / stepHeight));
@@ -103,7 +105,7 @@ export class BrushWriter {
     }
     // Invisible clip ramp through the step nosings (it starts one tread before the first
     // step), plus a flat clip block on the top tread.
-    const clip = Contents.SOLID_PLAYER | Contents.FLOOR;
+    const clip = Contents.SOLID_PLAYER | (nav ? Contents.FLOOR : 0);
     switch (dir) {
       case Ramp.PosX:
         this.box(x0 - tread, y0, z0, x1 - tread, y1, z1, material, clip, tint, dir);

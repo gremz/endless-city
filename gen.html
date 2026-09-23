@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Endless City – generator viewer</title>
+    <style>
+      body { margin: 0; background: #111; color: #ddd; font: 13px system-ui, sans-serif; }
+      header { padding: 8px 12px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+      canvas { display: block; image-rendering: pixelated; }
+      label { display: flex; gap: 4px; align-items: center; }
+      input[type='number'] { width: 70px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <b>Generator viewer</b>
+      <label>seed <input id="seed" value="1337" /></label>
+      <label>center cx <input id="cx" type="number" value="0" /></label>
+      <label>cz <input id="cz" type="number" value="0" /></label>
+      <label><input id="nav" type="checkbox" /> nav overlay</label>
+      <span id="info"></span>
+    </header>
+    <canvas id="map"></canvas>
+    <script type="module" src="/src/devtools/genViewer.ts"></script>
+  </body>
+</html>

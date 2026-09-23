@@ -18,8 +18,10 @@ import { Hud } from '../ui/Hud';
 import { MainMenu } from '../ui/Menus';
 import { worldToChunk } from '../world/chunkMath';
 import { DISTRICT_NAMES } from '../world/gen/ChunkData';
+import { generateChunk } from '../world/gen/generateChunk';
 import { generateGymChunk } from '../world/gen/gymGen';
-import { SyncChunkSource, WorldStreamer } from '../world/WorldStreamer';
+import { WorkerChunkSource } from '../world/WorkerChunkSource';
+import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
 
 type State = 'menu' | 'playing' | 'paused';
@@ -46,6 +48,10 @@ export class Game {
   private loop: FixedLoop;
   private cmd = makeCmd();
   private state: State = 'menu';
+  /** Waiting for the chunks around spawn before the player can drop in. */
+  private loading = true;
+  private spawnX = 0;
+  private spawnZ = 0;
   private raf = 0;
   private lastFrame = 0;
   private disposers: (() => void)[] = [];
@@ -67,7 +73,10 @@ export class Game {
     this.chunkRenderer = new ChunkRenderer(this.materials, this.settings.shadows > 0);
     this.renderer.scene.add(this.chunkRenderer.root);
 
-    const source = new SyncChunkSource(params.seed, generateGymChunk);
+    const source: ChunkSource =
+      params.world === 'city'
+        ? new WorkerChunkSource(params.seed, 'city', generateChunk)
+        : new SyncChunkSource(params.seed, generateGymChunk);
     this.streamer = new WorldStreamer(this.sim.world, source);
     this.streamer.addListener(this.chunkRenderer);
 
@@ -106,13 +115,32 @@ export class Game {
     saveSettings(s);
   }
 
+  /** Choose the spawn point; the player is placed once the surrounding chunks exist. */
   private spawnPlayer(): void {
     if (this.params.world === 'range') {
-      // Shooting range lives in gym chunk (1, 0).
-      const ox = CHUNK;
-      this.streamer.preload(ox + 5, 30, 1);
-      teleport(this.sim.player, ox + 5, 0.05, 30);
+      this.spawnX = CHUNK + 5;
+      this.spawnZ = 30;
+    } else if (this.params.world === 'gym') {
+      this.spawnX = this.params.spawnCx * CHUNK + 32;
+      this.spawnZ = this.params.spawnCz * CHUNK + 20;
+    } else {
+      // City: the spawn plaza, just south of the fountain.
+      this.spawnX = this.params.spawnCx * CHUNK + 32;
+      this.spawnZ = this.params.spawnCz * CHUNK + 22;
+    }
+    teleport(this.sim.player, this.spawnX, 30, this.spawnZ);
+    this.menu.setReady(false);
+    this.menu.setStatus('Generating the city…');
+  }
+
+  private finishSpawn(): void {
+    this.loading = false;
+    const p = this.sim.player;
+    teleport(p, this.spawnX, this.sim.findFloor(this.spawnX, this.spawnZ, 20), this.spawnZ);
+    this.input.pitch = 0;
+    if (this.params.world === 'range') {
       this.input.yaw = -Math.PI / 2; // face +X down the lanes
+      const ox = CHUNK;
       const d = (x: number, z: number, armor = 0, helmet = false) =>
         this.sim.spawnDummy(ox + x, 0.05, z, Math.PI / 2, armor, helmet);
       d(20, 18);
@@ -124,16 +152,14 @@ export class Game {
       d(58, 42, 100, true);
       d(28, 42);
       d(40, 55); // through the doorway
-      this.sim.player.inv = makeInventory('glock', 'ak47');
-    } else {
-      const x = this.params.spawnCx * CHUNK + 32;
-      const z = this.params.spawnCz * CHUNK + 20;
-      this.streamer.preload(x, z, 1);
-      teleport(this.sim.player, x, 0.05, z);
+      p.inv = makeInventory('glock', 'ak47');
+    } else if (this.params.world === 'gym') {
       this.input.yaw = Math.PI; // face +Z (towards the test course)
       this.sim.spawnDummy(32, 0.05, 30, 0, 100, true);
+    } else {
+      this.input.yaw = Math.PI;
     }
-    this.input.pitch = 0;
+    this.menu.setStatus('');
     this.menu.setReady(true);
   }
 
@@ -183,6 +209,7 @@ export class Game {
   }
 
   private async play(fullscreen: boolean): Promise<void> {
+    if (this.loading) return;
     this.menu.setStatus('');
     if (fullscreen && !document.fullscreenElement) {
       try {
@@ -236,8 +263,14 @@ export class Game {
       }
     }
 
-    this.streamer.update(p.move.pos.x, p.move.pos.z, this.input.yaw);
-    this.streamer.apply(1);
+    if (this.loading) {
+      this.streamer.update(this.spawnX, this.spawnZ, this.input.yaw);
+      this.streamer.apply(4, 2);
+      if (this.streamer.allLoaded(this.spawnX, this.spawnZ, 1)) this.finishSpawn();
+    } else {
+      this.streamer.update(p.move.pos.x, p.move.pos.z, this.input.yaw);
+      this.streamer.apply(1);
+    }
 
     this.presentation.update(this.sim, alpha, frameMs / 1000);
     const cam = this.renderer.camera;

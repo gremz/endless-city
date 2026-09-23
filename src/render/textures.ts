@@ -323,7 +323,18 @@ function dev(): HTMLCanvasElement {
   return c;
 }
 
+function paintTex(): HTMLCanvasElement {
+  const [c, ctx] = canvas(64);
+  const r = sfc32(99);
+  paint(ctx, () => {
+    const v = 225 + r() * 25;
+    return [v, v, v * 0.97];
+  });
+  return c;
+}
+
 const PAINTERS: Record<number, () => HTMLCanvasElement> = {
+  [Material.Paint]: paintTex,
   [Material.Concrete]: concrete,
   [Material.Plaster]: plaster,
   [Material.Brick]: brick,
