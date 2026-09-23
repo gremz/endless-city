@@ -25,6 +25,8 @@ export class Input {
   enabled = true;
   /** Wheel impulses (+1 / -1) since the last cmd. */
   wheel = 0;
+  /** A menu (buy menu) is consuming number keys and the fire button. */
+  menuOpen = false;
 
   private held = new Set<string>();
   private buttonsHeld = 0;
@@ -110,7 +112,7 @@ export class Input {
         this.buttonsHeld &= ~b;
       }
     }
-    if (down && code in SLOT_KEYS) this.weaponSelect = SLOT_KEYS[code];
+    if (down && code in SLOT_KEYS && !this.menuOpen) this.weaponSelect = SLOT_KEYS[code];
     if (down && code === LAST_WEAPON_KEY) this.weaponSelect = SELECT_LAST;
   }
 
@@ -166,8 +168,9 @@ export class Input {
     cmd.pitch = this.pitch;
     cmd.forward = active ? (h.has(MOVE_KEYS.forward) ? 1 : 0) - (h.has(MOVE_KEYS.back) ? 1 : 0) : 0;
     cmd.side = active ? (h.has(MOVE_KEYS.right) ? 1 : 0) - (h.has(MOVE_KEYS.left) ? 1 : 0) : 0;
-    cmd.buttons = active ? this.buttonsHeld : 0;
-    cmd.pressed = active ? this.pressed : 0;
+    const mask = this.menuOpen ? ~(Buttons.ATTACK | Buttons.ATTACK2) : ~0;
+    cmd.buttons = active ? this.buttonsHeld & mask : 0;
+    cmd.pressed = active ? this.pressed & mask : 0;
     cmd.attackYaw = this.attackLatched ? this.attackYaw : this.yaw;
     cmd.attackPitch = this.attackLatched ? this.attackPitch : this.pitch;
     cmd.weaponSelect = active ? this.weaponSelect : -1;
