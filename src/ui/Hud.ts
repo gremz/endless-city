@@ -31,6 +31,9 @@ export class Hud {
   private dmgUntil = 0;
   private arcs: HTMLDivElement;
   private compass: HTMLDivElement;
+  private death: HTMLDivElement;
+  private deathTitle: HTMLDivElement;
+  private deathHint: HTMLDivElement;
   private buyHint: HTMLDivElement;
   private lastGap = -1;
   private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1 };
@@ -61,6 +64,10 @@ export class Hud {
     this.arcs = el('div.dmg-arcs');
     this.compass = el('div.compass');
     this.buyHint = el('div.buy-hint', { text: 'Press B to buy' });
+    this.deathTitle = el('div.death-title');
+    this.deathHint = el('div.death-hint');
+    this.death = el('div.death', {}, [this.deathTitle, this.deathHint]);
+    this.death.hidden = true;
     this.root = el('div.hud', {}, [
       this.damageFlash,
       this.scope,
@@ -73,6 +80,7 @@ export class Hud {
       this.center,
       this.compass,
       this.buyHint,
+      this.death,
     ]);
     this.scope.hidden = true;
     this.buyHint.hidden = true;
@@ -149,6 +157,14 @@ export class Hud {
     if (delta < 0) n.classList.add('neg');
     this.money.append(n);
     setTimeout(() => n.remove(), 1600);
+  }
+
+  showDeath(title: string | null, hint = ''): void {
+    this.death.hidden = title === null;
+    if (title !== null) {
+      this.deathTitle.textContent = title;
+      this.deathHint.textContent = hint;
+    }
   }
 
   setScope(on: boolean): void {

@@ -33,6 +33,8 @@ export interface Actor {
   lastDamagedAt: number;
   /** Sim time this actor last dealt damage. */
   lastDealtAt: number;
+  /** Distance accumulated towards the next footstep. */
+  stepAccum: number;
 }
 
 export function makeActor(id: number, name: string, team: TeamId, x: number, y: number, z: number): Actor {
@@ -59,6 +61,7 @@ export function makeActor(id: number, name: string, team: TeamId, x: number, y: 
     lastAttacker: -1,
     lastDamagedAt: -100,
     lastDealtAt: -100,
+    stepAccum: 0,
   };
 }
 

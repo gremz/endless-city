@@ -23,6 +23,12 @@ import { generateGymChunk } from '../world/gen/gymGen';
 import { WorkerChunkSource } from '../world/WorkerChunkSource';
 import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
+import { EncounterManager } from '../ai/EncounterManager';
+import { stuckSnaps } from '../ai/Bot';
+import { Buttons } from '../input/UserCmd';
+import { chunkKey, keyToCoords } from '../world/chunkMath';
+import { WEAPONS, type WeaponId } from '../weapons/weaponDefs';
+import { eyeHeight } from '../player/pmove';
 
 type State = 'menu' | 'playing' | 'paused';
 
@@ -45,6 +51,8 @@ export class Game {
   private menu: MainMenu;
   private hud: Hud;
   private presentation: Presentation;
+  readonly encounters: EncounterManager | null;
+  private death: { killer: number; text: string } | null = null;
   private loop: FixedLoop;
   private cmd = makeCmd();
   private state: State = 'menu';
@@ -79,6 +87,9 @@ export class Game {
         : new SyncChunkSource(params.seed, generateGymChunk);
     this.streamer = new WorldStreamer(this.sim.world, source);
     this.streamer.addListener(this.chunkRenderer);
+    this.streamer.addListener(this.sim.nav);
+    this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
+    if (this.encounters) this.sim.systems.push(this.encounters);
 
     this.input = new Input(canvas);
     this.hud = new Hud(ui, this.settings);
@@ -88,6 +99,17 @@ export class Game {
       onChunkLoaded: () => {},
       onChunkVisibility: () => {},
       onChunkUnloaded: (key) => this.presentation.onChunkUnloaded(key),
+    });
+    this.presentation.sinks.push({
+      handle: (e) => {
+        if (e.type === 'money') this.hud.flashMoney(e.amount);
+        else if (e.type === 'chunkCleared') this.hud.message(`AREA CLEARED  +$${e.bonus}`, 3);
+        else if (e.type === 'kill' && e.victimId === this.sim.player.id) {
+          const k = this.sim.getActor(e.attackerId);
+          const w = WEAPONS[e.weapon as WeaponId]?.name ?? e.weapon;
+          this.death = { killer: e.attackerId, text: `Killed by ${k?.name ?? 'someone'} (${w}${e.headshot ? ', headshot' : ''})` };
+        }
+      },
     });
     this.debug = new DebugOverlay(ui, params.debug || this.settings.showFps);
     this.menu = new MainMenu(ui, {
@@ -259,9 +281,11 @@ export class Game {
         alpha = this.loop.advance(dt, () => {
           this.input.buildCmd(this.cmd);
           this.sim.step(this.cmd);
+          if (!p.alive) this.deadTick();
         });
       }
     }
+    this.updateDeathView(dt);
 
     if (this.loading) {
       this.streamer.update(this.spawnX, this.spawnZ, this.input.yaw);
@@ -280,9 +304,84 @@ export class Game {
     this.renderer.updateSun(this.focus);
     this.renderer.render();
 
+    this.updateHudExtras();
     this.debug.frame(frameMs);
     this.debug.setSpeed(Math.hypot(p.move.vel.x, p.move.vel.z) / HU, p.move.onGround);
     if (this.debug.due(now)) this.updateDebug();
+  }
+
+  /** While dead: after 3 s, fire or jump respawns at the nearest cleared area (or spawn). */
+  private deadTick(): void {
+    const p = this.sim.player;
+    const since = this.sim.time - p.diedAt;
+    if (since < 3 || !(this.cmd.pressed & (Buttons.ATTACK | Buttons.JUMP))) return;
+    const pcx = worldToChunk(p.move.pos.x);
+    const pcz = worldToChunk(p.move.pos.z);
+    let best = chunkKey(this.params.spawnCx, this.params.spawnCz);
+    let bestD = Math.max(Math.abs(pcx - this.params.spawnCx), Math.abs(pcz - this.params.spawnCz));
+    for (const key of this.sim.cleared) {
+      const [cx, cz] = keyToCoords(key);
+      const d = Math.max(Math.abs(pcx - cx), Math.abs(pcz - cz));
+      if (d < bestD && this.streamer.resident.has(key)) {
+        best = key;
+        bestD = d;
+      }
+    }
+    const [cx, cz] = keyToCoords(best);
+    // Sidewalk on the chunk's west side: always walkable.
+    const x = cx * CHUNK + 5;
+    const z = cz * CHUNK + 14;
+    this.sim.respawnPlayer(x, z);
+    this.death = null;
+    this.hud.showDeath(null);
+    this.camCtl.bobY = 0;
+  }
+
+  private updateDeathView(dt: number): void {
+    const p = this.sim.player;
+    if (p.alive) {
+      if (this.death) {
+        this.death = null;
+        this.hud.showDeath(null);
+      }
+      this.camCtl.bobY = 0;
+      return;
+    }
+    const since = this.sim.time - p.diedAt;
+    this.hud.showDeath(this.death?.text ?? 'You died', since >= 3 ? 'Click or press Space to respawn' : '');
+    // Death cam: drop to the floor and turn to face the killer.
+    this.camCtl.bobY = -Math.min(1, since * 2) * (eyeHeight(p.move) - 0.35);
+    const k = this.death ? this.sim.getActor(this.death.killer) : undefined;
+    if (k) {
+      const dx = k.move.pos.x - p.move.pos.x;
+      const dz = k.move.pos.z - p.move.pos.z;
+      const dy = k.move.pos.y + 1.4 - (p.move.pos.y + 0.35);
+      const yaw = Math.atan2(-dx, -dz);
+      const pitch = Math.atan2(dy, Math.hypot(dx, dz));
+      let d = yaw - this.input.yaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      const t = 1 - Math.exp(-dt * 4);
+      this.input.yaw += d * t;
+      this.input.pitch += (pitch - this.input.pitch) * t;
+    }
+  }
+
+  private updateHudExtras(): void {
+    const p = this.sim.player;
+    this.hud.setMoney(this.sim.economy.money);
+    if (this.encounters) {
+      const marks = this.encounters.nearbyEncounters(p.move.pos.x, p.move.pos.z).map((e) => {
+        const dx = (e.cx + 0.5) * CHUNK - p.move.pos.x;
+        const dz = (e.cz + 0.5) * CHUNK - p.move.pos.z;
+        return {
+          angle: Math.atan2(-dx, -dz),
+          label: `⚔${e.level}`,
+          color: e.active ? '#ff6a5a' : '#ffc46a',
+        };
+      });
+      this.hud.setCompass(marks, this.input.yaw);
+    }
   }
 
   private updateDebug(): void {
@@ -306,6 +405,8 @@ export class Game {
       ['chunk', `${worldToChunk(m.pos.x)}, ${worldToChunk(m.pos.z)}  ${chunk ? DISTRICT_NAMES[chunk.district] : '-'}  lvl ${chunk?.level ?? '-'}`],
       ['speed', `${(Math.hypot(m.vel.x, m.vel.z) / HU).toFixed(0)} HU/s  vy ${(m.vel.y / HU).toFixed(0)}`],
       ['state', `${m.onGround ? 'ground' : 'air'}${m.ducked ? ' ducked' : ''}${m.noclip ? ' NOCLIP' : ''}  stuck ${m.stuckEvents}`],
+      ['bots', `${this.encounters?.aliveCount ?? 0} alive  paths ${this.encounters?.pathQueries ?? 0}  snaps ${stuckSnaps}`],
+      ['money', `$${this.sim.economy.money}  cleared ${this.sim.cleared.size}`],
       ['seed', this.params.seedText],
     ]);
   }

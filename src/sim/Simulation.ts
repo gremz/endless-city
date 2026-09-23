@@ -1,4 +1,5 @@
 import { HitGroup } from '../ai/hitboxes';
+import { NavGrid } from '../ai/nav/NavGrid';
 import { EventQueue } from '../core/events';
 import { vec3 } from '../core/math';
 import type { GameParams } from '../core/urlParams';
@@ -7,12 +8,14 @@ import { makeCmd } from '../input/UserCmd';
 import { CollisionWorld } from '../physics/CollisionWorld';
 import { MASK_PLAYER } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
+import { HU } from '../core/config';
 import { STAND_MAXS, STAND_MINS } from '../player/movementConfig';
-import { playerMove } from '../player/pmove';
+import { hullMaxs, hullMins, playerMove } from '../player/pmove';
 import { makeInventory, makeWeaponState } from '../weapons/Inventory';
 import { updateWeapon, type HitInfo, type WeaponContext } from '../weapons/WeaponSystem';
 import { makeActor, storePrev, Team, teleport, type Actor } from './Actor';
 import { applyDamage, bulletDamage } from './damage';
+import { Economy } from './Economy';
 
 export interface SimOptions {
   autoBhop: boolean;
@@ -31,6 +34,10 @@ const idleCmd = makeCmd();
 export class Simulation implements WeaponContext {
   readonly world = new CollisionWorld();
   readonly events = new EventQueue();
+  readonly nav = new NavGrid();
+  readonly economy = new Economy(this.events);
+  /** Chunk keys the player has cleared (buy zones and respawn points). */
+  readonly cleared = new Set<number>();
   readonly player: Actor;
   readonly actors: Actor[] = [];
   readonly systems: SimSystem[] = [];
@@ -88,6 +95,7 @@ export class Simulation implements WeaponContext {
   step(cmd: UserCmd): void {
     this.tick++;
     this.time += this.dt;
+    this.events.beginTick();
     for (const a of this.actors) storePrev(a);
 
     const p = this.player;
@@ -99,9 +107,11 @@ export class Simulation implements WeaponContext {
       if (p.move.jumped) this.events.push({ type: 'jump', actorId: p.id });
       if (p.move.landed && !wasGround) this.events.push({ type: 'land', actorId: p.id, speed: p.move.landSpeed });
       updateWeapon(p, cmd, this);
+      this.footsteps(p);
     }
 
     for (const s of this.systems) s.update(this);
+    this.separateActors();
 
     // Dummies: stand still, respawn a moment after dying.
     for (const a of this.actors) {
@@ -118,6 +128,60 @@ export class Simulation implements WeaponContext {
         playerMove(a.move, idleCmd, this.world, this.dt);
       }
     }
+  }
+
+  /**
+   * Footsteps: running (above 150 HU/s) on the ground makes noise every ~1.3 m; walking and
+   * crouching are silent, as in CS.
+   */
+  footsteps(a: Actor): void {
+    const m = a.move;
+    if (!m.onGround || m.noclip) return;
+    const speed = Math.hypot(m.vel.x, m.vel.z);
+    if (speed < 150 * HU) {
+      a.stepAccum = Math.min(a.stepAccum, 0.6);
+      return;
+    }
+    a.stepAccum += speed * this.dt;
+    if (a.stepAccum < 1.3) return;
+    a.stepAccum = 0;
+    const pos = vec3(m.pos.x, m.pos.y, m.pos.z);
+    this.events.push({ type: 'step', actorId: a.id, pos, material: 0 });
+    this.events.push({ type: 'sound', pos, radius: 18, kind: 'footstep', sourceId: a.id });
+  }
+
+  /** Push overlapping actors apart (traced, so nobody gets shoved into a wall). */
+  private separateActors(): void {
+    const list = this.actors;
+    const minD = 0.75;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (!a.alive || a.move.noclip) continue;
+      for (let j = i + 1; j < list.length; j++) {
+        const b = list[j];
+        if (!b.alive || b.move.noclip) continue;
+        const dx = b.move.pos.x - a.move.pos.x;
+        const dz = b.move.pos.z - a.move.pos.z;
+        const dy = Math.abs(b.move.pos.y - a.move.pos.y);
+        const d = Math.hypot(dx, dz);
+        if (d >= minD || dy > 1.6) continue;
+        const nx = d > 1e-4 ? dx / d : 1;
+        const nz = d > 1e-4 ? dz / d : 0;
+        const push = (minD - d) * 0.5;
+        this.nudge(a, -nx * push, -nz * push);
+        this.nudge(b, nx * push, nz * push);
+      }
+    }
+  }
+
+  private sepTrace = makeTrace();
+  private nudge(a: Actor, dx: number, dz: number): void {
+    if (a.dummy) return;
+    const m = a.move;
+    const end = vec3(m.pos.x + dx, m.pos.y, m.pos.z + dz);
+    this.world.traceBox(this.sepTrace, m.pos, end, hullMins(m), hullMaxs(m), MASK_PLAYER);
+    m.pos.x = this.sepTrace.endX;
+    m.pos.z = this.sepTrace.endZ;
   }
 
   // ---- WeaponContext ----
@@ -164,6 +228,19 @@ export class Simulation implements WeaponContext {
       });
     }
     for (const s of this.systems) s.onHit?.(this, info, killed);
+  }
+
+  /** Bring the player back: full health, default loadout (bought gear is lost), money kept. */
+  respawnPlayer(x: number, z: number): void {
+    const p = this.player;
+    p.alive = true;
+    p.health = 100;
+    p.diedAt = -1;
+    this.resetLoadout(p);
+    p.move.ducked = false;
+    p.move.duckAmount = 0;
+    teleport(p, x, this.findFloor(x, z, 30), z);
+    this.events.push({ type: 'respawn', actorId: p.id });
   }
 
   /** Reset an actor's loadout to the default pistol + knife (death penalty). */

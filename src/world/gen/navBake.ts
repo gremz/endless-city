@@ -2,8 +2,8 @@ import { Contents, Ramp } from '../../physics/brush';
 import { BRUSH_STRIDE, NAV_CELL, NAV_RES, NavFlag, wordContents, wordRamp } from './ChunkData';
 import { LOT0, LOT1 } from './streets';
 
-/** Half-width of a standing bot hull (16 HU) plus a little slack. */
-const INFLATE = 0.41;
+/** Half-width of a standing bot hull (16 HU = 0.406 m) plus clearance so paths never scrape corners. */
+const INFLATE = 0.46;
 const STEP = 0.45;
 const BODY_LO = 0.45;
 const BODY_HI = 1.83;

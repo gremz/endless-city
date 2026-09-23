@@ -40,10 +40,17 @@ export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife
 /** Simple append-only queue drained once per frame by presentation. */
 export class EventQueue {
   private items: SimEvent[] = [];
+  /** Sound events emitted during the current tick (for AI hearing); cleared each tick. */
+  readonly tickSounds: Extract<SimEvent, { type: 'sound' }>[] = [];
 
   push(e: SimEvent): void {
+    if (e.type === 'sound') this.tickSounds.push(e);
     this.items.push(e);
     if (this.items.length > 4096) this.items.splice(0, this.items.length - 4096);
+  }
+
+  beginTick(): void {
+    this.tickSounds.length = 0;
   }
 
   /** Take all queued events. */
