@@ -166,6 +166,27 @@ export class BrushWriter {
   }
 
   /**
+   * A sloped slab rising from y0 to y1 towards dir, made of short wedges (each only as thick as
+   * its own rise) so the space under it stays clear — for ramps stacked above each other.
+   */
+  slopedSlab(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, dir: RampDir, material: number, tint = 128, segLen = 2): void {
+    const along = dir === Ramp.PosX || dir === Ramp.NegX;
+    const pos = dir === Ramp.PosX || dir === Ramp.PosZ;
+    const lo = along ? x0 : z0;
+    const hi = along ? x1 : z1;
+    const n = Math.max(1, Math.ceil((hi - lo) / segLen));
+    for (let i = 0; i < n; i++) {
+      // Segment i counted from the low end.
+      const a = pos ? lo + ((hi - lo) * i) / n : hi - ((hi - lo) * (i + 1)) / n;
+      const b = a + (hi - lo) / n;
+      const ya = y0 + ((y1 - y0) * i) / n;
+      const yb = y0 + ((y1 - y0) * (i + 1)) / n;
+      if (along) this.box(a, ya, z0, b, yb, z1, material, SOLID | Contents.FLOOR, tint, dir);
+      else this.box(x0, ya, a, x1, yb, b, material, SOLID | Contents.FLOOR, tint, dir);
+    }
+  }
+
+  /**
    * A wall ladder: an invisible stand-off clip against the wall (so climbers clear ledges and
    * overhangs), the climbable volume in front of it, and visible rails and rungs. `side` is the
    * wall's outward direction (0 = -Z, 1 = +Z, 2 = -X, 3 = +X), `face` the wall plane coordinate,

@@ -414,7 +414,9 @@ export class Bot {
 
   private goTo(ctx: BotContext, target: Vec3, extra?: (gx: number, gz: number) => number): void {
     const now = ctx.sim.time;
-    const changed = !this.goal || Math.hypot(this.goal.x - target.x, this.goal.z - target.z) > 2;
+    // Halfway up a ladder there's no floor to plan from: finish the climb first.
+    if (this.actor.move.onLadder && this.path[this.pathIdx]?.ladder) return;
+    const changed = !this.goal || Math.hypot(this.goal.x - target.x, this.goal.z - target.z) > 2 || Math.abs(this.goal.y - target.y) > 1.5;
     if (changed || (this.path.length === 0 && now >= this.repathAt) || now >= this.repathAt) {
       if (this.requestPath(ctx, target, extra)) this.goal = vec3(target.x, target.y, target.z);
       else if (changed) this.goal = null;
@@ -650,7 +652,8 @@ export class Bot {
       case 'alert':
         if (this.lastKnown) {
           const d = Math.hypot(this.lastKnown.x - a.move.pos.x, this.lastKnown.z - a.move.pos.z);
-          if (d > 2) {
+          // A noise on another floor isn't "here" just because it's overhead.
+          if (d > 2 || Math.abs(this.lastKnown.y - a.move.pos.y) > 1.5) {
             this.goTo(ctx, this.lastKnown);
             this.followPath(move);
             walk = this.awareness < 0.6;
@@ -847,7 +850,9 @@ export class Bot {
     const m = this.actor.move;
     const p = this.path[this.pathIdx];
     if (!m.onLadder || !p?.ladder) return;
-    const up = p.y > m.pos.y + 0.3;
+    // Which way this ladder goes: from the previous waypoint to the one it leads to.
+    const prev = this.path[this.pathIdx - 1];
+    const up = prev ? p.y > prev.y : p.y > m.pos.y;
     if (!up && m.onGround) return;
     cmd.yaw = cmd.attackYaw = Math.atan2(p.ladder.nx, p.ladder.nz);
     cmd.pitch = cmd.attackPitch = up ? 0 : -1.5;

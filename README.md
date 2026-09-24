@@ -72,6 +72,23 @@ Most roofs in the city can be reached, and fights spill onto them.
 
 Bots use ladders, fire escapes and bridges too. Some overwatch bots start on rooftops.
 
+## Landmark buildings
+
+About one block in three has a landmark building on one of its streets, several storeys high
+and open all the way up:
+
+- **Apartment blocks** (Old Town and Downtown, 3–5 floors). A corridor runs down every floor
+  with rooms on both sides behind doors, some of them locked. Furniture gives cover, and the
+  stairs go up to a stair house on the roof. There's a door into the corridor at one end and
+  a street door into a front room.
+- **Offices** (Downtown, 4–6 floors). Open-plan floors of desks and screens behind glass
+  curtain walls, with a glazed lobby. The elevator is out of order, so take the stairs.
+- **Parking garages** (Downtown and Industrial). Open decks every 3 m, joined by long ramps you
+  can drive up, with wrecks in the bays and sometimes a car that still runs on the roof.
+
+Bots spawn and fight on every floor, and snipers take the upper windows and the roofs.
+`gen.html` labels the chunks that have one.
+
 ## Doors and glass
 
 - **Doors.** Many doorways have doors. E opens and closes the one you're looking at, and

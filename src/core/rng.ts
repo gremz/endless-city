@@ -69,6 +69,7 @@ export const Salt = {
   Grenade: 13,
   Facades: 14,
   Breakables: 15,
+  Landmark: 16,
 } as const;
 
 /** Integer in [lo, hi] inclusive. */

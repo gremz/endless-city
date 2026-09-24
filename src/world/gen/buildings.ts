@@ -4,7 +4,7 @@ import type { BrushWriter } from './BrushWriter';
 import { District, DoorFlag, Material } from './ChunkData';
 import { inset, Occ, rd, rect, rw, subtractRects, type BuildingInfo, type GenContext, type Rect } from './genContext';
 
-interface Opening {
+export interface Opening {
   a: number;
   b: number;
   bottom: number;
@@ -16,20 +16,20 @@ interface Opening {
 /** Window pane thickness. */
 const PANE_T = 0.04;
 
-const WALL_T = 0.3;
-const DOOR_W = 1.6;
-const DOOR_H = 2.4;
-const FLOOR_H = 3.5;
-const SLAB_T = 0.25;
+export const WALL_T = 0.3;
+export const DOOR_W = 1.6;
+export const DOOR_H = 2.4;
+export const FLOOR_H = 3.5;
+export const SLAB_T = 0.25;
 
 /** Thin interior/house walls can be shot through. */
-const THIN_WALL = SOLID | Contents.PENETRABLE;
+export const THIN_WALL = SOLID | Contents.PENETRABLE;
 
 /**
  * A straight wall with openings. `alongX` walls span x in [a0, a1] at z in [c0, c1];
  * otherwise they span z in [a0, a1] at x in [c0, c1]. Openings are in wall-length coordinates.
  */
-function wall(
+export function wall(
   w: BrushWriter,
   alongX: boolean,
   a0: number,
@@ -75,7 +75,7 @@ function wall(
 }
 
 /** Openings for a wall of given length: an optional door plus evenly spaced windows. */
-function wallOpenings(r: Rand, a0: number, a1: number, door: number | null, windows: boolean, winBottom: number, winTop: number, rb?: Rand): Opening[] {
+export function wallOpenings(r: Rand, a0: number, a1: number, door: number | null, windows: boolean, winBottom: number, winTop: number, rb?: Rand): Opening[] {
   const out: Opening[] = [];
   if (door !== null) out.push({ a: door, b: door + DOOR_W, bottom: 0, top: DOOR_H });
   if (!windows) return out;
@@ -118,13 +118,13 @@ function shuffled<T>(r: Rand, a: T[]): T[] {
 type Side = 0 | 1 | 2 | 3;
 
 /** Add a door leaf (chunk-local); returns its record offset in ctx.doorLeaves. */
-function doorLeaf(ctx: GenContext, x: number, z: number, alongX: boolean, inward: number, width: number, height: number, flags: number): number {
+export function doorLeaf(ctx: GenContext, x: number, z: number, alongX: boolean, inward: number, width: number, height: number, flags: number): number {
   const at = ctx.doorLeaves.length;
   ctx.doorLeaves.push(x, ctx.lotY, z, alongX ? 1 : 0, width, height, flags, inward);
   return at;
 }
 
-function lockDoor(ctx: GenContext, at: number): void {
+export function lockDoor(ctx: GenContext, at: number): void {
   ctx.doorLeaves[at + 6] |= DoorFlag.Locked;
 }
 

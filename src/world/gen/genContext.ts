@@ -65,7 +65,8 @@ export interface DoorInfo {
 
 /** A building's roof, for fire escapes, ladders and rooftop routes. */
 export interface BuildingInfo {
-  kind: 'block' | 'house' | 'warehouse';
+  /** Landmarks have their own stairs to the roof (bridges only). */
+  kind: 'block' | 'house' | 'warehouse' | 'landmark';
   fp: Rect;
   floors: number;
   /** Walkable roof top (the parapet cap), and the brush index of that cap. */

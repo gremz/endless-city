@@ -1,6 +1,6 @@
 import { CHUNK } from '../core/config';
 import { fnv1a } from '../core/rng';
-import { DISTRICT_NAMES, NAV_RES, NavFlag } from '../world/gen/ChunkData';
+import { DISTRICT_NAMES, LANDMARK_NAMES, NAV_RES, NavFlag } from '../world/gen/ChunkData';
 import { generateChunk } from '../world/gen/generateChunk';
 import { drawChunkTopdown } from '../ui/minimapRaster';
 
@@ -65,6 +65,7 @@ function draw(): void {
       ctx.fillStyle = d.hasEncounter ? '#ff8a7a' : '#fff';
       ctx.font = '11px monospace';
       ctx.fillText(`${cx},${cz} ${DISTRICT_NAMES[d.district]} L${d.level}${d.hasEncounter ? ' ⚔' : ''}`, ox + 4, oz + 12);
+      if (d.landmark) ctx.fillText(LANDMARK_NAMES[d.landmark], ox + 4, oz + 24);
     }
   }
   $('info').textContent = `avg gen ${(totalMs / (SPAN * SPAN)).toFixed(1)} ms · ${encounters} encounters · yellow = spawn slots, magenta = perches, red = health packs`;

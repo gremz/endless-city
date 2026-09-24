@@ -224,6 +224,7 @@ export function buildRooftops(ctx: GenContext, r: Rand): void {
   const aerial: Rect[] = [];
   const links = bridges(ctx, r, aerial);
   const access = bs.map((b) => {
+    if (b.kind === 'landmark') return true;
     const want = b.kind === 'block' ? 0.9 : b.kind === 'warehouse' ? 0.7 : 0.55;
     if (r() >= want) return false;
     if (b.kind === 'block' && b.floors >= 2 && fireEscape(ctx, r, b, aerial)) return true;

@@ -76,6 +76,8 @@ const WHEELS: readonly (readonly [number, number])[] = [
   [-CAR.wheelbase / 2, -CAR.track / 2],
   [-CAR.wheelbase / 2, CAR.track / 2],
 ];
+/** Surfaces at least this flat (normal Y) are driven up, not bumped into (about 45°). */
+const DRIVABLE_NORMAL = 0.7;
 /** Highest step a wheel can climb (the hulls stop anything taller first). */
 const WHEEL_REACH_UP = 0.6;
 const WHEEL_REACH_DOWN = 1.6;
@@ -231,6 +233,9 @@ function slide(c: CarState, world: CollisionWorld, dt: number): number {
       // A hull that starts inside something (another car nosed into it) can't be resolved by
       // this move; ignore it rather than locking the car in place.
       if (tr.startSolid) continue;
+      // A ramp or slope is for the wheels to climb (the ride height lifts the body next), not a
+      // wall: only steep faces stop the car.
+      if (tr.fraction < 1 && tr.normal.y >= DRIVABLE_NORMAL) continue;
       if (tr.fraction < best) {
         best = tr.fraction;
         hitN.x = tr.normal.x;

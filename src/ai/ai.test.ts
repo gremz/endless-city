@@ -14,6 +14,7 @@ import { WEAPONS } from '../weapons/weaponDefs';
 import { BrushWriter } from '../world/gen/BrushWriter';
 import { Material, NAV_RES, type ChunkData } from '../world/gen/ChunkData';
 import { bakeNav } from '../world/gen/navBake';
+import { generateChunk } from '../world/gen/generateChunk';
 import { Bot, TargetHistory, type BotContext, type Squad } from './Bot';
 import { skillFor } from './difficulty';
 import { EncounterManager, hearingRadius } from './EncounterManager';
@@ -36,6 +37,7 @@ function flatWorld(boxes: [number, number, number, number, number, number][] = [
     brushes,
     meshes: [],
     district: 0,
+    landmark: 0,
     level: 0,
     navCol: nav.col,
     navFloor: nav.floor,
@@ -287,6 +289,45 @@ describe('bots and ladders', () => {
     expect(bot.actor.move.pos.y).toBeLessThan(0.5);
     expect(bot.actor.move.pos.x).toBeLessThan(28);
     expect(bot.actor.health).toBe(100);
+  });
+});
+
+describe('bots in landmark buildings', () => {
+  it('climb the stair core of a generated apartment block to its top floor', () => {
+    // Chunk (-1, -5) of seed 2024 has a 4-storey apartment block (see landmarks.ts).
+    const d = generateChunk(2024, -1, -5);
+    const sim = new Simulation(parseParams('', 1), { autoBhop: false }, TICK);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const c = dx || dz ? generateChunk(2024, d.cx + dx, d.cz + dz) : d;
+        sim.world.addChunk(c.key, brushesFromPacked(c.brushes, c.cx, c.cz, c.key));
+        sim.nav.onChunkLoaded(c);
+        sim.doors.onChunkLoaded(c);
+        sim.glass.onChunkLoaded(c);
+      }
+    }
+    // The top floor's window spot (the roof is higher): only the stairs lead there.
+    let top = -Infinity;
+    for (let i = 1; i < d.perches.length; i += 3) top = Math.max(top, d.perches[i]);
+    let target = { x: 0, y: -Infinity, z: 0 };
+    for (let i = 0; i < d.perches.length; i += 3) {
+      const y = d.perches[i + 1];
+      if (y > target.y && y < top - 1) target = { x: d.perches[i], y, z: d.perches[i + 2] };
+    }
+    expect(target.y).toBeGreaterThan(7);
+    // Nobody to see: the bot only follows the noise.
+    teleport(sim.player, d.cx * 64 + 1, 0.02, d.cz * 64 + 1);
+    sim.player.alive = false;
+    const bot = makeBot(sim, d.cx * 64 + 2, d.cz * 64 + 32, 0);
+    bot.squad.homeCx = d.cx;
+    bot.squad.homeCz = d.cz;
+    bot.hear(target, 200, 0);
+    for (let t = 0; t < 60 && bot.actor.move.pos.y < target.y - 0.5; t += 2) {
+      runBots(sim, [bot], 2);
+      // Keep the noise going (an old one wears off and the bot loses interest).
+      bot.hear(target, 200, sim.time);
+    }
+    expect(bot.actor.move.pos.y).toBeGreaterThan(target.y - 0.5);
   });
 });
 

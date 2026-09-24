@@ -1,15 +1,16 @@
 import { CHUNK } from '../../core/config';
 import { worldNoise } from '../../core/noise';
-import { hash3, Salt, sfc32 } from '../../core/rng';
+import { hash3, Salt, sfc32, type Rand } from '../../core/rng';
 import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
 import { buildBuilding, buildCourtyard } from './buildings';
 import { buildRooftops } from './facades';
-import { District, DOOR_STRIDE, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
+import { buildLandmark, LANDMARK_IDS, LANDMARK_SIZE, pickLandmark, type LandmarkKind } from './landmarks';
+import { District, DOOR_STRIDE, Landmark, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
 import { districtFor, levelFor } from './district';
 import { placeEncounters } from './encounters';
-import { Occupancy, rect, rd, rw, type GenContext, type Rect, type VehicleSpot } from './genContext';
-import { splitLot, typeParcels } from './lots';
+import { Occupancy, rect, rd, rw, subtractRects, type GenContext, type Rect, type VehicleSpot } from './genContext';
+import { splitLot, typeParcels, type Parcel } from './lots';
 import { bakeMeshes } from './meshBake';
 import { bakeNav } from './navBake';
 import { placePickups } from './pickups';
@@ -66,11 +67,25 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
   const keep = buildLot(ctx);
   const lot = rect(LOT0, LOT0, LOT1, LOT1);
 
+  let kind: LandmarkKind | null = null;
+  let placed: { site: Rect; front: 0 | 1 } | null = null;
   if (district.id === District.Spawn) {
     buildSpawnPlaza(ctx, lot);
   } else {
-    const { parcels, alleys } = splitLot(ctx, lot);
-    typeParcels(ctx, parcels, alleys, keep, rw(lot) * rd(lot));
+    // Landmark chunks set aside a big site along one street for their landmark building first.
+    const lr = sfc32(hash3(seed, cx, cz, Salt.Landmark));
+    kind = pickLandmark(district.id, lr());
+    placed = kind ? placeLandmark(lr, kind, lot, keep) : null;
+    const regions = placed ? subtractRects(lot, [placed.site]) : [lot];
+    const parcels: Parcel[] = [];
+    const alleys: Rect[] = [];
+    for (const reg of regions) {
+      const split = splitLot(ctx, reg);
+      parcels.push(...split.parcels);
+      alleys.push(...split.alleys);
+    }
+    typeParcels(ctx, parcels, alleys, keep, regions.reduce((a, q) => a + rw(q) * rd(q), 0));
+    if (kind && placed) buildLandmark(ctx, kind, placed.site, placed.front, lr);
     // Pass 1: structures (so props never land inside a neighbor's walls).
     const propAreas: [Rect, number, Parameters<typeof scatterProps>[3]][] = [];
     for (const p of parcels) {
@@ -125,6 +140,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     brushes,
     meshes,
     district: district.id,
+    landmark: placed && kind ? LANDMARK_IDS[kind] : Landmark.None,
     level,
     navCol: nav.col,
     navFloor: nav.floor,
@@ -141,6 +157,37 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     hasEncounter: enc.hasEncounter,
     genMs: performance.now() - t0,
   };
+}
+
+/**
+ * A site for a landmark along one of the lot's street edges (its long side facing the street),
+ * clear of the lot's stairs and ramps. `front` is which of its long sides faces the street.
+ */
+function placeLandmark(r: Rand, kind: LandmarkKind, lot: Rect, keep: Rect[]): { site: Rect; front: 0 | 1 } | null {
+  const [len, dep] = LANDMARK_SIZE[kind];
+  const A = len + 2;
+  const B = dep + 2;
+  const edges = [0, 1, 2, 3];
+  for (let i = edges.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [edges[i], edges[j]] = [edges[j], edges[i]];
+  }
+  for (const e of edges) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const at = e < 2 ? Math.round((lot.x0 + r() * (rw(lot) - A)) * 2) / 2 : Math.round((lot.z0 + r() * (rd(lot) - A)) * 2) / 2;
+      const site =
+        e === 0
+          ? rect(at, lot.z0, at + A, lot.z0 + B)
+          : e === 1
+            ? rect(at, lot.z1 - B, at + A, lot.z1)
+            : e === 2
+              ? rect(lot.x0, at, lot.x0 + B, at + A)
+              : rect(lot.x1 - B, at, lot.x1, at + A);
+      if (keep.some((k) => k.x0 < site.x1 && site.x0 < k.x1 && k.z0 < site.z1 && site.z0 < k.z1)) continue;
+      return { site, front: e === 0 || e === 2 ? 0 : 1 };
+    }
+  }
+  return null;
 }
 
 /** Spawn chunk: an open plaza with a fountain, a couple of small buildings and light cover. */

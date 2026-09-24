@@ -36,6 +36,7 @@ function setup(flags = 0) {
     brushes,
     meshes: [],
     district: 0,
+    landmark: 0,
     level: 0,
     navCol: new Uint16Array(0),
     navFloor: new Int16Array(0),

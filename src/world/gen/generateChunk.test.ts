@@ -7,7 +7,7 @@ import { CollisionWorld } from '../../physics/CollisionWorld';
 import { makeTrace } from '../../physics/trace';
 import { brushesFromPacked } from '../chunkBrushes';
 import { worldToChunk } from '../chunkMath';
-import { BRUSH_STRIDE, DOOR_STRIDE, DoorFlag, Material, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, wordContents, wordMaterial, type ChunkData } from './ChunkData';
+import { BRUSH_STRIDE, DOOR_STRIDE, DoorFlag, Landmark, Material, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, wordContents, wordMaterial, type ChunkData } from './ChunkData';
 import { CAR_L, CAR_W } from './streets';
 import { generateChunk } from './generateChunk';
 
@@ -238,6 +238,30 @@ describe('generateChunk', () => {
     expect(locked).toBeGreaterThan(0);
     expect(panes).toBeGreaterThan(100);
   });
+
+  it('builds landmark buildings whose every floor can be reached', () => {
+    const seen = new Set<number>();
+    for (let k = 0; k < 144; k++) {
+      const cx = (k % 12) - 6;
+      const cz = Math.floor(k / 12) - 6;
+      const d = generateChunk(2024, cx, cz);
+      if (!d.landmark) continue;
+      seen.add(d.landmark);
+      // Group the walkable floor above street level by height: each is (nearly) all reachable.
+      const floors = new Map<number, [number, number]>();
+      for (let s = 0; s < d.navFloor.length; s++) {
+        const y = Math.round(d.navFloor[s] / 50);
+        if (y < 6) continue;
+        const e = floors.get(y) ?? [0, 0];
+        e[0]++;
+        if (d.navFlags[s] & NavFlag.Reachable) e[1]++;
+        floors.set(y, e);
+      }
+      // (Landmark floors are big; small groups are other roofs that happen to share the height.)
+      for (const [, [n, r]] of floors) if (n > 500) expect(r / n).toBeGreaterThan(0.95);
+    }
+    expect([...seen].sort()).toEqual([Landmark.Apartment, Landmark.Office, Landmark.Garage]);
+  }, 60000);
 
   it('generates fast enough', () => {
     const t0 = performance.now();

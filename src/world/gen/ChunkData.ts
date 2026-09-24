@@ -45,6 +45,9 @@ export interface MeshData {
   indices: Uint32Array;
 }
 
+export const Landmark = { None: 0, Apartment: 1, Office: 2, Garage: 3 } as const;
+export const LANDMARK_NAMES = ['', 'Apartments', 'Offices', 'Parking garage'] as const;
+
 export const District = { Spawn: 0, Industrial: 1, Oldtown: 2, Downtown: 3, Gym: 4 } as const;
 export type DistrictId = (typeof District)[keyof typeof District];
 export const DISTRICT_NAMES = ['Spawn', 'Industrial', 'Old Town', 'Downtown', 'Gym'] as const;
@@ -71,6 +74,8 @@ export interface ChunkData {
   brushes: Int32Array;
   meshes: MeshData[];
   district: number;
+  /** Landmark building in this chunk (Landmark), 0 for none. */
+  landmark: number;
   level: number;
   /**
    * Layered nav (see navBake.ts): first span id per column (NAV_RES² + 1 entries), or empty

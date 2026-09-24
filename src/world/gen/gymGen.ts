@@ -47,6 +47,7 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     brushes,
     meshes: bakeMeshes(brushes),
     district: District.Gym,
+    landmark: 0,
     level: 0,
     navCol: new Uint16Array(0),
     navFloor: new Int16Array(0),

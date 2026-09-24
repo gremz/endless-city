@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { TICK } from '../../core/config';
 import { parseParams } from '../../core/urlParams';
 import { Buttons, makeCmd, type UserCmd } from '../../input/UserCmd';
-import { Contents, MASK_PLAYER, SOLID } from '../../physics/brush';
+import { Contents, MASK_PLAYER, Ramp, SOLID } from '../../physics/brush';
+import { CollisionWorld } from '../../physics/CollisionWorld';
 import { makeTrace } from '../../physics/trace';
 import { FLOOR, worldFrom } from '../../physics/testUtil';
 import { STAND_MAXS, STAND_MINS } from '../../player/movementConfig';
@@ -122,6 +123,20 @@ describe('car handling', () => {
     expect(c.pos.y).toBeCloseTo(-2, 2);
   });
 
+  it('drives up a parking garage ramp onto the deck above', () => {
+    // A 16 m ramp rising 3 m towards -Z (as in landmarks.ts), then the upper deck.
+    const w = new BrushWriter();
+    w.box(-20, -1, -40, 20, 0, 20, Material.Concrete, SOLID | Contents.FLOOR);
+    w.slopedSlab(-2, 0, -16, 2, 3, 0, Ramp.NegZ, Material.Concrete);
+    w.box(-10, 2.75, -40, 10, 3, -16, Material.Concrete, SOLID | Contents.FLOOR);
+    const world = new CollisionWorld();
+    world.addChunk(1, brushesFromPacked(w.finish(), 0, 0, 1));
+    const c = makeCarState(0, 0, 6, 0);
+    run(c, world, 4, drive(0.7));
+    expect(c.pos.z).toBeLessThan(-18);
+    expect(c.pos.y).toBeCloseTo(3, 1);
+  });
+
   it('is deterministic for the same inputs', () => {
     const world = worldFrom([FLOOR, { min: [-3, 0, -40], max: [3, 2, -38] }]);
     const inputs = Array.from({ length: 400 }, (_, i) => drive(i % 90 < 60 ? 1 : -0.5, Math.sin(i / 17), i % 150 > 130));
@@ -150,6 +165,7 @@ function setup() {
     brushes,
     meshes: [],
     district: 0,
+    landmark: 0,
     level: 0,
     navCol: new Uint16Array(0),
     navFloor: new Int16Array(0),

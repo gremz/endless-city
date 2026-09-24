@@ -52,6 +52,7 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
     brushes,
     meshes: [],
     district: 0,
+    landmark: 0,
     level: 2,
     navCol: nav.col,
     navFloor: nav.floor,
