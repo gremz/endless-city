@@ -21,12 +21,22 @@ export const Contents = {
    * that faces away from the wall.
    */
   LADDER: 32,
+  /**
+   * Breakable glass: blocks movement (it's in MASK_PLAYER) but not sight. Bullets and grenades
+   * break it and fly on.
+   */
+  GLASS: 128,
 } as const;
 
 export const SOLID = Contents.SOLID_PLAYER | Contents.SOLID_BULLET | Contents.VISIBLE;
-export const MASK_PLAYER = Contents.SOLID_PLAYER;
+export const MASK_PLAYER = Contents.SOLID_PLAYER | Contents.GLASS;
 export const MASK_SHOT = Contents.SOLID_BULLET;
 export const MASK_LADDER = Contents.LADDER;
+export const MASK_SHOT_GLASS = Contents.SOLID_BULLET | Contents.GLASS;
+
+/** Dynamic brush owners from here up are doors (below are vehicles). */
+export const DOOR_OWNER = 1 << 20;
+export const isDoorOwner = (owner: number) => owner >= DOOR_OWNER;
 
 /** Ramp directions: which horizontal direction the slope rises towards. */
 export const Ramp = { None: 0, PosX: 1, NegX: 2, PosZ: 3, NegZ: 4 } as const;

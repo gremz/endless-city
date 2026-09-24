@@ -3,7 +3,7 @@ import type { EventQueue } from '../core/events';
 import { anglesToForward, DEG, vec3, type Vec3 } from '../core/math';
 import { hash4, Salt, sfc32 } from '../core/rng';
 import { Buttons, SELECT_LAST, SELECT_NEXT, SELECT_PREV, type UserCmd } from '../input/UserCmd';
-import { Contents, MASK_SHOT } from '../physics/brush';
+import { Contents, isDoorOwner, MASK_SHOT_GLASS, type Brush } from '../physics/brush';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import { makeTrace, rayExitFraction } from '../physics/trace';
 import { eyeHeight } from '../player/pmove';
@@ -46,6 +46,10 @@ export interface WeaponContext {
   dt: number;
   /** Resolve damage for a hit (armor, death, rewards). */
   onHit(info: HitInfo): void;
+  /** A door (collision owner id) was shot or stabbed. */
+  onDoorHit?(attacker: Actor, owner: number, damage: number): void;
+  /** A window pane was hit (it breaks). */
+  onGlassHit?(pane: Brush): void;
   /** Whether attacker's bullets can hit victim. */
   canHit(attacker: Actor, victim: Actor): boolean;
   /** Launch a grenade from the actor's eye along the view angles. */
@@ -343,7 +347,7 @@ function hitscan(a: Actor, def: WeaponDef, start: Vec3, d: Vec3, ctx: WeaponCont
     end.x = sx + d.x * len;
     end.y = sy + d.y * len;
     end.z = sz + d.z * len;
-    ctx.world.traceRay(tr, segStart, end, MASK_SHOT);
+    ctx.world.traceRay(tr, segStart, end, MASK_SHOT_GLASS);
     const worldT = tr.fraction * len;
 
     // Nearest actor in front of the wall.
@@ -386,13 +390,26 @@ function hitscan(a: Actor, def: WeaponDef, start: Vec3, d: Vec3, ctx: WeaponCont
       material: tr.brush.material,
       chunkKey: tr.brush.chunkKey,
     });
-    if (tr.brush.owner) {
-      ctx.onVehicleHit?.(a, tr.brush.owner, rangeDamage(def.damage, def.rangeMod, travelled + worldT) * scale);
+    const b = tr.brush;
+    if (b.contents & Contents.GLASS) {
+      // Glass shatters and the bullet flies on, barely slowed.
+      ctx.onGlassHit?.(b);
+      scale *= 0.9;
+      travelled += worldT + 0.05;
+      sx = hit.x + d.x * 0.05;
+      sy = hit.y + d.y * 0.05;
+      sz = hit.z + d.z * 0.05;
+      continue;
+    }
+    if (b.owner && isDoorOwner(b.owner)) {
+      // Doors take the hit; wooden ones can still be shot through below.
+      ctx.onDoorHit?.(a, b.owner, rangeDamage(def.damage, def.rangeMod, travelled + worldT) * scale);
+    } else if (b.owner) {
+      ctx.onVehicleHit?.(a, b.owner, rangeDamage(def.damage, def.rangeMod, travelled + worldT) * scale);
       return hit;
     }
 
     // Penetration.
-    const b = tr.brush;
     if (pens <= 0 || (b.contents & Contents.PENETRABLE) === 0 || def.penetration <= 0) return hit;
     const probe = Math.min(2, def.penetration + 0.05);
     const ex = tr.endX + d.x * probe;
@@ -436,7 +453,7 @@ function knifeAttack(a: Actor, def: WeaponDef, alt: boolean, cmd: UserCmd, ctx: 
   end.x = eye.x + dir.x * reach;
   end.y = eye.y + dir.y * reach;
   end.z = eye.z + dir.z * reach;
-  ctx.world.traceRay(tr, eye, end, MASK_SHOT);
+  ctx.world.traceRay(tr, eye, end, MASK_SHOT_GLASS);
   const worldT = tr.fraction * reach;
   let victim: Actor | null = null;
   let vt = worldT;
@@ -482,6 +499,9 @@ function knifeAttack(a: Actor, def: WeaponDef, alt: boolean, cmd: UserCmd, ctx: 
       material: tr.brush.material,
       chunkKey: tr.brush.chunkKey,
     });
-    if (tr.brush.owner) ctx.onVehicleHit?.(a, tr.brush.owner, (alt ? (def.altDamage ?? 65) : def.damage) * 0.5);
+    const dmg = (alt ? (def.altDamage ?? 65) : def.damage) * 0.5;
+    if (tr.brush.contents & Contents.GLASS) ctx.onGlassHit?.(tr.brush);
+    else if (tr.brush.owner && isDoorOwner(tr.brush.owner)) ctx.onDoorHit?.(a, tr.brush.owner, dmg);
+    else if (tr.brush.owner) ctx.onVehicleHit?.(a, tr.brush.owner, dmg);
   }
 }

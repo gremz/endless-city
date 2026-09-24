@@ -1,7 +1,7 @@
 import { randInt, type Rand } from '../../core/rng';
 import { Contents, Ramp, SOLID } from '../../physics/brush';
 import type { BrushWriter } from './BrushWriter';
-import { District, Material } from './ChunkData';
+import { District, DoorFlag, Material } from './ChunkData';
 import { inset, Occ, rd, rect, rw, subtractRects, type BuildingInfo, type GenContext, type Rect } from './genContext';
 
 interface Opening {
@@ -9,7 +9,12 @@ interface Opening {
   b: number;
   bottom: number;
   top: number;
+  /** Glazed window: gets a breakable pane. */
+  glass?: boolean;
 }
+
+/** Window pane thickness. */
+const PANE_T = 0.04;
 
 const WALL_T = 0.3;
 const DOOR_W = 1.6;
@@ -37,12 +42,24 @@ function wall(
   mat: number,
   tint: number,
   contents: number = SOLID,
+  /** Brush indices of the panes put into glazed openings are pushed here. */
+  panes: number[] | null = null,
 ): void {
   const put = (s0: number, s1: number, yb: number, yt: number) => {
     if (s1 - s0 < 0.01 || yt - yb < 0.01) return;
     if (alongX) w.box(s0, yb, c0, s1, yt, c1, mat, contents, tint);
     else w.box(c0, yb, s0, c1, yt, s1, mat, contents, tint);
   };
+  const mid = (c0 + c1) / 2;
+  for (const o of openings) {
+    if (!o.glass || !panes) continue;
+    const g0 = mid - PANE_T / 2;
+    const g1 = mid + PANE_T / 2;
+    const glass = Contents.GLASS;
+    if (alongX) w.box(o.a, y0 + o.bottom, g0, o.b, y0 + o.top, g1, Material.Glass, glass, 128);
+    else w.box(g0, y0 + o.bottom, o.a, g1, y0 + o.top, o.b, Material.Glass, glass, 128);
+    panes.push(w.count - 1);
+  }
   const ops = [...openings].sort((p, q) => p.a - q.a);
   let cur = a0;
   for (const o of ops) {
@@ -58,7 +75,7 @@ function wall(
 }
 
 /** Openings for a wall of given length: an optional door plus evenly spaced windows. */
-function wallOpenings(r: Rand, a0: number, a1: number, door: number | null, windows: boolean, winBottom: number, winTop: number): Opening[] {
+function wallOpenings(r: Rand, a0: number, a1: number, door: number | null, windows: boolean, winBottom: number, winTop: number, rb?: Rand): Opening[] {
   const out: Opening[] = [];
   if (door !== null) out.push({ a: door, b: door + DOOR_W, bottom: 0, top: DOOR_H });
   if (!windows) return out;
@@ -70,7 +87,7 @@ function wallOpenings(r: Rand, a0: number, a1: number, door: number | null, wind
     const wb = c + 0.6;
     if (wa < a0 + 0.6 || wb > a1 - 0.6) continue;
     if (door !== null && wb > door - 0.5 && wa < door + DOOR_W + 0.5) continue;
-    if (r() < 0.8) out.push({ a: wa, b: wb, bottom: winBottom, top: winTop });
+    if (r() < 0.8) out.push({ a: wa, b: wb, bottom: winBottom, top: winTop, glass: rb ? rb() < 0.8 : false });
   }
   return out;
 }
@@ -99,6 +116,17 @@ function shuffled<T>(r: Rand, a: T[]): T[] {
 
 /** Side ids: 0 = -Z, 1 = +Z, 2 = -X, 3 = +X. */
 type Side = 0 | 1 | 2 | 3;
+
+/** Add a door leaf (chunk-local); returns its record offset in ctx.doorLeaves. */
+function doorLeaf(ctx: GenContext, x: number, z: number, alongX: boolean, inward: number, width: number, height: number, flags: number): number {
+  const at = ctx.doorLeaves.length;
+  ctx.doorLeaves.push(x, ctx.lotY, z, alongX ? 1 : 0, width, height, flags, inward);
+  return at;
+}
+
+function lockDoor(ctx: GenContext, at: number): void {
+  ctx.doorLeaves[at + 6] |= DoorFlag.Locked;
+}
 
 /** Record the roof cap just written (the last brush) for the rooftop pass. */
 function roof(ctx: GenContext, kind: BuildingInfo['kind'], fp: Rect, floors: number, roofY: number, overhang: number, doorSides: number[]): void {
@@ -180,6 +208,7 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
     { side: 2, alongX: false, a0: fp.z0 + t, a1: fp.z1 - t, c0: fp.x0, c1: fp.x0 + t },
     { side: 3, alongX: false, a0: fp.z0 + t, a1: fp.z1 - t, c0: fp.x1 - t, c1: fp.x1 },
   ];
+  const leaves: number[] = [];
   for (const s of sides) {
     let door: number | null = null;
     if (doorSides.has(s.side)) {
@@ -193,10 +222,13 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
       ctx.doors.push({ x: px, z: pz, nx, nz });
       // Keep 2 m outside and 1.5 m inside the door clear of props.
       ctx.occ.mark(doorClearance(px, pz, nx, nz, DOOR_W / 2 + 0.3, 2, 1.5), Occ.Reserved);
+      if (ctx.rb() < 0.65) leaves.push(doorLeaf(ctx, px, pz, s.alongX, -(nx + nz), DOOR_W, DOOR_H, 0));
     }
-    const ops = wallOpenings(r, s.a0, s.a1, door, true, 1.0, 2.0);
-    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, groundH, ops, mat, tint);
+    const ops = wallOpenings(r, s.a0, s.a1, door, true, 1.0, 2.0, ctx.rb);
+    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, groundH, ops, mat, tint, SOLID, ctx.glass);
   }
+  // With another way in, one door may be locked (bots and players can breach it).
+  if (leaves.length >= 2 && ctx.rb() < 0.35) lockDoor(ctx, leaves[Math.floor(ctx.rb() * leaves.length)]);
 
   // Interior partition for long buildings (thin, penetrable, with a doorway).
   if (rw(I) > 10 && !twoStory) {
@@ -241,8 +273,8 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   // Upper floor walls with windows all round.
   const upperH = 3.0;
   for (const s of sides) {
-    const ops = wallOpenings(r, s.a0, s.a1, null, true, 0.9, 2.1);
-    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, upperY, upperH, ops, mat, tint);
+    const ops = wallOpenings(r, s.a0, s.a1, null, true, 0.9, 2.1, ctx.rb);
+    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, upperY, upperH, ops, mat, tint, SOLID, ctx.glass);
   }
   const roofY = upperY + upperH;
   w.box(fp.x0, roofY, fp.z0, fp.x1, roofY + SLAB_T, fp.z1, mat, SOLID, Math.max(0, tint - 30));
@@ -284,16 +316,21 @@ function warehouse(ctx: GenContext, fp: Rect, tint: number): void {
       ops.push({ a, b: a + DOOR_W, bottom: 0, top: DOOR_H });
       const nx = s.side === 2 ? -1 : 1;
       ctx.doors.push({ x: (s.c0 + s.c1) / 2, z: a + DOOR_W / 2, nx, nz: 0 });
+      if (ctx.rb() < 0.7) {
+        const leaf = doorLeaf(ctx, (s.c0 + s.c1) / 2, a + DOOR_W / 2, false, -nx, DOOR_W, DOOR_H, DoorFlag.Metal);
+        if (ctx.rb() < 0.15) lockDoor(ctx, leaf);
+      }
       ctx.occ.mark(rect(nx < 0 ? s.c0 - 2 : s.c0 - 1.5, a - 0.3, nx < 0 ? s.c1 + 1.5 : s.c1 + 2, a + DOOR_W + 0.3), Occ.Reserved);
     }
     // High clerestory windows.
     const n = Math.floor(len / 4);
     for (let i = 0; i < n; i++) {
       const c = s.a0 + ((i + 0.5) * len) / n;
-      if (ops.some((o) => c + 0.8 > o.a - 0.3 && c - 0.8 < o.b + 0.3 && o.top > 4.4)) continue;
-      ops.push({ a: c - 0.8, b: c + 0.8, bottom: 4.6, top: 5.6 });
+      // Not above a door (overlapping openings would wall the doorway up).
+      if (ops.some((o) => c + 0.8 > o.a - 0.3 && c - 0.8 < o.b + 0.3)) continue;
+      ops.push({ a: c - 0.8, b: c + 0.8, bottom: 4.6, top: 5.6, glass: ctx.rb() < 0.8 });
     }
-    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, H, ops, Material.Metal, tint);
+    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, H, ops, Material.Metal, tint, SOLID, ctx.glass);
   }
   w.box(fp.x0 - 0.2, lotY + H, fp.z0 - 0.2, fp.x1 + 0.2, lotY + H + 0.3, fp.z1 + 0.2, Material.Metal, SOLID, 4);
   roof(ctx, 'warehouse', fp, 1, lotY + H + 0.3, 0.2, [bigSide, sideDoor]);

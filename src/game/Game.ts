@@ -56,6 +56,8 @@ import type { NetClient } from '../net/NetClient';
 import { Prediction } from '../net/Prediction';
 import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
 import { VehicleRenderer } from '../render/VehicleRenderer';
+import { DoorState, KICK_SPEED } from '../sim/Doors';
+import { BreakablesRenderer } from '../render/BreakablesRenderer';
 import { carSpeed, forwardSpeed } from '../sim/vehicle/carPhysics';
 import { enterableVehicle } from '../sim/vehicle/Vehicle';
 import { Vehicles } from '../sim/vehicle/Vehicles';
@@ -122,6 +124,7 @@ export class Game {
   /** Car lifecycle (null online: the host runs it). */
   readonly vehicles: Vehicles | null = null;
   private vehicleRenderer: VehicleRenderer;
+  private breakables: BreakablesRenderer;
   /** Id of the car we were driving last frame (-1 on foot). */
   private drivingId = -1;
   private death: { killer: number; text: string } | null = null;
@@ -177,6 +180,8 @@ export class Game {
     this.renderer.scene.add(this.chunkRenderer.root);
     this.vehicleRenderer = new VehicleRenderer(this.materials, this.settings.shadows > 0);
     this.renderer.scene.add(this.vehicleRenderer.root);
+    this.breakables = new BreakablesRenderer(this.materials, this.settings.shadows > 0);
+    this.renderer.scene.add(this.breakables.root);
 
     const source: ChunkSource =
       params.world === 'city'
@@ -185,6 +190,10 @@ export class Game {
     this.streamer = new WorldStreamer(this.sim.world, source);
     this.streamer.addListener(this.chunkRenderer);
     this.streamer.addListener(this.sim.nav);
+    this.streamer.addListener(this.sim.doors);
+    this.streamer.addListener(this.sim.glass);
+    this.streamer.addListener(this.breakables);
+    this.sim.replica = !!online;
     this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
     this.pickups = new PickupManager(this.sim);
     if (online) {
@@ -341,6 +350,7 @@ export class Game {
     this.renderer.setRenderScale(s.renderScale);
     this.chunkRenderer.setShadows(s.shadows > 0);
     this.vehicleRenderer?.setShadows(s.shadows > 0);
+    this.breakables?.setShadows(s.shadows > 0);
     this.sim.opts.autoBhop = s.autoBhop;
     this.audio.setVolume(s.masterVolume);
     this.audio.setMusicVolume(s.musicVolume);
@@ -677,6 +687,7 @@ export class Game {
     }
     const env = this.sim.env;
     this.vehicleRenderer.update(this.sim.vehicles, alpha, this.sim.time, frameMs / 1000, car?.id ?? -1, env.darkness);
+    this.breakables.update(this.sim, this.sim.time + alpha * this.sim.dt);
     this.atmosphere.update(env, frameMs / 1000, cam, p.alive && p.flashlight && !car);
     this.presentation.setWorldLight(this.atmosphere.viewmodelLight, env.daylight);
     this.presentation.torches = this.botTorches(env.darkness);
@@ -804,8 +815,14 @@ export class Game {
     const swap = this.pickups.swapCandidate(p.id);
     let prompt: string | null = null;
     // E gets into a car before it swaps guns.
+    const door = p.alive && p.vehicle < 0 ? this.sim.doors.target(p) : null;
     if (enterableVehicle(this.sim, p)) prompt = 'Drive';
-    else if (swap?.item.kind === 'weapon' && p.alive && p.vehicle < 0) {
+    else if (door) {
+      const running = Math.hypot(p.move.vel.x, p.move.vel.z) > KICK_SPEED;
+      if (door.state === DoorState.Open) prompt = 'Close door';
+      else if (running) prompt = 'Kick door';
+      else prompt = door.locked ? 'Locked: kick it or shoot it' : 'Open door';
+    } else if (swap?.item.kind === 'weapon' && p.alive && p.vehicle < 0) {
       const def = WEAPONS[swap.item.weapon];
       const cur = p.inv[def.slot];
       prompt = cur ? `Swap ${cur.def.name} for ${def.name}` : `Pick up ${def.name}`;
@@ -996,6 +1013,7 @@ export class Game {
     this.audio.dispose();
     this.chunkRenderer.dispose();
     this.vehicleRenderer.dispose();
+    this.breakables.dispose();
     this.materials.dispose();
     this.renderer.dispose();
     this.ui.replaceChildren();

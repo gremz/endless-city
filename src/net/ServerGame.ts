@@ -118,6 +118,8 @@ export class ServerGame {
     this.sim = new Simulation(params, { autoBhop: false }, dt, false);
     this.streamer = new WorldStreamer(this.sim.world, source);
     this.streamer.addListener(this.sim.nav);
+    this.streamer.addListener(this.sim.doors);
+    this.streamer.addListener(this.sim.glass);
     this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
     if (this.encounters) this.sim.systems.push(this.encounters);
     this.pickups = new PickupManager(this.sim);
@@ -488,6 +490,8 @@ export class ServerGame {
       t: 'world',
       cleared: [...this.sim.cleared],
       enc: (this.encounters?.summaries() ?? []).map((e) => ({ key: e.key, level: e.level, cleared: e.cleared, active: e.active })),
+      doors: this.sim.doors.list(),
+      glass: this.sim.glass.list(),
     };
   }
 

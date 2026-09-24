@@ -86,6 +86,8 @@ export interface GenContext {
   r: Rand;
   /** Prop RNG stream. */
   rp: Rand;
+  /** Doors and window glass RNG stream (separate, so they never shift the layout). */
+  rb: Rand;
   district: DistrictParams;
   level: number;
   /** Lot floor height (top of lot slab). */
@@ -101,6 +103,10 @@ export interface GenContext {
   /** Driveable cars (chunk-local layout, as passed to carBrushes). */
   vehicles: VehicleSpot[];
   buildings: BuildingInfo[];
+  /** Door leaves, DOOR_STRIDE numbers each, with chunk-local x and z. */
+  doorLeaves: number[];
+  /** Brush indices of window panes. */
+  glass: number[];
   /** Ladder nav links: bottom x, y, z, top x, y, z (local meters), then the ladder's outward normal nx, nz. */
   ladders: number[];
 }

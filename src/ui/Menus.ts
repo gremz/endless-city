@@ -42,7 +42,7 @@ const CONTROLS: [string, string][] = [
   ['R', 'Reload'],
   ['1-5 / Q / wheel', 'Weapons'],
   ['B', 'Buy menu (in cleared zones)'],
-  ['E', 'Pick up / swap weapon'],
+  ['E', 'Door (run + E kicks) / car / swap weapon'],
   ['H', 'Use medkit'],
   ['M', 'City map'],
   ['F', 'Inspect'],

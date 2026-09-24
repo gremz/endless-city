@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { CHUNK } from '../../core/config';
 import { fnv1a } from '../../core/rng';
 import { vec3 } from '../../core/math';
-import { MASK_PLAYER } from '../../physics/brush';
+import { Contents, MASK_PLAYER } from '../../physics/brush';
 import { CollisionWorld } from '../../physics/CollisionWorld';
 import { makeTrace } from '../../physics/trace';
 import { brushesFromPacked } from '../chunkBrushes';
 import { worldToChunk } from '../chunkMath';
-import { BRUSH_STRIDE, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
+import { BRUSH_STRIDE, DOOR_STRIDE, DoorFlag, Material, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, wordContents, wordMaterial, type ChunkData } from './ChunkData';
 import { CAR_L, CAR_W } from './streets';
 import { generateChunk } from './generateChunk';
 
@@ -201,6 +201,43 @@ describe('generateChunk', () => {
     expect(totalSpawns / 200).toBeGreaterThan(8);
     expect(encounters).toBeGreaterThan(60);
   }, 60000);
+
+  it('hangs doors in doorways and glazes windows', () => {
+    const tr = makeTrace();
+    const small = vec3(-0.1, 0, -0.1);
+    const smallMax = vec3(0.1, 0.2, 0.1);
+    let doors = 0;
+    let locked = 0;
+    let panes = 0;
+    for (let k = 0; k < 40; k++) {
+      const cx = (k % 8) - 4;
+      const cz = Math.floor(k / 8) - 2;
+      const d = generateChunk(99, cx, cz);
+      const world = new CollisionWorld();
+      world.addChunk(d.key, brushesFromPacked(d.brushes, cx, cz, d.key));
+      for (let o = 0; o < d.doors.length; o += DOOR_STRIDE) {
+        doors++;
+        if (d.doors[o + 6] & DoorFlag.Locked) locked++;
+        const [x, y, z, alongX, width] = d.doors.subarray(o, o + 5);
+        // The doorway itself is open (the door is a separate moving brush)...
+        expect(world.testBox(tr, vec3(x, y + 1, z), small, smallMax, MASK_PLAYER)).toBe(false);
+        // ...between two wall jambs.
+        const hw = width / 2 + 0.2;
+        const jamb = (s: number) => (alongX ? vec3(x + s * hw, y + 1, z) : vec3(x, y + 1, z + s * hw));
+        expect(world.testBox(tr, jamb(-1), small, smallMax, MASK_PLAYER)).toBe(true);
+        expect(world.testBox(tr, jamb(1), small, smallMax, MASK_PLAYER)).toBe(true);
+      }
+      for (const i of d.glass) {
+        panes++;
+        const w = d.brushes[i * BRUSH_STRIDE + 6];
+        expect(wordMaterial(w)).toBe(Material.Glass);
+        expect(wordContents(w)).toBe(Contents.GLASS);
+      }
+    }
+    expect(doors).toBeGreaterThan(20);
+    expect(locked).toBeGreaterThan(0);
+    expect(panes).toBeGreaterThan(100);
+  });
 
   it('generates fast enough', () => {
     const t0 = performance.now();

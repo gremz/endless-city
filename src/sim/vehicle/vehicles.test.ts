@@ -161,6 +161,8 @@ function setup() {
     patrol: new Float32Array(0),
     pickups: new Float32Array(0),
     vehicles,
+    doors: new Float32Array(0),
+    glass: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   } satisfies ChunkData;

@@ -16,8 +16,9 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
   // Ground slab.
   w.box(0, -1, 0, CHUNK, 0, CHUNK, Material.Dev, FLOOR, 128);
 
+  const glass: number[] = [];
   if (cx === 0 && cz === 0) buildCourse(w);
-  else if (cx === 1 && cz === 0) buildRange(w);
+  else if (cx === 1 && cz === 0) buildRange(w, glass);
   else {
     const r = sfc32(hash3(seed, cx, cz, Salt.Layout));
     const n = 6 + Math.floor(r() * 8);
@@ -59,6 +60,9 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     pickups: cx === 0 && cz === 0 ? new Float32Array([26, 0.02, 26, 38, 0.02, 26]) : new Float32Array(0),
     // A car to try driving in, beside the course start.
     vehicles: cx === 0 && cz === 0 ? vehicleSpawns([{ style: { paint: 5, hatch: false, flip: false, look: 'intact' }, alongX: false, lane: 46, at: 12, y: 0 }], cx, cz) : new Float32Array(0),
+    // The range's doorway gets a door (open it, kick it, shoot through it).
+    doors: cx === 1 && cz === 0 ? new Float32Array([CHUNK + 30.15, 0, 54.8, 0, 1.6, 2.4, 0, 1]) : new Float32Array(0),
+    glass: new Int32Array(glass),
     hasEncounter: false,
     genMs: performance.now() - t0,
   };
@@ -112,7 +116,7 @@ function buildCourse(w: BrushWriter): void {
   w.ramp(52.1, 0, 48, 56, 2.6, 50.4, Ramp.NegX, Material.Metal, FLOOR, 4);
 }
 
-function buildRange(w: BrushWriter): void {
+function buildRange(w: BrushWriter, glass: number[]): void {
   // Shooting range: back wall, lane dividers, a doorway wall to test through-door shots.
   w.box(60, 0, 4, 60.5, 5, 60, Material.Concrete, SOLID, 128);
   for (let i = 0; i < 4; i++) w.box(10, 0, 12 + i * 12, 60, 1, 12.3 + i * 12, Material.Concrete, SOLID, 110);
@@ -120,4 +124,11 @@ function buildRange(w: BrushWriter): void {
   w.box(30, 0, 55.6, 30.3, 3, 60, Material.Plaster, SOLID, 140);
   w.box(30, 2.4, 54, 30.3, 3, 55.6, Material.Plaster, SOLID, 140);
   w.box(20, 0, 30, 20.3, 1.2, 34, Material.Wood, SOLID | Contents.PENETRABLE, 140);
+  // A row of window panes on low sills, to shoot out.
+  for (let i = 0; i < 4; i++) {
+    const z = 38 + i * 2.5;
+    w.box(24, 0, z, 24.3, 1, z + 2, Material.Plaster, SOLID, 140);
+    w.box(24.13, 1, z, 24.17, 2.4, z + 2, Material.Glass, Contents.GLASS);
+    glass.push(w.count - 1);
+  }
 }

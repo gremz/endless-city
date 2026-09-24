@@ -6,7 +6,7 @@ import type { GameParams } from '../core/urlParams';
 import type { UserCmd } from '../input/UserCmd';
 import { Buttons, makeCmd } from '../input/UserCmd';
 import { CollisionWorld } from '../physics/CollisionWorld';
-import { MASK_PLAYER } from '../physics/brush';
+import { MASK_PLAYER, type Brush } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
 import { HU } from '../core/config';
 import { MOVE, STAND_MAXS, STAND_MINS } from '../player/movementConfig';
@@ -18,6 +18,8 @@ import { makeActor, storePrev, Team, teleport, type Actor } from './Actor';
 import { applyDamage, bulletDamage } from './damage';
 import { Economy, START_MONEY } from './Economy';
 import { envAt, type Env, type EnvOverride } from './Environment';
+import { DoorSystem } from './Doors';
+import { GlassSystem } from './Glass';
 import { GrenadeSystem } from './Grenades';
 import { updateHeal } from './medkit';
 import { damageVehicle, driveVehicle, exitVehicle, storeVehiclePrev, useVehicle, type Vehicle } from './vehicle/Vehicle';
@@ -48,6 +50,8 @@ export class Simulation implements WeaponContext {
   readonly actors: Actor[] = [];
   readonly systems: SimSystem[] = [];
   readonly grenades = new GrenadeSystem(this);
+  readonly doors = new DoorSystem(this);
+  readonly glass = new GlassSystem(this);
   /** Driveable cars in the loaded world (Vehicles spawns them; online clients mirror them). */
   readonly vehicles: Vehicle[] = [];
   /** Time of day and weather, recomputed every tick from the clock. */
@@ -68,6 +72,11 @@ export class Simulation implements WeaponContext {
    * aren't launched (the host is authoritative for both).
    */
   predicting = false;
+  /**
+   * Online client: doors and glass change only when the host says so (they are still in the
+   * collision world, for prediction).
+   */
+  replica = false;
   /**
    * Lag compensation (host): wraps the weapon update of a player's command, e.g. to rewind the
    * other actors to where that player saw them.
@@ -222,6 +231,7 @@ export class Simulation implements WeaponContext {
     }
 
     for (const s of this.systems) s.update(this);
+    this.doors.update();
     this.grenades.update();
     this.separateActors();
 
@@ -253,7 +263,8 @@ export class Simulation implements WeaponContext {
     if (cmd.pressed & Buttons.USE) {
       const was = p.vehicle;
       useVehicle(this, p);
-      if (p.vehicle !== was) this.vehicleUsers.add(p.id);
+      // E opens a door when it didn't get into or out of a car (and then picks nothing up).
+      if (p.vehicle !== was || (p.vehicle < 0 && this.doors.use(p))) this.vehicleUsers.add(p.id);
     }
     const car = this.vehicleOf(p);
     if (car) {
@@ -375,6 +386,14 @@ export class Simulation implements WeaponContext {
   onVehicleHit(attacker: Actor, vehicleId: number, damage: number): void {
     const v = this.getVehicle(vehicleId);
     if (v) damageVehicle(this, v, damage, attacker.id);
+  }
+
+  onDoorHit(_attacker: Actor, owner: number, damage: number): void {
+    this.doors.damage(owner, damage);
+  }
+
+  onGlassHit(pane: Brush): void {
+    this.glass.hit(pane);
   }
 
   onHit(info: HitInfo): void {

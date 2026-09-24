@@ -55,9 +55,20 @@ export type SimEvent =
   | { type: 'flashlight'; actorId: number; on: boolean }
   | { type: 'car_door'; actorId: number; vehicleId: number; pos: Vec3; enter: boolean }
   | { type: 'car_crash'; /** Driver, or -1. */ actorId: number; vehicleId: number; pos: Vec3; speed: number }
-  | { type: 'car_destroyed'; vehicleId: number; pos: Vec3 };
+  | { type: 'car_destroyed'; vehicleId: number; pos: Vec3 }
+  | {
+      type: 'door';
+      chunkKey: number;
+      index: number;
+      action: 'open' | 'close' | 'kick' | 'break' | 'locked';
+      /** State and swing side after the action (see Doors.ts). */
+      state: number;
+      side: number;
+      pos: Vec3;
+    }
+  | { type: 'glass_break'; chunkKey: number; index: number; pos: Vec3 };
 
-export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife' | 'grenade' | 'vehicle';
+export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife' | 'grenade' | 'vehicle' | 'door' | 'glass';
 
 /** Simple append-only queue drained once per frame by presentation. */
 export class EventQueue {

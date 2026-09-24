@@ -153,6 +153,12 @@ export class Presentation {
         case 'land':
           if (e.actorId === player.id) this.viewmodel.onLand(e.speed);
           break;
+        case 'glass_break':
+          this.particles.shards(e.pos);
+          break;
+        case 'door':
+          if (e.action === 'break') this.particles.splinters(e.pos);
+          break;
         case 'nade_throw':
           if (e.actorId === player.id) this.viewmodel.onThrow();
           break;

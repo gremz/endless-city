@@ -64,6 +64,11 @@ export class CollisionWorld {
     this.chunks.set(key, { brushes, cellKeys: [...keys] });
   }
 
+  /** A resident chunk's static brushes, in their packed order. */
+  chunkBrushes(key: number): readonly Brush[] | undefined {
+    return this.chunks.get(key)?.brushes;
+  }
+
   removeChunk(key: number): void {
     const c = this.chunks.get(key);
     if (!c) return;

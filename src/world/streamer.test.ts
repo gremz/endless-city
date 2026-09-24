@@ -26,6 +26,8 @@ function emptyChunk(seed: number, cx: number, cz: number): ChunkData {
     patrol: new Float32Array(0),
     pickups: new Float32Array(0),
     vehicles: new Float32Array(0),
+    doors: new Float32Array(0),
+    glass: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   };

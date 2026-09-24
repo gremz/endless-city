@@ -38,6 +38,8 @@ function chunk(): ChunkData {
     patrol: new Float32Array(0),
     pickups: new Float32Array([5, 0.02, 5]),
     vehicles: new Float32Array(0),
+    doors: new Float32Array(0),
+    glass: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   };
@@ -94,6 +96,9 @@ function played(): { save: SaveData; time: number } {
     { key: chunkKey(1, 0), level: 1, cleared: true, remaining: 0, spawnedOnce: true },
     { key: chunkKey(2, 0), level: 2, cleared: false, remaining: 2, spawnedOnce: true },
   ]);
+  // A door kicked open in chunk (3, 0) and a window shot out there (not loaded right now).
+  sim.doors.restore([[chunkKey(3, 0), 2, 1, -1, 90, 0]]);
+  sim.glass.restore([[chunkKey(3, 0), 17]]);
   const save = JSON.parse(JSON.stringify(captureSave(sim, sim.player, pickups, encounters, null, [chunkKey(0, 0), chunkKey(1, 0)], 1234))) as unknown;
   const valid = validateSave(save);
   expect(valid).not.toBeNull();
@@ -137,6 +142,8 @@ describe('save games', () => {
     expect(encounters.isCleared(chunkKey(1, 0))).toBe(true);
     expect(encounters.states.get(chunkKey(2, 0))).toMatchObject({ remaining: 2, cleared: false, level: 2, cx: 2, cz: 0 });
     expect(save.explored).toEqual([chunkKey(0, 0), chunkKey(1, 0)]);
+    expect(sim.doors.list()).toEqual([[chunkKey(3, 0), 2, 1, -1, 90, 0]]);
+    expect(sim.glass.isBroken(chunkKey(3, 0), 17)).toBe(true);
   });
 
   it('rejects saves it cannot trust', () => {
@@ -154,6 +161,8 @@ describe('save games', () => {
     expect(edit((s) => (s.player.x = 'far'))).toBeNull();
     expect(edit((s) => (s.pickups.drops[0].item = { kind: 'weapon', weapon: 'knife', clip: 0, reserve: 0 }))).toBeNull();
     expect(edit((s) => delete s.cleared)).toBeNull();
+    expect(edit((s) => (s.doors = [[1, 2, 3]]))).toBeNull();
+    expect(edit((s) => (s.glass = 'all'))).toBeNull();
   });
 
   it('loads older saves without grenades, and grenade drops', () => {

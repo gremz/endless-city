@@ -101,6 +101,9 @@ export class Mirror {
       case 'ev':
         for (const e of m.e) {
           if (this.predicted && PREDICTED.has(e.type) && actorOf(e) === this.localId) continue;
+          // Doors and glass change here right away (the world state catches up later).
+          if (e.type === 'door') sim.doors.applyAction(e.chunkKey, e.index, e.state, e.side);
+          else if (e.type === 'glass_break') sim.glass.breakPane(e.chunkKey, e.index, false);
           sim.events.push(e);
         }
         return true;
@@ -111,6 +114,8 @@ export class Mirror {
         sim.cleared.clear();
         for (const k of m.cleared) sim.cleared.add(k);
         this.encounters?.applyRemote(m.enc);
+        sim.doors.restore(m.doors);
+        sim.glass.restore(m.glass);
         return true;
       default:
         return false;

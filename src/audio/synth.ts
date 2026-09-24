@@ -334,6 +334,62 @@ export const RECIPES: Record<string, Recipe> = {
       noise(ctx, out, s + 20, { at: 0.08, dur: 0.6, gain: 0.15, type: 'highpass', freq: 4000, decay: 0.12 });
     },
   },
+  door_open: {
+    duration: 0.9,
+    variants: 2,
+    build: (ctx, out, s) => {
+      // Latch, then a creaking hinge.
+      noise(ctx, out, s, { dur: 0.02, gain: 0.35, type: 'bandpass', freq: 2600, q: 3, decay: 0.006 });
+      tone(ctx, out, { at: 0.05, f0: 420 + (s % 2) * 60, f1: 300, sweep: 0.5, gain: 0.08, decay: 0.25, dur: 0.6, type: 'sawtooth' });
+      noise(ctx, out, s + 2, { at: 0.05, dur: 0.5, gain: 0.12, type: 'bandpass', freq: 900, q: 6, attack: 0.1, decay: 0.2 });
+    },
+  },
+  door_close: {
+    duration: 0.5,
+    build: (ctx, out, s) => {
+      tone(ctx, out, { f0: 130, f1: 70, sweep: 0.06, gain: 0.7, decay: 0.05, dur: 0.3 });
+      noise(ctx, out, s, { dur: 0.1, gain: 0.45, type: 'lowpass', freq: 900, decay: 0.03 });
+      noise(ctx, out, s + 1, { at: 0.01, dur: 0.02, gain: 0.3, type: 'bandpass', freq: 3000, q: 3, decay: 0.006 });
+    },
+  },
+  door_kick: {
+    duration: 0.8,
+    variants: 2,
+    build: (ctx, out, s) => {
+      tone(ctx, out, { f0: 110, f1: 45, sweep: 0.08, gain: 1.1, decay: 0.07, dur: 0.4 });
+      noise(ctx, out, s, { dur: 0.25, gain: 0.8, type: 'bandpass', freq: 700, q: 0.8, decay: 0.06 });
+      noise(ctx, out, s + 4, { at: 0.02, dur: 0.2, gain: 0.3, type: 'bandpass', freq: 2200, q: 2, decay: 0.05 });
+    },
+  },
+  door_break: {
+    duration: 1.2,
+    build: (ctx, out, s) => {
+      tone(ctx, out, { f0: 95, f1: 40, sweep: 0.1, gain: 1.1, decay: 0.08, dur: 0.5 });
+      // Splintering wood.
+      for (let i = 0; i < 8; i++) {
+        noise(ctx, out, s * 11 + i, { at: 0.01 + i * 0.035, dur: 0.05, gain: 0.35, type: 'bandpass', freq: 900 + ((i * 37) % 5) * 400, q: 3, decay: 0.02 });
+      }
+      noise(ctx, out, s + 30, { at: 0.2, dur: 0.6, gain: 0.25, type: 'lowpass', freq: 600, decay: 0.2 });
+    },
+  },
+  door_locked: {
+    duration: 0.4,
+    build: (ctx, out, s) => {
+      for (let i = 0; i < 3; i++) noise(ctx, out, s + i, { at: i * 0.07, dur: 0.03, gain: 0.35, type: 'bandpass', freq: 2000 + i * 150, q: 4, decay: 0.01 });
+    },
+  },
+  glass_break: {
+    duration: 1.6,
+    variants: 3,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.1, gain: 0.8, type: 'highpass', freq: 3000, decay: 0.04 });
+      // Shards ringing and tinkling down.
+      for (let i = 0; i < 12; i++) {
+        tone(ctx, out, { at: 0.01 + i * 0.045 + ((s * 7 + i * 13) % 10) / 400, f0: 3000 + ((s * 5 + i * 11) % 13) * 300, gain: 0.07, decay: 0.04, dur: 0.15, type: 'triangle' });
+      }
+      noise(ctx, out, s + 50, { at: 0.2, dur: 1, gain: 0.2, type: 'highpass', freq: 5000, attack: 0.05, decay: 0.35 });
+    },
+  },
   fire_out: {
     duration: 1,
     build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.9, gain: 0.4, type: 'highpass', freq: 2000, attack: 0.02, decay: 0.3, freqEnd: 900 }),

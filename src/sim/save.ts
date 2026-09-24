@@ -8,6 +8,8 @@ import { MEDKIT_MAX } from './medkit';
 import type { PickupItem, PickupManager, PickupSave, SavedPickup } from './Pickups';
 import type { Simulation } from './Simulation';
 import { VEHICLE_HEALTH } from './vehicle/Vehicle';
+import type { DoorRecord } from './Doors';
+import type { PaneRef } from './Glass';
 import type { SavedVehicle, VehicleSave, Vehicles } from './vehicle/Vehicles';
 
 export const SAVE_VERSION = 1;
@@ -55,6 +57,10 @@ export interface SaveData {
   pickups: PickupSave;
   /** Cars that were driven or wrecked (absent in older saves). */
   vehicles?: VehicleSave;
+  /** Doors that were opened, damaged or broken (absent in older saves). */
+  doors?: DoorRecord[];
+  /** Broken window panes (absent in older saves). */
+  glass?: PaneRef[];
   /** Chunk keys seen on the city map. */
   explored: number[];
 }
@@ -102,6 +108,8 @@ export function captureSave(
     encounters: encounters?.serialize() ?? [],
     pickups: pickups.serialize(),
     vehicles: vehicles?.serialize() ?? { taken: [], cars: [] },
+    doors: sim.doors.list(),
+    glass: sim.glass.list(),
     explored: [...explored],
   };
 }
@@ -125,6 +133,8 @@ export function applyWorldSave(
   encounters?.restore(save.encounters);
   pickups.restore(save.pickups, owner);
   if (save.vehicles) vehicles?.restore(save.vehicles);
+  sim.doors.restore(save.doors ?? []);
+  sim.glass.restore(save.glass ?? []);
 }
 
 /**
@@ -243,6 +253,25 @@ function intList(v: unknown, what: string): number[] {
   return v.map((k) => need(int(k), what));
 }
 
+function doorSave(v: unknown): DoorRecord[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) throw new Invalid('doors');
+  return v.map((r) => {
+    if (!Array.isArray(r) || r.length !== 6) throw new Invalid('door');
+    const [k, i, state, side, hp, locked] = r.map((x) => need(num(x), 'door'));
+    return [need(int(k), 'door'), need(int(i), 'door'), clamp(Math.round(state), 0, 2), side < 0 ? -1 : 1, clamp(hp, -1000, 1000), locked ? 1 : 0];
+  });
+}
+
+function glassSave(v: unknown): PaneRef[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) throw new Invalid('glass');
+  return v.map((r) => {
+    if (!Array.isArray(r) || r.length !== 2) throw new Invalid('pane');
+    return [need(int(r[0]), 'pane'), need(int(r[1]), 'pane')];
+  });
+}
+
 /** Parse untrusted JSON into a SaveData, or null if it isn't a usable save. */
 export function validateSave(raw: unknown): SaveData | null {
   try {
@@ -314,6 +343,8 @@ export function validateSave(raw: unknown): SaveData | null {
       encounters,
       pickups: { taken, drops },
       vehicles: vehicleSave(raw.vehicles),
+      doors: doorSave(raw.doors),
+      glass: glassSave(raw.glass),
       explored: intList(raw.explored ?? [], 'explored'),
     };
   } catch (e) {

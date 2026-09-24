@@ -1,13 +1,14 @@
 import { HitGroup } from '../ai/hitboxes';
 import { HU } from '../core/config';
 import { anglesToForward, clamp01, DEG, vec3, type Vec3 } from '../core/math';
-import { Contents, MASK_SHOT } from '../physics/brush';
+import { Contents, MASK_SHOT, type Brush } from '../physics/brush';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import { makeTrace, type TraceResult } from '../physics/trace';
 import { MOVE } from '../player/movementConfig';
 import { clipVelocity, eyeHeight } from '../player/pmove';
 import { WEAPONS, type GrenadeId } from '../weapons/weaponDefs';
 import type { Actor } from './Actor';
+import { BLAST_GLASS_RADIUS } from './Glass';
 import type { Simulation } from './Simulation';
 import { damageVehicle } from './vehicle/Vehicle';
 
@@ -85,9 +86,29 @@ const tmpEnd = vec3();
  * Advance a grenade one tick: gravity, swept hull, bounces. Shared by the live sim and by
  * `simulateThrow` (bots aiming, tests), so predictions match real flights exactly.
  */
-export function stepProjectile(world: CollisionWorld, pos: Vec3, vel: Vec3, dt: number, tr: TraceResult, impact: StepImpact): boolean {
+export function stepProjectile(
+  world: CollisionWorld,
+  pos: Vec3,
+  vel: Vec3,
+  dt: number,
+  tr: TraceResult,
+  impact: StepImpact,
+  /** Called for a window pane the grenade flies through (it breaks). */
+  onGlass?: (pane: Brush) => void,
+): boolean {
   impact.hit = false;
   impact.floor = false;
+  // Glass doesn't stop a grenade: it shatters and the grenade flies on, slower.
+  tmpEnd.x = pos.x + vel.x * dt;
+  tmpEnd.y = pos.y + vel.y * dt;
+  tmpEnd.z = pos.z + vel.z * dt;
+  world.traceRay(tr, pos, tmpEnd, Contents.GLASS);
+  if (tr.fraction < 1 && tr.brush) {
+    onGlass?.(tr.brush);
+    vel.x *= 0.7;
+    vel.y *= 0.7;
+    vel.z *= 0.7;
+  }
   // Half the gravity before and after the move (symplectic-ish, stable at any tick rate).
   vel.y -= NADE_GRAVITY * dt * 0.5;
   let remaining = dt;
@@ -283,7 +304,7 @@ export class GrenadeSystem {
       const fuse = WEAPONS[p.kind].fuse ?? 2;
       let moving = p.restTime < 0;
       if (moving) {
-        moving = stepProjectile(sim.world, p.pos, p.vel, sim.dt, this.tr, this.impact);
+        moving = stepProjectile(sim.world, p.pos, p.vel, sim.dt, this.tr, this.impact, this.onGlass);
         const im = this.impact;
         if (im.hit && im.speed > 1) {
           sim.events.push({ type: 'nade_bounce', pos: vec3(p.pos.x, p.pos.y, p.pos.z), speed: im.speed, material: im.material });
@@ -351,9 +372,13 @@ export class GrenadeSystem {
     return vec3(this.tr.normal.x, this.tr.normal.y, this.tr.normal.z);
   }
 
+  private readonly onGlass = (pane: Brush) => this.sim.glass.hit(pane);
+
   private explode(p: Projectile, pos: Vec3): void {
     const sim = this.sim;
     const from = vec3(pos.x, pos.y + 0.05, pos.z);
+    sim.glass.breakNear(from, BLAST_GLASS_RADIUS);
+    sim.doors.blast(from, HE_RADIUS);
     const to = vec3();
     for (const v of sim.actors) {
       if (!v.alive || v === p.owner || !sim.canHit(p.owner, v)) continue;

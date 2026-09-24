@@ -129,6 +129,15 @@ export class SoundEvents {
       case 'fire_out':
         a.play('fire_out', { pos: e.pos, volume: 0.8, reverb: 0.2 }, L);
         break;
+      case 'door': {
+        const name = `door_${e.action}`;
+        const vol = e.action === 'kick' || e.action === 'break' ? 1.3 : 0.8;
+        a.play(name, { pos: e.pos, volume: vol, reverb: 0.2 }, L);
+        break;
+      }
+      case 'glass_break':
+        a.play('glass_break', { pos: e.pos, volume: 1.1, reverb: 0.25 }, L);
+        break;
       case 'car_door':
         a.play('car_door', { pos: e.pos, volume: e.actorId === me ? 0.7 : 0.9, reverb: 0.1 }, L);
         break;

@@ -205,6 +205,7 @@ const IMPACT_COLORS: Record<number, [number, number, number]> = {
   [Material.CarGlass]: [0.8, 0.9, 1],
   [Material.CarWheel]: [0.18, 0.18, 0.18],
   [Material.CarTrim]: [0.4, 0.4, 0.4],
+  [Material.Glass]: [0.8, 0.92, 1],
 };
 
 /** Impact dust, sparks and blood: one Points object with CPU-simulated particles. */
@@ -278,6 +279,16 @@ export class Particles {
   glass(pos: Vec3): void {
     this.emit(pos, 0, 0.6, 0, 18, 3, 2, [0.75, 0.55, 0.3], 0.5, 9);
     this.emit(pos, 0, 0.9, 0, 14, 2.5, 1.6, [1, 0.6, 0.2], 0.4, -1);
+  }
+
+  /** A window shattering: glittering shards falling from the pane. */
+  shards(pos: Vec3): void {
+    this.emit(pos, 0, 0.3, 0, 40, 2.4, 2.2, [0.85, 0.95, 1], 0.9, 9);
+  }
+
+  /** A door bursting: splinters. */
+  splinters(pos: Vec3): void {
+    this.emit(pos, 0, 0.2, 0, 34, 3.5, 2.4, IMPACT_COLORS[Material.Wood], 0.8, 8);
   }
 
   /** Flashbang pop: a burst of white sparks. */

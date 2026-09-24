@@ -38,6 +38,8 @@ function setup(spots: [number, number][] = []) {
     patrol: new Float32Array(0),
     pickups: new Float32Array(spots.flatMap(([x, z]) => [x, 0.02, z])),
     vehicles: new Float32Array(0),
+    doors: new Float32Array(0),
+    glass: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   } satisfies ChunkData;

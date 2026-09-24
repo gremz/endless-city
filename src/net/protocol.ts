@@ -5,13 +5,15 @@ import type { Actor } from '../sim/Actor';
 import type { Pickup, PickupItem } from '../sim/Pickups';
 import type { Vehicle } from '../sim/vehicle/Vehicle';
 import type { Inventory, WeaponState } from '../weapons/Inventory';
+import type { DoorRecord } from '../sim/Doors';
+import type { PaneRef } from '../sim/Glass';
 import type { BuyItem, GrenadeId, WeaponId, WeaponSlot } from '../weapons/weaponDefs';
 
 /**
  * Wire format between a host's ServerGame and its clients. Commands and snapshots are compact
  * binary sent on the unreliable channel; everything else is JSON on the reliable channel.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 /** A snapshot goes out every this many server ticks (32 Hz at 64 Hz). */
 export const SNAPSHOT_EVERY = 2;
 /** Commands per packet: each one repeats the last few in case packets are lost. */
@@ -59,7 +61,7 @@ export type ServerMsg =
   | { t: 'roster'; add: [id: number, name: string, team: number, dummy: boolean][] }
   | { t: 'ev'; e: SimEvent[] }
   | { t: 'pickups'; items: NetPickup[] }
-  | { t: 'world'; cleared: number[]; enc: NetEncounter[] }
+  | { t: 'world'; cleared: number[]; enc: NetEncounter[]; doors: DoorRecord[]; glass: PaneRef[] }
   | { t: 'chat'; from: string; text: string }
   /** Per player: actor id, name, kills, deaths, money. */
   | { t: 'scores'; s: [id: number, name: string, kills: number, deaths: number, money: number][] };

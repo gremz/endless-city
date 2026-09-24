@@ -34,7 +34,12 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
     w.box(20, 0, 10, 28, 6, 18, Material.Concrete, SOLID | Contents.FLOOR);
     w.ladder(2, 20, 14, 0, 6);
     w.box(20, 0, 30, 40, 1.9, 34, Material.Concrete, SOLID | Contents.FLOOR);
+    // A wall at z = 50 with a doorway (door at x = 45) and a window pane at x = 50.
+    w.box(40, 0, 49.85, 44.2, 3, 50.15, Material.Brick, SOLID);
+    w.box(45.8, 0, 49.85, 56, 3, 50.15, Material.Brick, SOLID);
   }
+  const pane = cx === 0 && cz === -1 ? w.count : -1;
+  if (pane >= 0) w.box(49, 3, 49.98, 51, 4, 50.02, Material.Glass, Contents.GLASS);
   const brushes = w.finish();
   const nav = bakeNav(brushes);
   const ox = cx * CHUNK;
@@ -59,6 +64,8 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
     pickups: new Float32Array(0),
     // A car parked east of the spawn point, facing -Z.
     vehicles: cx === 0 && cz === 0 ? new Float32Array([50, 0, 40, 0, 2, 0]) : new Float32Array(0),
+    doors: pane >= 0 ? new Float32Array([45, 0, oz + 50, 1, 1.6, 2.4, 0, 1]) : new Float32Array(0),
+    glass: pane >= 0 ? new Int32Array([pane]) : new Int32Array(0),
     hasEncounter: encounter,
     genMs: 0,
   };
@@ -74,6 +81,9 @@ function joinClient(server: ServerGame, name: string) {
   // The client builds the same city from the seed for its own collision (prediction).
   const streamer = new WorldStreamer(sim.world, new SyncChunkSource(7, flatChunk));
   streamer.addListener(sim.nav);
+  streamer.addListener(sim.doors);
+  streamer.addListener(sim.glass);
+  sim.replica = true;
   const encounters = new EncounterManager(sim, streamer);
   let mirror: Mirror | null = null;
   let prediction: Prediction | null = null;
@@ -448,6 +458,39 @@ describe('prediction and lag compensation', () => {
     expect(mantled).toBe(true);
     expect(p.move.pos.y).toBeCloseTo(1.9, 1);
     expect(one.prediction!.corrections).toBe(0);
+  });
+
+  it('shares doors and glass: opened and broken on the host, seen and collided with by clients', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'Opener');
+    run(server, [one], 48);
+    const p = server.sim.players[0];
+    teleport(p, 45, 0.02, -15.3);
+    one.cmd.yaw = Math.PI; // face +Z, at the door
+    run(server, [one], 64);
+    const key = chunkKey(0, -1);
+    expect(one.sim.doors.find(key, 0)!.state).toBe(0);
+    one.cmd.pressed = Buttons.USE;
+    run(server, [one], 32);
+    expect(server.sim.doors.find(key, 0)!.state).toBe(1);
+    expect(one.sim.doors.find(key, 0)!.state).toBe(1);
+    // The client's own collision lets it through the doorway.
+    one.prediction!.corrections = 0;
+    one.cmd.forward = 1;
+    run(server, [one], 64);
+    expect(p.move.pos.z).toBeGreaterThan(-13);
+    expect(one.prediction!.corrections).toBe(0);
+    one.cmd.forward = 0;
+
+    const brushes = flatChunk(7, 0, -1).glass;
+    server.sim.glass.breakPane(key, brushes[0], true);
+    run(server, [one], 32);
+    expect(one.sim.glass.isBroken(key, brushes[0])).toBe(true);
+    // A client that joins later gets both from the world state.
+    const two = joinClient(server, 'Late');
+    run(server, [one, two], 64);
+    expect(two.sim.glass.isBroken(key, brushes[0])).toBe(true);
+    expect(two.sim.doors.list().some(([k, i, state]) => k === key && i === 0 && state === 1)).toBe(true);
   });
 
   it("hits a moving target where the shooter saw it", () => {

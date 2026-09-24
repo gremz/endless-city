@@ -50,7 +50,7 @@ without opening the menu. Red-cross health packs lie around the city (and bots s
 carry it (up to 3), and press H to use it for +50 HP. Using one takes a second and lowers your
 gun; H again or firing cancels and keeps the pack. The radar in the top-left corner shows buy zones in green, with a
 `$` on its rim pointing to the nearest one when it's out of range. M opens the city map.
-L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)). Esc pauses. F3
+L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)) and opens doors. Esc pauses. F3
 toggles the debug overlay.
 
 ## Climbing and rooftops
@@ -71,6 +71,22 @@ Most roofs in the city can be reached, and fights spill onto them.
   they kill. Armor doesn't help.
 
 Bots use ladders, fire escapes and bridges too. Some overwatch bots start on rooftops.
+
+## Doors and glass
+
+- **Doors.** Many doorways have doors. E opens and closes the one you're looking at, and
+  you can't close it on someone standing in the doorway. Opening one is audible, so nearby
+  bots may come to look. Running at a door (faster than about 5 m/s) and pressing E kicks it
+  in. That's loud, and it knocks whoever stands behind it.
+- **Locked doors.** Some doors are locked. A locked wooden door gives way to two kicks,
+  gunfire or an HE grenade. Warehouse side doors are metal, which bullets don't go through
+  and kicks barely dent. Bullets do go through wooden doors, closed or not.
+- **Bots** open the doors they walk into and kick in locked ones.
+- **Glass.** Windows have panes. Bots can see and shoot through them, but nobody can walk or
+  climb through until the glass is broken. A bullet shatters a pane and keeps going, and so
+  do grenades. An HE blast takes out every pane within about 6 m.
+- Open, broken and kicked-in doors and shattered windows stay that way. They're in your save
+  and shared in co-op.
 
 ## Grenades
 

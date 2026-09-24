@@ -17,6 +17,8 @@ const COLORS: Record<number, string> = {
   [Material.CarGlass]: '#2a323c',
   [Material.CarWheel]: '#1c1c1c',
   [Material.CarTrim]: '#262626',
+  [Material.LampGlow]: '#d8d2bd',
+  [Material.Glass]: '#9fb7c4',
 };
 
 /**

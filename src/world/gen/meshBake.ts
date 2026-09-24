@@ -26,6 +26,7 @@ export const MATERIAL_TILE: Record<number, number> = {
   [Material.CarWheel]: 0,
   [Material.CarTrim]: 0,
   [Material.LampGlow]: 0,
+  [Material.Glass]: 0,
 };
 
 type Rgb = readonly [number, number, number];

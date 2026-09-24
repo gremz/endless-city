@@ -146,7 +146,8 @@ export function bakeNav(packed: Int32Array, ladders: readonly number[] = []): Na
   for (let i = 0; i < n; i++) {
     const o = i * BRUSH_STRIDE;
     const c = wordContents(packed[o + 6]);
-    if ((c & Contents.SOLID_PLAYER) === 0) continue;
+    // Glass blocks walking until it's broken.
+    if ((c & (Contents.SOLID_PLAYER | Contents.GLASS)) === 0) continue;
     brushes.push({
       x0: packed[o] / 100,
       y0: packed[o + 1] / 100,

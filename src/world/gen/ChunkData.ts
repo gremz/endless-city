@@ -23,9 +23,11 @@ export const Material = {
   CarTrim: 13,
   /** Street lamp glass: glows at night. */
   LampGlow: 14,
+  /** Window panes (drawn by the glass renderer, not baked into chunk meshes). */
+  Glass: 15,
 } as const;
 export type MaterialId = (typeof Material)[keyof typeof Material];
-export const MATERIAL_COUNT = 15;
+export const MATERIAL_COUNT = 16;
 
 /** Packed word layout: bits 0-2 ramp, 3-7 material, 8-15 contents. */
 export const packBrushWord = (ramp: number, material: number, contents: number) =>
@@ -90,6 +92,10 @@ export interface ChunkData {
   pickups: Float32Array;
   /** Driveable cars, VEHICLE_STRIDE floats each. */
   vehicles: Float32Array;
+  /** Doors, DOOR_STRIDE floats each. */
+  doors: Float32Array;
+  /** Brush indices (into `brushes`) of breakable window panes. */
+  glass: Int32Array;
   hasEncounter: boolean;
   genMs: number;
 }
@@ -99,6 +105,14 @@ export interface ChunkData {
  * center, heading yaw, paint index, hatchback (0/1).
  */
 export const VEHICLE_STRIDE = 6;
+
+/**
+ * Door record in ChunkData.doors (world meters): x, y (floor), z of the doorway's center, 1 if
+ * the door spans X (else Z), width, height, flags (DoorFlag), and the inward direction (+1 or
+ * -1 along the axis the door faces).
+ */
+export const DOOR_STRIDE = 8;
+export const DoorFlag = { Metal: 1, Locked: 2 } as const;
 
 export function transferList(d: ChunkData): ArrayBuffer[] {
   const out: ArrayBuffer[] = [
@@ -113,6 +127,8 @@ export function transferList(d: ChunkData): ArrayBuffer[] {
     d.patrol.buffer as ArrayBuffer,
     d.pickups.buffer as ArrayBuffer,
     d.vehicles.buffer as ArrayBuffer,
+    d.doors.buffer as ArrayBuffer,
+    d.glass.buffer as ArrayBuffer,
   ];
   for (const m of d.meshes) {
     out.push(

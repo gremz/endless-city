@@ -5,7 +5,7 @@ import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
 import { buildBuilding, buildCourtyard } from './buildings';
 import { buildRooftops } from './facades';
-import { District, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
+import { District, DOOR_STRIDE, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
 import { districtFor, levelFor } from './district';
 import { placeEncounters } from './encounters';
 import { Occupancy, rect, rd, rw, type GenContext, type Rect, type VehicleSpot } from './genContext';
@@ -46,6 +46,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     w: new BrushWriter(1024),
     r: sfc32(hash3(seed, cx, cz, Salt.Layout)),
     rp: sfc32(hash3(seed, cx, cz, Salt.Props)),
+    rb: sfc32(hash3(seed, cx, cz, Salt.Breakables)),
     district,
     level,
     lotY: lotHeight(seed, cx, cz, district.id),
@@ -57,6 +58,8 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     vehicles: [],
     buildings: [],
     ladders: [],
+    doorLeaves: [],
+    glass: [],
   };
 
   buildStreets(ctx);
@@ -133,6 +136,8 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     patrol: enc.patrol,
     pickups,
     vehicles: vehicleSpawns(ctx.vehicles, cx, cz),
+    doors: doorRecords(ctx.doorLeaves, cx, cz),
+    glass: new Int32Array(ctx.glass),
     hasEncounter: enc.hasEncounter,
     genMs: performance.now() - t0,
   };
@@ -160,6 +165,16 @@ function concatBrushes(a: Int32Array, b: Int32Array): Int32Array {
   const out = new Int32Array(a.length + b.length);
   out.set(a);
   out.set(b, a.length);
+  return out;
+}
+
+/** Door leaves as ChunkData.doors records (world coordinates). */
+function doorRecords(leaves: readonly number[], cx: number, cz: number): Float32Array {
+  const out = new Float32Array(leaves);
+  for (let o = 0; o < out.length; o += DOOR_STRIDE) {
+    out[o] += cx * CHUNK;
+    out[o + 2] += cz * CHUNK;
+  }
   return out;
 }
 

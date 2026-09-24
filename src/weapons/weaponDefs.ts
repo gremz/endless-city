@@ -406,3 +406,6 @@ export const CAR_HIT: WeaponDef = { ...WEAPONS.knife, id: 'car' as WeaponId, nam
 
 /** Not a weapon: what falling damage is credited with (kill feed "Fall"). Armor doesn't help. */
 export const FALL_HIT: WeaponDef = { ...WEAPONS.knife, id: 'fall' as WeaponId, name: 'Fall', killReward: 0, damage: 0, armorPen: 1, rangeMod: 1 };
+
+/** Not a weapon: a door kicked into someone standing behind it. */
+export const KICK_HIT: WeaponDef = { ...WEAPONS.knife, id: 'kick' as WeaponId, name: 'Door kick', damage: 20, armorPen: 1, rangeMod: 1 };
