@@ -13,6 +13,8 @@ export class SoundEvents {
   private lastBounce = 0;
   private fireAt = 0;
   private clock = 0;
+  /** Actor id of the player listening (their own sounds play un-positioned). */
+  localId = -1;
 
   constructor(private audio: AudioEngine) {}
 
@@ -38,7 +40,7 @@ export class SoundEvents {
 
   handle(e: SimEvent, sim: Simulation): void {
     const a = this.audio;
-    const me = sim.player.id;
+    const me = this.localId;
     const L = this.listener;
     switch (e.type) {
       case 'shot': {

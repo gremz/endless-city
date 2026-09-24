@@ -16,7 +16,7 @@ import { updateWeapon, type HitInfo, type WeaponContext } from '../weapons/Weapo
 import type { GrenadeId } from '../weapons/weaponDefs';
 import { makeActor, storePrev, Team, teleport, type Actor } from './Actor';
 import { applyDamage, bulletDamage } from './damage';
-import { Economy } from './Economy';
+import { Economy, START_MONEY } from './Economy';
 import { envAt, type Env, type EnvOverride } from './Environment';
 import { GrenadeSystem } from './Grenades';
 import { updateHeal } from './medkit';
@@ -40,9 +40,10 @@ export class Simulation implements WeaponContext {
   readonly events = new EventQueue();
   readonly nav = new NavGrid();
   readonly economy = new Economy(this.events);
-  /** Chunk keys the player has cleared (buy zones and respawn points). */
+  /** Chunk keys the players have cleared (shared buy zones and respawn points). */
   readonly cleared = new Set<number>();
-  readonly player: Actor;
+  /** Human players, in join order. */
+  readonly players: Actor[] = [];
   readonly actors: Actor[] = [];
   readonly systems: SimSystem[] = [];
   readonly grenades = new GrenadeSystem(this);
@@ -52,18 +53,32 @@ export class Simulation implements WeaponContext {
   envOverride: EnvOverride = {};
   tick = 0;
   time = 0;
-  /** The player's command for the current tick (systems read edge-triggered buttons like USE). */
-  cmd: UserCmd = idleCmd;
+  /** Each player's command for the current tick (systems read edge-triggered buttons like USE). */
+  private cmds = new Map<number, UserCmd>();
   private nextActorId = 1;
   private dummyGear = new Map<number, [number, boolean]>();
+
+  /**
+   * Client-side prediction: weapons fire and move as usual, but hits do no damage and grenades
+   * aren't launched (the host is authoritative for both).
+   */
+  predicting = false;
+  /**
+   * Lag compensation (host): wraps the weapon update of a player's command, e.g. to rewind the
+   * other actors to where that player saw them.
+   */
+  lagComp: ((p: Actor, cmd: UserCmd, fire: () => void) => void) | null = null;
+  /** Players who turned auto-bhop on for themselves (online; `opts.autoBhop` covers solo). */
+  readonly autoBhopIds = new Set<number>();
 
   constructor(
     readonly params: GameParams,
     public opts: SimOptions,
     readonly dt: number,
+    /** Start with the solo player ('You'). A host adds its players as they join instead. */
+    soloPlayer = true,
   ) {
-    this.player = makeActor(this.nextActorId++, 'You', Team.Player, 0, 0, 0);
-    this.actors.push(this.player);
+    if (soloPlayer) this.addPlayer('You');
     this.envOverride = { hour: params.hour ?? undefined, weather: params.weather ?? undefined };
     this.env = envAt(params.seed, 0, this.envOverride);
   }
@@ -71,6 +86,37 @@ export class Simulation implements WeaponContext {
   /** Recompute the environment now (after the clock or overrides changed outside a tick). */
   updateEnv(): void {
     envAt(this.params.seed, this.time, this.envOverride, this.env);
+  }
+
+  /** The first player: the only one in solo play (tests and single-player code). */
+  get player(): Actor {
+    return this.players[0];
+  }
+
+  /** Add a human player with the starting loadout and money (placed by the caller). */
+  addPlayer(name: string): Actor {
+    const a = makeActor(this.newActorId(), name, Team.Player, 0, 0, 0);
+    a.money = START_MONEY;
+    this.players.push(a);
+    this.actors.push(a);
+    return a;
+  }
+
+  removePlayer(a: Actor): void {
+    const i = this.players.indexOf(a);
+    if (i >= 0) this.players.splice(i, 1);
+    this.removeActor(a);
+    this.cmds.delete(a.id);
+    this.autoBhopIds.delete(a.id);
+  }
+
+  isPlayer(id: number): boolean {
+    return this.players.some((p) => p.id === id);
+  }
+
+  /** The command an actor's player sent this tick (idle for bots and absent players). */
+  cmdFor(a: Actor): UserCmd {
+    return this.cmds.get(a.id) ?? idleCmd;
   }
 
   newActorId(): number {
@@ -110,29 +156,26 @@ export class Simulation implements WeaponContext {
     return a;
   }
 
-  step(cmd: UserCmd): void {
-    this.cmd = cmd;
+  /**
+   * Advance one tick. `cmds` maps player actor ids to their input; a single command drives the
+   * first player (solo play).
+   */
+  step(cmds: UserCmd | ReadonlyMap<number, UserCmd>): void {
+    this.cmds.clear();
+    if (isCmd(cmds)) {
+      if (this.player) this.cmds.set(this.player.id, cmds);
+    } else {
+      for (const [id, c] of cmds) this.cmds.set(id, c);
+    }
     this.tick++;
     this.time += this.dt;
     this.events.beginTick();
     this.updateEnv();
     for (const a of this.actors) storePrev(a);
 
-    const p = this.player;
-    if (p.alive) {
-      p.yaw = cmd.yaw;
-      p.pitch = cmd.pitch;
-      const wasGround = p.move.onGround;
-      playerMove(p.move, cmd, this.world, this.dt, { autoBhop: this.opts.autoBhop });
-      if (p.move.jumped) this.events.push({ type: 'jump', actorId: p.id });
-      if (p.move.landed && !wasGround) this.events.push({ type: 'land', actorId: p.id, speed: p.move.landSpeed });
-      if (cmd.pressed & Buttons.FLASHLIGHT) {
-        p.flashlight = !p.flashlight;
-        this.events.push({ type: 'flashlight', actorId: p.id, on: p.flashlight });
-      }
-      updateHeal(p, cmd, this);
-      updateWeapon(p, cmd, this);
-      this.footsteps(p);
+    for (const p of this.players) {
+      const cmd = this.cmds.get(p.id);
+      if (cmd && p.alive) this.runCmd(p, cmd);
     }
 
     for (const s of this.systems) s.update(this);
@@ -154,6 +197,28 @@ export class Simulation implements WeaponContext {
         playerMove(a.move, idleCmd, this.world, this.dt);
       }
     }
+  }
+
+  /**
+   * Run one command for a player: look, move, medkit, weapon, footsteps. The host also calls
+   * it for a player's backlogged commands, and a client for its own predicted ones (`heal` off:
+   * medkits are the host's business).
+   */
+  runCmd(p: Actor, cmd: UserCmd, heal = true): void {
+    p.yaw = cmd.yaw;
+    p.pitch = cmd.pitch;
+    const wasGround = p.move.onGround;
+    playerMove(p.move, cmd, this.world, this.dt, { autoBhop: this.opts.autoBhop || this.autoBhopIds.has(p.id) });
+    if (p.move.jumped) this.events.push({ type: 'jump', actorId: p.id });
+    if (p.move.landed && !wasGround) this.events.push({ type: 'land', actorId: p.id, speed: p.move.landSpeed });
+    if (cmd.pressed & Buttons.FLASHLIGHT) {
+      p.flashlight = !p.flashlight;
+      this.events.push({ type: 'flashlight', actorId: p.id, on: p.flashlight });
+    }
+    if (heal) updateHeal(p, cmd, this);
+    if (this.lagComp) this.lagComp(p, cmd, () => updateWeapon(p, cmd, this));
+    else updateWeapon(p, cmd, this);
+    this.footsteps(p);
   }
 
   /**
@@ -217,10 +282,12 @@ export class Simulation implements WeaponContext {
   }
 
   throwGrenade(a: Actor, id: GrenadeId, strength: number, yaw: number, pitch: number): void {
+    if (this.predicting) return;
     this.grenades.throw(a, id, strength, yaw, pitch);
   }
 
   onHit(info: HitInfo): void {
+    if (this.predicting) return;
     const { attacker, victim, def } = info;
     const res = bulletDamage(
       def.damage * info.damageScale,
@@ -231,7 +298,7 @@ export class Simulation implements WeaponContext {
       victim.armor,
       victim.helmet,
     );
-    const god = victim === this.player && this.params.god;
+    const god = victim.team === Team.Player && this.params.god;
     const killed = applyDamage(victim, res, god);
     victim.lastAttacker = attacker.id;
     victim.lastDamagedAt = this.time;
@@ -260,9 +327,8 @@ export class Simulation implements WeaponContext {
     for (const s of this.systems) s.onHit?.(this, info, killed);
   }
 
-  /** Bring the player back: full health, default loadout (bought gear is lost), money kept. */
-  respawnPlayer(x: number, z: number): void {
-    const p = this.player;
+  /** Bring a player back: full health, default loadout (bought gear is lost), money kept. */
+  respawnPlayer(p: Actor, x: number, z: number): void {
     p.alive = true;
     p.health = 100;
     p.diedAt = -1;
@@ -284,4 +350,8 @@ export class Simulation implements WeaponContext {
     a.flashUntil = -10;
     a.flashlight = false;
   }
+}
+
+function isCmd(c: UserCmd | ReadonlyMap<number, UserCmd>): c is UserCmd {
+  return typeof (c as UserCmd).buttons === 'number';
 }

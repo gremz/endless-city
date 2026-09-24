@@ -5,7 +5,7 @@ import { districtFor } from '../world/gen/district';
 import { LOT0 } from '../world/gen/streets';
 import type { StreamerListener } from '../world/WorldStreamer';
 import { el } from './dom';
-import { drawStash } from './Minimap';
+import { drawAlly, drawStash } from './Minimap';
 import { drawChunkTopdown } from './minimapRaster';
 
 /** Resolution of the cached per-chunk bitmaps (px per meter). */
@@ -37,6 +37,8 @@ export interface WorldMapView {
   /** Encounter areas the player has come across. */
   encounters: { cx: number; cz: number; level: number; cleared: boolean; active: boolean }[];
   stash: { x: number; z: number } | null;
+  /** Other players (co-op). */
+  allies?: { x: number; z: number; alive: boolean; name: string }[];
 }
 
 export interface WorldMapOptions {
@@ -393,6 +395,14 @@ export class WorldMap implements StreamerListener {
     if (v.stash) {
       const [tx, ty] = clampToEdge(toScreen(v.stash.x, v.stash.z));
       drawStash(ctx, tx, ty, 1.2);
+    }
+
+    for (const t of v.allies ?? []) {
+      const [tx, ty] = clampToEdge(toScreen(t.x, t.z));
+      drawAlly(ctx, tx, ty, 1.3, t.alive);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.font = '600 11px system-ui, sans-serif';
+      ctx.fillText(t.name, tx, ty - 13);
     }
 
     // Player arrow (pinned to the edge when panned away).

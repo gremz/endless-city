@@ -10,7 +10,7 @@ export type SimEvent =
       to: Vec3;
       tracer: boolean;
     }
-  | { type: 'impact'; pos: Vec3; normal: Vec3; material: number; chunkKey: number }
+  | { type: 'impact'; /** Who fired. */ actorId: number; pos: Vec3; normal: Vec3; material: number; chunkKey: number }
   | {
       type: 'hit';
       attackerId: number;
@@ -29,13 +29,13 @@ export type SimEvent =
   | { type: 'land'; actorId: number; speed: number }
   | { type: 'jump'; actorId: number }
   | { type: 'step'; actorId: number; pos: Vec3; material: number }
-  | { type: 'money'; amount: number; reason: string }
+  | { type: 'money'; actorId: number; amount: number; reason: string }
   | { type: 'chunkCleared'; chunkKey: number; bonus: number; level: number }
   | { type: 'respawn'; actorId: number }
-  | { type: 'buy'; item: string; ok: boolean; reason?: string }
+  | { type: 'buy'; actorId: number; item: string; ok: boolean; reason?: string }
   | { type: 'pickup'; actorId: number; /** 'medkit', 'ammo' or a weapon id. */ item: string; pos: Vec3; amount: number }
   | { type: 'heal'; actorId: number; phase: 'start' | 'done' | 'cancel'; amount: number }
-  | { type: 'message'; text: string }
+  | { type: 'message'; /** Only for this player (-1 = everyone). */ actorId: number; text: string }
   | { type: 'nade_pin'; actorId: number; weapon: string }
   | { type: 'nade_throw'; actorId: number; weapon: string }
   | { type: 'nade_bounce'; pos: Vec3; speed: number; material: number }
@@ -62,7 +62,11 @@ export class EventQueue {
   /** Sound events emitted during the current tick (for AI hearing); cleared each tick. */
   readonly tickSounds: Extract<SimEvent, { type: 'sound' }>[] = [];
 
+  /** Drop everything pushed (client prediction replaying ticks it already showed). */
+  muted = false;
+
   push(e: SimEvent): void {
+    if (this.muted) return;
     if (e.type === 'sound') this.tickSounds.push(e);
     this.items.push(e);
     if (this.items.length > 4096) this.items.splice(0, this.items.length - 4096);

@@ -5,7 +5,7 @@ import { hash3, Salt, sfc32 } from '../core/rng';
 import { MASK_SHOT } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
 import { eyeHeight } from '../player/pmove';
-import { makeActor, Team, teleport } from '../sim/Actor';
+import { makeActor, Team, teleport, type Actor } from '../sim/Actor';
 import type { Simulation, SimSystem } from '../sim/Simulation';
 import { addGrenades, makeInventory } from '../weapons/Inventory';
 import type { HitInfo } from '../weapons/WeaponSystem';
@@ -48,14 +48,26 @@ interface EncounterState {
   remaining: number;
   squad: Squad | null;
   spawnedOnce: boolean;
+  /** Squad in the field on the host (online clients, which run no bots). */
+  remoteActive?: boolean;
 }
 
-/** Spawns squads in encounter chunks as the player approaches, runs the bots, pays for clears. */
+/** An encounter area for maps and radars. */
+export interface EncounterSummary {
+  key: number;
+  cx: number;
+  cz: number;
+  level: number;
+  cleared: boolean;
+  active: boolean;
+}
+
+/** Spawns squads in encounter chunks as players approach, runs the bots, pays for clears. */
 export class EncounterManager implements SimSystem {
   readonly states = new Map<number, EncounterState>();
   readonly bots: Bot[] = [];
   private astar: AStar;
-  private history = new TargetHistory();
+  private histories = new Map<number, TargetHistory>();
   private ctx: BotContext;
   private tr = makeTrace();
   private squadIds = 1;
@@ -67,7 +79,7 @@ export class EncounterManager implements SimSystem {
     private streamer: WorldStreamer,
   ) {
     this.astar = new AStar(sim.nav);
-    this.ctx = { sim, astar: this.astar, history: this.history, pathBudget: 2 };
+    this.ctx = { sim, astar: this.astar, histories: this.histories, pathBudget: 2 };
   }
 
   get aliveCount(): number {
@@ -92,7 +104,8 @@ export class EncounterManager implements SimSystem {
         cz: d.cz,
         level: this.levelOf(d),
         cleared: this.sim.cleared.has(d.key),
-        remaining: skill.squadSize + (skill.overwatch && d.perches.length ? 1 : 0),
+        // One more bot per extra player (up to two): co-op fights stay fights.
+        remaining: skill.squadSize + (skill.overwatch && d.perches.length ? 1 : 0) + Math.min(2, Math.max(0, this.sim.players.length - 1)),
         squad: null,
         spawnedOnce: false,
       };
@@ -102,16 +115,22 @@ export class EncounterManager implements SimSystem {
   }
 
   update(sim: Simulation): void {
-    const p = sim.player;
-    this.history.record(p, sim.tick);
+    for (const p of sim.players) {
+      let h = this.histories.get(p.id);
+      if (!h) this.histories.set(p.id, (h = new TargetHistory()));
+      h.record(p, sim.tick);
+    }
+    if (this.histories.size > sim.players.length) {
+      for (const id of this.histories.keys()) if (!sim.isPlayer(id)) this.histories.delete(id);
+    }
     this.ctx.pathBudget = 2;
     if (this.enabled && (sim.tick & 15) === 0) this.manage();
     for (const b of this.bots) b.update(this.ctx);
-    // Hearing: this tick's sounds made by the player.
+    // Hearing: this tick's sounds made by players.
     const sounds = sim.events.tickSounds;
     if (sounds.length) {
       for (const s of sounds) {
-        if (s.sourceId !== p.id) continue;
+        if (!sim.isPlayer(s.sourceId)) continue;
         // Grenades give away that you're around, not where you are.
         const reveal = s.kind !== 'grenade';
         const radius = hearingRadius(s.kind, s.radius, sim.env.rain);
@@ -141,9 +160,7 @@ export class EncounterManager implements SimSystem {
   /** Activation, despawn and clear checks (4 Hz). */
   private manage(): void {
     const sim = this.sim;
-    const p = sim.player.move.pos;
-    const pcx = worldToChunk(p.x);
-    const pcz = worldToChunk(p.z);
+    const alive = sim.players.filter((p) => p.alive);
     for (const [key, r] of this.streamer.resident) {
       const d = r.data;
       if (!d.hasEncounter || this.sim.params.noBots) continue;
@@ -151,15 +168,15 @@ export class EncounterManager implements SimSystem {
       if (st.cleared || st.squad || st.remaining <= 0) continue;
       const cxw = (d.cx + 0.5) * CHUNK;
       const czw = (d.cz + 0.5) * CHUNK;
-      if (Math.hypot(cxw - p.x, czw - p.z) > ACTIVATE_DIST || !sim.player.alive) continue;
+      if (!alive.some((p) => Math.hypot(cxw - p.move.pos.x, czw - p.move.pos.z) <= ACTIVATE_DIST)) continue;
       if (this.aliveCount >= MAX_BOTS) break;
       this.spawnSquad(st, d, key);
     }
-    // Despawn squads the player has left far behind.
+    // Despawn squads every player has left far behind.
     for (const st of this.states.values()) {
       const sq = st.squad;
       if (!sq) continue;
-      const far = chunkDist(st.cx, st.cz, pcx, pcz) > 2;
+      const far = sim.players.every((p) => chunkDist(st.cx, st.cz, worldToChunk(p.move.pos.x), worldToChunk(p.move.pos.z)) > 2);
       const unseen = sim.time - sq.lastSeen > DESPAWN_UNSEEN;
       const unloaded = !this.streamer.resident.has(st.key);
       if ((far && unseen) || unloaded) this.despawnSquad(st);
@@ -170,28 +187,31 @@ export class EncounterManager implements SimSystem {
     const sim = this.sim;
     const skill = skillFor(st.level);
     const r = sfc32(hash3(sim.params.seed, d.cx, d.cz, Salt.Names) ^ (st.spawnedOnce ? 0x55 : 0));
-    const p = sim.player;
-    const eye = vec3(p.move.pos.x, p.move.pos.y + eyeHeight(p.move), p.move.pos.z);
-    // Slots out of the player's sight and not too close.
+    const eyes = sim.players
+      .filter((p) => p.alive)
+      .map((p) => vec3(p.move.pos.x, p.move.pos.y + eyeHeight(p.move), p.move.pos.z));
+    // Slots out of every player's sight and not too close to anyone.
+    const hidden = (s: Vec3): boolean => {
+      for (const eye of eyes) {
+        if (Math.hypot(s.x - eye.x, s.z - eye.z) < MIN_SPAWN_DIST) return false;
+        this.sim.world.traceRay(this.tr, eye, vec3(s.x, s.y + 1.6, s.z), MASK_SHOT);
+        if (this.tr.fraction >= 0.999) return false;
+      }
+      return true;
+    };
     const slots: Vec3[] = [];
     for (let i = 0; i < d.spawns.length; i += 3) {
       const s = vec3(d.spawns[i], d.spawns[i + 1], d.spawns[i + 2]);
-      if (Math.hypot(s.x - eye.x, s.z - eye.z) < MIN_SPAWN_DIST) continue;
-      this.sim.world.traceRay(this.tr, eye, vec3(s.x, s.y + 1.6, s.z), MASK_SHOT);
-      if (this.tr.fraction >= 0.999) continue;
-      slots.push(s);
+      if (hidden(s)) slots.push(s);
     }
     const perches: Vec3[] = [];
     for (let i = 0; i < d.perches.length; i += 3) {
       const s = vec3(d.perches[i], d.perches[i + 1], d.perches[i + 2]);
-      if (Math.hypot(s.x - eye.x, s.z - eye.z) < MIN_SPAWN_DIST) continue;
-      this.sim.world.traceRay(this.tr, eye, vec3(s.x, s.y + 1.6, s.z), MASK_SHOT);
-      if (this.tr.fraction >= 0.999) continue;
-      perches.push(s);
+      if (hidden(s)) perches.push(s);
     }
     const wantOverwatch = skill.overwatch && perches.length > 0 && st.remaining > 1;
     const riflemen = Math.min(st.remaining - (wantOverwatch ? 1 : 0), slots.length, MAX_BOTS - this.aliveCount);
-    if (riflemen <= 0) return; // try again next time (player may be looking at every slot)
+    if (riflemen <= 0) return; // try again next time (players may be looking at every slot)
 
     const squad: Squad = {
       id: this.squadIds++,
@@ -260,22 +280,23 @@ export class EncounterManager implements SimSystem {
   onHit(sim: Simulation, info: HitInfo, killed: boolean): void {
     const victimBot = this.bots.find((b) => b.actor === info.victim);
     if (victimBot) {
-      victimBot.onDamaged(info.attacker.move.pos, sim.time);
+      victimBot.onDamaged(info.attacker, sim.time);
       // The rest of the squad hears about it quickly.
       for (const m of victimBot.squad.members) {
         if (m !== victimBot && m.actor.alive) m.awareness = Math.max(m.awareness, 0.5);
       }
       if (killed) {
         this.deadBodies.push({ bot: victimBot, at: sim.time });
-        if (info.attacker === sim.player) {
+        if (info.attacker.team === Team.Player) {
           // Fighting in the dark pays a quarter more.
           const night = sim.env.darkness > 0.5;
-          sim.economy.add(Math.round(info.def.killReward * (night ? 1.25 : 1)), night ? 'kill (night bonus)' : 'kill');
+          const reward = Math.round(info.def.killReward * (night ? 1.25 : 1));
+          sim.economy.add(info.attacker, reward, night ? 'kill (night bonus)' : 'kill');
         }
         this.checkCleared(victimBot.squad);
       }
     }
-    if (info.victim === sim.player && killed) this.onPlayerDeath();
+    if (info.victim.team === Team.Player && killed) this.onPlayerDeath(info.victim);
   }
 
   private checkCleared(sq: Squad): void {
@@ -290,18 +311,27 @@ export class EncounterManager implements SimSystem {
     st.squad = null;
     this.sim.cleared.add(st.key);
     const bonus = 500 + 200 * st.level;
-    this.sim.economy.add(bonus, 'clear');
+    // Everyone on the team gets the bonus, wherever they are.
+    for (const p of this.sim.players) this.sim.economy.add(p, bonus, 'clear');
     this.sim.events.push({ type: 'chunkCleared', chunkKey: st.key, bonus, level: st.level });
   }
 
-  /** Squads heal and forget when the player dies. */
-  private onPlayerDeath(): void {
+  /**
+   * A player died: bots after them look for someone else. Once every player is down, squads
+   * heal and forget, as in solo play.
+   */
+  private onPlayerDeath(victim: Actor): void {
+    const allDown = this.sim.players.every((p) => !p.alive);
     for (const b of this.bots) {
       if (!b.actor.alive) continue;
-      b.actor.health = 100;
-      b.reset(this.sim.time);
-      b.squad.lastKnown = null;
-      b.squad.calloutAt = Infinity;
+      if (allDown) {
+        b.actor.health = 100;
+        b.reset(this.sim.time);
+        b.squad.lastKnown = null;
+        b.squad.calloutAt = Infinity;
+      } else if (b.target === victim) {
+        b.target = null;
+      }
     }
   }
 
@@ -333,6 +363,27 @@ export class EncounterManager implements SimSystem {
     }
   }
 
+  /** Every encounter area seen so far. */
+  summaries(): EncounterSummary[] {
+    return [...this.states.values()].map((s) => ({
+      key: s.key,
+      cx: s.cx,
+      cz: s.cz,
+      level: s.level,
+      cleared: s.cleared,
+      active: !!s.squad || !!s.remoteActive,
+    }));
+  }
+
+  /** Take over the host's progress (online clients: no bots run here). */
+  applyRemote(list: readonly { key: number; level: number; cleared: boolean; active: boolean }[]): void {
+    this.states.clear();
+    for (const e of list) {
+      const [cx, cz] = keyToCoords(e.key);
+      this.states.set(e.key, { key: e.key, cx, cz, level: e.level, cleared: e.cleared, remaining: 0, squad: null, spawnedOnce: true, remoteActive: e.active });
+    }
+  }
+
   /** Uncleared encounter chunks near a position (for the compass). */
   nearbyEncounters(x: number, z: number, radius = 2): { cx: number; cz: number; level: number; active: boolean }[] {
     const out: { cx: number; cz: number; level: number; active: boolean }[] = [];
@@ -344,7 +395,7 @@ export class EncounterManager implements SimSystem {
         if (!d || !d.hasEncounter) continue;
         const st = this.states.get(chunkKey(d.cx, d.cz));
         if (st?.cleared) continue;
-        out.push({ cx: d.cx, cz: d.cz, level: this.levelOf(d), active: !!st?.squad });
+        out.push({ cx: d.cx, cz: d.cz, level: this.levelOf(d), active: !!st?.squad || !!st?.remoteActive });
       }
     }
     return out;

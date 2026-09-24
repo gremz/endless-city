@@ -58,3 +58,16 @@ export function clearCmd(c: UserCmd): UserCmd {
 export const SELECT_LAST = 100;
 export const SELECT_NEXT = 101;
 export const SELECT_PREV = 102;
+
+export function copyCmd(c: UserCmd, out: UserCmd = makeCmd()): UserCmd {
+  out.yaw = c.yaw;
+  out.pitch = c.pitch;
+  out.forward = c.forward;
+  out.side = c.side;
+  out.buttons = c.buttons;
+  out.pressed = c.pressed;
+  out.attackYaw = c.attackYaw;
+  out.attackPitch = c.attackPitch;
+  out.weaponSelect = c.weaponSelect;
+  return out;
+}

@@ -158,12 +158,12 @@ describe('inventory drops', () => {
     p.alive = false;
     pickups.onHit(sim, killInfo(bot, p), true);
     expect(pickups.items.filter((i) => i.stash)).toHaveLength(4);
-    expect(pickups.stashPos).not.toBeNull();
+    expect(pickups.stashPos(sim.player.id)).not.toBeNull();
     expect(p.medkits).toBe(0);
     run(sim, DROP_LIFETIME + 5);
     expect(pickups.items.filter((i) => i.stash)).toHaveLength(4);
 
-    sim.respawnPlayer(40, 40);
+    sim.respawnPlayer(sim.player, 40, 40);
     p.alive = false;
     pickups.onHit(sim, killInfo(bot, p), true);
     const stash = pickups.items.filter((i) => i.stash);
@@ -186,7 +186,7 @@ describe('inventory drops', () => {
       ['smokegrenade', 1],
     ]);
     expect(grenadeTotal(p.inv)).toBe(0);
-    sim.respawnPlayer(5, 5);
+    sim.respawnPlayer(sim.player, 5, 5);
     // Already carrying one flash: only one more fits, the other stays on the ground.
     addGrenades(p.inv, 'flashbang', 1);
     for (const it of nades) {
@@ -229,7 +229,7 @@ describe('inventory drops', () => {
     const { sim, pickups } = setup();
     pickups.drop(6, 0, 5, { kind: 'weapon', weapon: 'deagle', clip: 5, reserve: 10 });
     run(sim, 0.1);
-    expect(pickups.swapCandidate?.item).toMatchObject({ weapon: 'deagle' });
+    expect(pickups.swapCandidate(sim.player.id)?.item).toMatchObject({ weapon: 'deagle' });
     expect(sim.player.inv.secondary!.def.id).toBe('glock');
     press(sim, Buttons.USE);
     expect(sim.player.inv.secondary).toMatchObject({ clip: 5, reserve: 10 });

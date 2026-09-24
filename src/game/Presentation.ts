@@ -38,6 +38,8 @@ export class Presentation {
   pickups: readonly Pickup[] = [];
   /** Bots with a lit flashlight (set by the game at night). */
   torches: ReadonlySet<number> = new Set();
+  /** Actor id of the player this screen belongs to. */
+  localId = -1;
   private torchLevel = 0;
   readonly viewmodel: Viewmodel;
   readonly tracers = new Tracers();
@@ -83,7 +85,7 @@ export class Presentation {
   }
 
   handleEvents(sim: Simulation): void {
-    const player = sim.player;
+    const player = sim.getActor(this.localId) ?? sim.player;
     for (const e of sim.events.drain()) {
       switch (e.type) {
         case 'shot': {
@@ -165,7 +167,7 @@ export class Presentation {
           break;
         }
         case 'message':
-          this.hud.message(e.text);
+          if (e.actorId < 0 || e.actorId === player.id) this.hud.message(e.text);
           break;
         case 'pickup':
           if (e.actorId !== player.id) break;
@@ -185,7 +187,7 @@ export class Presentation {
   }
 
   update(sim: Simulation, alpha: number, frameDt: number): void {
-    const p = sim.player;
+    const p = sim.getActor(this.localId) ?? sim.player;
     const simTime = sim.time + alpha * sim.dt;
     this.bots.update(sim.actors, p.id, alpha, sim.time, frameDt, this.torches, this.torchLevel);
     this.pickupRenderer.update(this.pickups, simTime, frameDt);

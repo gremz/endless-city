@@ -43,8 +43,12 @@ export interface Actor {
   flashStart: number;
   flashUntil: number;
   flashPeak: number;
-  /** Flashlight switched on (players; makes you easier to spot at night). */
+  /** Flashlight switched on (players: easier to spot at night; bots: out hunting after dark). */
   flashlight: boolean;
+  /** Money (players only). */
+  money: number;
+  /** Bot in a firefight (shows on radars, blocks buying nearby). */
+  engaging: boolean;
 }
 
 export function makeActor(id: number, name: string, team: TeamId, x: number, y: number, z: number): Actor {
@@ -78,6 +82,8 @@ export function makeActor(id: number, name: string, team: TeamId, x: number, y: 
     flashUntil: -10,
     flashPeak: 0,
     flashlight: false,
+    money: 0,
+    engaging: false,
   };
 }
 

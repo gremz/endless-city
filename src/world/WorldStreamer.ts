@@ -55,15 +55,16 @@ export interface StreamerListener {
 }
 
 /**
- * Keeps chunks loaded around the player: everything within LOAD_RADIUS is loaded and visible,
- * chunks out to UNLOAD_RADIUS stay resident (collision + hidden meshes), beyond that unload.
+ * Keeps chunks loaded around the players: everything within LOAD_RADIUS of any of them is loaded
+ * and visible, chunks out to UNLOAD_RADIUS stay resident (collision + hidden meshes), beyond that
+ * unload.
  */
 export class WorldStreamer {
   readonly resident = new Map<number, ResidentChunk>();
   private requested = new Set<number>();
   private listeners: StreamerListener[] = [];
-  private centerCx = 0;
-  private centerCz = 0;
+  /** Chunk coordinates of the players the world is kept around. */
+  private centers: [number, number][] = [[0, 0]];
   /** Stats for the debug overlay. */
   lastGenMs = 0;
   maxGenMs = 0;
@@ -98,31 +99,48 @@ export class WorldStreamer {
 
   /** Request missing chunks around (x, z), nearest first, biased towards the view direction. */
   update(x: number, z: number, viewYaw = 0): void {
-    const pcx = worldToChunk(x);
-    const pcz = worldToChunk(z);
-    this.centerCx = pcx;
-    this.centerCz = pcz;
+    this.updateAround([{ x, z }], viewYaw);
+  }
+
+  /**
+   * Request missing chunks around several positions (players). The first one gets priority
+   * and the view-direction bias.
+   */
+  updateAround(points: readonly { x: number; z: number }[], viewYaw = 0): void {
+    if (!points.length) return;
+    this.centers = points.map((p) => [worldToChunk(p.x), worldToChunk(p.z)]);
     const fx = -Math.sin(viewYaw);
     const fz = -Math.cos(viewYaw);
     const wanted: [number, number, number][] = [];
-    for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
-      for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
-        const cx = pcx + dx;
-        const cz = pcz + dz;
-        const key = chunkKey(cx, cz);
-        if (this.resident.has(key) || this.requested.has(key)) continue;
-        const d = Math.max(Math.abs(dx), Math.abs(dz));
-        const len = Math.hypot(dx, dz) || 1;
-        const facing = (dx * fx + dz * fz) / len;
-        wanted.push([cx, cz, d * 2 - facing]);
+    const seen = new Set<number>();
+    this.centers.forEach(([pcx, pcz], ci) => {
+      for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
+        for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
+          const cx = pcx + dx;
+          const cz = pcz + dz;
+          const key = chunkKey(cx, cz);
+          if (this.resident.has(key) || this.requested.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          const d = Math.max(Math.abs(dx), Math.abs(dz));
+          const len = Math.hypot(dx, dz) || 1;
+          const facing = ci === 0 ? (dx * fx + dz * fz) / len : 0;
+          wanted.push([cx, cz, d * 2 - facing + ci * 0.5]);
+        }
       }
-    }
+    });
     wanted.sort((a, b) => a[2] - b[2]);
     for (const [cx, cz] of wanted) {
       if (this.source.inFlight >= this.source.maxInFlight) break;
       this.requested.add(chunkKey(cx, cz));
       this.source.request(cx, cz);
     }
+  }
+
+  /** Chebyshev distance from a chunk to the nearest centre. */
+  private centerDist(cx: number, cz: number): number {
+    let best = Infinity;
+    for (const [pcx, pcz] of this.centers) best = Math.min(best, chunkDist(cx, cz, pcx, pcz));
+    return best;
   }
 
   /**
@@ -134,7 +152,7 @@ export class WorldStreamer {
     const ready = this.source.drain(maxApply);
     for (const data of ready) {
       this.requested.delete(data.key);
-      const d = chunkDist(data.cx, data.cz, this.centerCx, this.centerCz);
+      const d = this.centerDist(data.cx, data.cz);
       if (d > UNLOAD_RADIUS || this.resident.has(data.key)) continue;
       this.world.addChunk(data.key, brushesFromPacked(data.brushes, data.cx, data.cz, data.key));
       const visible = d <= LOAD_RADIUS;
@@ -146,7 +164,7 @@ export class WorldStreamer {
 
     let unloaded = 0;
     for (const [key, r] of this.resident) {
-      const d = chunkDist(r.data.cx, r.data.cz, this.centerCx, this.centerCz);
+      const d = this.centerDist(r.data.cx, r.data.cz);
       if (d > UNLOAD_RADIUS) {
         if (unloaded >= maxUnload) continue;
         this.world.removeChunk(key);

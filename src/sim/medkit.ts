@@ -51,11 +51,11 @@ export function updateHeal(a: Actor, cmd: UserCmd, sim: Simulation): void {
   }
   if (!(cmd.pressed & Buttons.HEAL)) return;
   if (a.medkits <= 0) {
-    sim.events.push({ type: 'message', text: 'No medkits' });
+    sim.events.push({ type: 'message', actorId: a.id, text: 'No medkits' });
     return;
   }
   if (a.health >= 100) {
-    sim.events.push({ type: 'message', text: 'Health full' });
+    sim.events.push({ type: 'message', actorId: a.id, text: 'Health full' });
     return;
   }
   const w = a.wpn;

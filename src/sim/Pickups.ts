@@ -40,8 +40,10 @@ export interface Pickup {
   chunkKey: number;
   /** Index into the chunk's pickup spots, or -1 for something dropped. */
   slot: number;
-  /** Part of the player's death stash: never expires, never evicted. */
+  /** Part of a player's death stash: never expires, never evicted. */
   stash: boolean;
+  /** Actor id of the player whose stash this is (-1 for ordinary items). */
+  owner: number;
   /** Sim time it vanishes (Infinity for city packs and the stash). */
   expiresAt: number;
   /** Sim time it appeared (for the pop-in animation). */
@@ -74,14 +76,14 @@ const DROP_MAXS = vec3(0.15, 0.3, 0.15);
  */
 export class PickupManager implements SimSystem, StreamerListener {
   readonly items: Pickup[] = [];
-  /** Nearest gun the player could swap to with E this tick. */
-  swapCandidate: Pickup | null = null;
+  /** Per player: nearest gun they could swap to with E this tick. */
+  private swapCandidates = new Map<number, Pickup>();
   /** City spots per resident chunk. */
   private spots = new Map<number, Float32Array>();
   /** "chunkKey:slot" → sim time the taken pack returns. */
   private taken = new Map<string, number>();
   private nextId = 1;
-  private fullMsgAt = -100;
+  private fullMsgAt = new Map<number, number>();
   private tr = makeTrace();
 
   constructor(private sim: Simulation) {}
@@ -105,39 +107,69 @@ export class PickupManager implements SimSystem, StreamerListener {
 
   onChunkVisibility(): void {}
 
-  /** Where the death stash lies, if there is one. */
-  get stashPos(): Vec3 | null {
-    return this.items.find((p) => p.stash)?.pos ?? null;
+  /** Where a player's death stash lies, if there is one. */
+  stashPos(owner: number): Vec3 | null {
+    return this.items.find((p) => p.stash && p.owner === owner)?.pos ?? null;
+  }
+
+  /**
+   * Mirror the host's items (online clients, where nothing is simulated here). `swapId` is the
+   * pickup the host says `actorId` could swap to, or -1.
+   */
+  replicate(items: readonly Pickup[], actorId: number, swapId: number): void {
+    this.items.length = 0;
+    this.items.push(...items);
+    this.swapCandidates.clear();
+    const swap = items.find((p) => p.id === swapId);
+    if (swap) this.swapCandidates.set(actorId, swap);
+  }
+
+  /** Point the local swap prompt at a pickup (online clients). */
+  setSwapCandidate(actorId: number, swapId: number): void {
+    const swap = this.items.find((p) => p.id === swapId);
+    if (swap) this.swapCandidates.set(actorId, swap);
+    else this.swapCandidates.delete(actorId);
+  }
+
+  /** Remove a player's death stash (they left the game). */
+  clearStash(owner: number): void {
+    for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].owner === owner) this.items.splice(i, 1);
+  }
+
+  /** The gun a player would take with E right now. */
+  swapCandidate(actorId: number): Pickup | null {
+    return this.swapCandidates.get(actorId) ?? null;
   }
 
   private addSpot(key: number, slot: number): void {
     const s = this.spots.get(key);
     if (!s) return;
     const pos = vec3(s[slot * 3], s[slot * 3 + 1], s[slot * 3 + 2]);
-    this.add({ kind: 'medkit' }, pos, (key * 7 + slot) % 6.28, key, slot, false, Infinity);
+    this.add({ kind: 'medkit' }, pos, (key * 7 + slot) % 6.28, key, slot, -1, Infinity);
   }
 
-  private add(item: PickupItem, pos: Vec3, yaw: number, key: number, slot: number, stash: boolean, expiresAt: number): Pickup | null {
+  private add(item: PickupItem, pos: Vec3, yaw: number, key: number, slot: number, owner: number, expiresAt: number): Pickup | null {
     if (this.items.length >= MAX_ITEMS) {
       // Too crowded: the oldest ordinary drop makes room.
       const i = this.items.findIndex((p) => p.slot < 0 && !p.stash);
       if (i < 0) return null;
       this.items.splice(i, 1);
     }
-    const p: Pickup = { id: this.nextId++, item, pos, yaw, chunkKey: key, slot, stash, expiresAt, spawnedAt: this.sim.time };
+    const stash = owner >= 0;
+    const p: Pickup = { id: this.nextId++, item, pos, yaw, chunkKey: key, slot, stash, owner, expiresAt, spawnedAt: this.sim.time };
     this.items.push(p);
     return p;
   }
 
-  /** Drop an item at a world position. */
-  drop(x: number, y: number, z: number, item: PickupItem = { kind: 'medkit' }, yaw = 0, stash = false): Pickup | null {
+  /** Drop an item at a world position; with an `owner` it becomes part of their death stash. */
+  drop(x: number, y: number, z: number, item: PickupItem = { kind: 'medkit' }, yaw = 0, owner = -1): Pickup | null {
     const key = chunkKey(worldToChunk(x), worldToChunk(z));
-    return this.add(item, vec3(x, y + 0.02, z), yaw, key, -1, stash, stash ? Infinity : this.sim.time + DROP_LIFETIME);
+    return this.add(item, vec3(x, y + 0.02, z), yaw, key, -1, owner, owner >= 0 ? Infinity : this.sim.time + DROP_LIFETIME);
   }
 
   /**
-   * Scatter an actor's guns (and, for the player, carried medkits) around their feet, then
-   * leave them with just the knife. The player's drop becomes the death stash.
+   * Scatter an actor's guns (and, for a player, carried medkits) around their feet, then
+   * leave them with just the knife. A player's drop becomes their death stash.
    */
   dropInventory(a: Actor, stash: boolean): void {
     const sim = this.sim;
@@ -151,7 +183,7 @@ export class PickupManager implements SimSystem, StreamerListener {
       const ang = base + (i / items.length) * Math.PI * 2 + (r() - 0.5) * 0.6;
       const dist = 0.3 + r() * 0.5;
       const [x, y, z] = this.groundSpot(a.move.pos, Math.sin(ang) * dist, Math.cos(ang) * dist);
-      this.drop(x, y, z, item, r() * Math.PI * 2, stash);
+      this.drop(x, y, z, item, r() * Math.PI * 2, stash ? a.id : -1);
     });
     a.inv = makeInventory(null);
     a.medkits = 0;
@@ -184,11 +216,16 @@ export class PickupManager implements SimSystem, StreamerListener {
     for (let i = this.items.length - 1; i >= 0; i--) {
       if (this.items[i].expiresAt <= t) this.items.splice(i, 1);
     }
-    this.swapCandidate = null;
-    const p = sim.player;
-    if (!p.alive) return;
+    this.swapCandidates.clear();
+    for (const p of sim.players) if (p.alive) this.touch(p, sim);
+  }
+
+  /** Walk-over pickups and the E swap for one player. */
+  private touch(p: Actor, sim: Simulation): void {
+    const t = sim.time;
     const pos = p.move.pos;
     let swapD = SWAP_REACH;
+    let swap: Pickup | null = null;
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
       if (Math.abs(it.pos.y - pos.y) > REACH_Y) continue;
@@ -199,7 +236,7 @@ export class PickupManager implements SimSystem, StreamerListener {
         if (cur && cur.def.id !== def.id) {
           if (d < swapD) {
             swapD = d;
-            this.swapCandidate = it;
+            swap = it;
           }
           continue;
         }
@@ -210,7 +247,7 @@ export class PickupManager implements SimSystem, StreamerListener {
           this.remove(i, t);
           sim.events.push({ type: 'pickup', actorId: p.id, item: def.id, pos: it.pos, amount: 1 });
         } else {
-          this.takeAmmo(i, cur, sim);
+          this.takeAmmo(i, p, cur, sim);
         }
         continue;
       }
@@ -224,9 +261,9 @@ export class PickupManager implements SimSystem, StreamerListener {
         continue;
       }
       if (p.medkits >= MEDKIT_MAX) {
-        if (t - this.fullMsgAt > 3) {
-          this.fullMsgAt = t;
-          sim.events.push({ type: 'message', text: `Medkits full (${MEDKIT_MAX})` });
+        if (t - (this.fullMsgAt.get(p.id) ?? -100) > 3) {
+          this.fullMsgAt.set(p.id, t);
+          sim.events.push({ type: 'message', actorId: p.id, text: `Medkits full (${MEDKIT_MAX})` });
         }
         continue;
       }
@@ -234,11 +271,13 @@ export class PickupManager implements SimSystem, StreamerListener {
       this.remove(i, t);
       sim.events.push({ type: 'pickup', actorId: p.id, item: 'medkit', pos: it.pos, amount: 1 });
     }
-    if (this.swapCandidate && sim.cmd.pressed & Buttons.USE) this.swap(this.swapCandidate, sim);
+    if (!swap) return;
+    if (sim.cmdFor(p).pressed & Buttons.USE) this.swap(swap, p, sim);
+    else this.swapCandidates.set(p.id, swap);
   }
 
   /** Same gun as the one carried: move its rounds into the reserve. */
-  private takeAmmo(i: number, cur: WeaponItem, sim: Simulation): void {
+  private takeAmmo(i: number, p: Actor, cur: WeaponItem, sim: Simulation): void {
     const it = this.items[i];
     if (it.item.kind !== 'weapon') return;
     const room = cur.def.reserve - cur.reserve;
@@ -251,13 +290,12 @@ export class PickupManager implements SimSystem, StreamerListener {
     it.item.clip -= fromClip;
     cur.reserve += amount;
     if (it.item.reserve + it.item.clip <= 0) this.remove(i, sim.time);
-    sim.events.push({ type: 'pickup', actorId: sim.player.id, item: 'ammo', pos: it.pos, amount });
+    sim.events.push({ type: 'pickup', actorId: p.id, item: 'ammo', pos: it.pos, amount });
   }
 
   /** E on a gun: drop the one in that slot at your feet, take this one and draw it. */
-  private swap(it: Pickup, sim: Simulation): void {
+  private swap(it: Pickup, p: Actor, sim: Simulation): void {
     if (it.item.kind !== 'weapon') return;
-    const p = sim.player;
     const def = WEAPONS[it.item.weapon];
     const slot = def.slot as 'primary' | 'secondary';
     const old = p.inv[slot];
@@ -265,7 +303,6 @@ export class PickupManager implements SimSystem, StreamerListener {
     this.remove(this.items.indexOf(it), sim.time);
     if (old) this.drop(p.move.pos.x, p.move.pos.y, p.move.pos.z, weaponPickup(old), p.yaw + Math.PI / 2);
     equipSlot(p, slot, sim);
-    this.swapCandidate = null;
     sim.events.push({ type: 'pickup', actorId: p.id, item: def.id, pos: it.pos, amount: 1 });
   }
 
@@ -278,15 +315,15 @@ export class PickupManager implements SimSystem, StreamerListener {
   onHit(sim: Simulation, info: HitInfo, killed: boolean): void {
     const v = info.victim;
     if (!killed || v.dummy) return;
-    if (v === sim.player) {
+    if (v.team === Team.Player) {
       // Dying again loses the stash you never went back for.
-      for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].stash) this.items.splice(i, 1);
+      for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].owner === v.id) this.items.splice(i, 1);
       this.dropInventory(v, true);
       return;
     }
     if (v.team !== Team.Bots) return;
     this.dropInventory(v, false);
-    if (info.attacker === sim.player && dropRoll(sim.params.seed, v.id, sim.tick) < DROP_CHANCE) {
+    if (info.attacker.team === Team.Player && dropRoll(sim.params.seed, v.id, sim.tick) < DROP_CHANCE) {
       const [x, y, z] = this.groundSpot(v.move.pos, 0.2, -0.3);
       this.drop(x, y, z);
     }
@@ -307,13 +344,17 @@ export class PickupManager implements SimSystem, StreamerListener {
     };
   }
 
-  /** Bring back saved drops and pack timers (call with the sim clock already restored). */
-  restore(s: PickupSave): void {
+  /**
+   * Bring back saved drops and pack timers (call with the sim clock already restored). The
+   * saved death stash goes to `stashOwner`.
+   */
+  restore(s: PickupSave, stashOwner: number): void {
     this.taken = new Map(s.taken);
     for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].slot < 0) this.items.splice(i, 1);
     for (const d of s.drops) {
       const [x, y, z] = d.pos;
-      this.add({ ...d.item }, vec3(x, y, z), d.yaw, chunkKey(worldToChunk(x), worldToChunk(z)), -1, d.stash, d.expiresAt ?? Infinity);
+      const owner = d.stash ? stashOwner : -1;
+      this.add({ ...d.item }, vec3(x, y, z), d.yaw, chunkKey(worldToChunk(x), worldToChunk(z)), -1, owner, d.expiresAt ?? Infinity);
     }
   }
 }

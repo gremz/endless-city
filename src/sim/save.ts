@@ -57,15 +57,15 @@ export interface SaveData {
 
 const savedWeapon = (w: WeaponItem | null): SavedWeapon | null => (w ? { id: w.def.id, clip: w.clip, reserve: w.reserve } : null);
 
-/** Snapshot a running city game. The player must be alive. */
+/** Snapshot a running city game from player `p`'s side (solo, or a co-op host). `p` must be alive. */
 export function captureSave(
   sim: Simulation,
+  p: Actor,
   pickups: PickupManager,
   encounters: EncounterManager | null,
   explored: readonly number[],
   now = Date.now(),
 ): SaveData {
-  const p = sim.player;
   const { params } = sim;
   return {
     version: SAVE_VERSION,
@@ -77,7 +77,7 @@ export function captureSave(
     level: params.level,
     time: sim.time,
     tick: sim.tick,
-    money: sim.economy.money,
+    money: p.money,
     cleared: [...sim.cleared],
     player: {
       x: p.move.pos.x,
@@ -100,19 +100,25 @@ export function captureSave(
   };
 }
 
-/** Restore the world state (clock, money, progress, items). Call before any chunk streams in. */
-export function applyWorldSave(save: SaveData, sim: Simulation, pickups: PickupManager, encounters: EncounterManager | null): void {
+/**
+ * Restore the world state (clock, progress, items). Call before any chunk streams in. The saved
+ * death stash goes to the actor with id `owner` (the player the save is loaded for).
+ */
+export function applyWorldSave(save: SaveData, sim: Simulation, pickups: PickupManager, encounters: EncounterManager | null, owner: number): void {
   sim.time = save.time;
   sim.tick = save.tick;
-  sim.economy.money = save.money;
   sim.cleared.clear();
   for (const k of save.cleared) sim.cleared.add(k);
   encounters?.restore(save.encounters);
-  pickups.restore(save.pickups);
+  pickups.restore(save.pickups, owner);
 }
 
-/** Restore the player's vitals and loadout (position is placed by the game once the floor exists). */
-export function applyPlayerSave(s: SavedPlayer, p: Actor): void {
+/**
+ * Restore the player's vitals, loadout and money (position is placed by the game once the floor
+ * exists).
+ */
+export function applyPlayerSave(s: SavedPlayer, p: Actor, money: number): void {
+  p.money = money;
   p.alive = true;
   p.diedAt = -1;
   p.health = s.health;

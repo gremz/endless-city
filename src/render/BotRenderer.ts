@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { lerp } from '../core/math';
 import { bodyScale, STAND_BOXES } from '../ai/hitboxes';
-import type { Actor } from '../sim/Actor';
+import { Team, type Actor } from '../sim/Actor';
 
 const MAX = 48;
 /** Part index → palette index. */
@@ -18,6 +18,8 @@ const LOOKS: Record<string, string[]> = {
   bot: ['#3b3530', '#4a4f3a', '#3f4234', '#5c5140', '#4a4f3a', '#1d1d1d'],
   dummy: ['#c9b48a', '#b89c6a', '#a88d5f', '#8f7a55', '#b89c6a', '#1d1d1d'],
   elite: ['#26282b', '#2b3036', '#25292e', '#383c42', '#2b3036', '#141414'],
+  /** Other players (co-op). */
+  ally: ['#2f3f52', '#35577a', '#2f4a66', '#3a4f63', '#35577a', '#1d1d1d'],
 };
 
 /**
@@ -167,7 +169,7 @@ export class BotRenderer {
     const hipY = 0.8 * Math.max(0.45, legBend);
     const aimPitch = a.alive ? a.pitch : 0;
 
-    const look = a.dummy ? LOOKS.dummy : a.armor > 0 && a.helmet ? LOOKS.elite : LOOKS.bot;
+    const look = a.dummy ? LOOKS.dummy : a.team === Team.Player ? LOOKS.ally : a.armor > 0 && a.helmet ? LOOKS.elite : LOOKS.bot;
     const place = (part: number, x: number, y: number, z: number, rx: number, ry: number, sy = 1) => {
       this.q.setFromEuler(this.e.set(rx, ry, 0, 'YXZ'));
       this.local.compose(this.v.set(x, y, z), this.q, this.s.set(1, sy, 1));

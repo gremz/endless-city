@@ -15,7 +15,8 @@ export class FixedLoop {
   }
 
   advance(frameDt: number, tick: () => void): number {
-    this.acc += Math.min(frameDt, 0.25);
+    // Frame timestamps can run backwards around a long task (e.g. building the game).
+    this.acc += Math.max(0, Math.min(frameDt, 0.25));
     let n = 0;
     while (this.acc >= this.tickDt && n < MAX_TICKS_PER_FRAME) {
       tick();

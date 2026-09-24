@@ -213,29 +213,29 @@ describe('buying grenades', () => {
   function shop() {
     const sim = makeSim();
     sim.time = 100;
-    sim.economy.money = 10000;
+    sim.player.money = 10000;
     return sim;
   }
 
   it('caps each type and the total', () => {
     const sim = shop();
-    expect(priceOf(sim, 'hegrenade')).toBe(300);
-    expect(buy(sim, 'hegrenade', false)).toBe(true);
-    expect(unavailableReason(sim, 'hegrenade')).toBe('Already owned');
-    expect(buy(sim, 'flashbang', false)).toBe(true);
-    expect(buy(sim, 'flashbang', false)).toBe(true);
-    expect(unavailableReason(sim, 'flashbang')).toMatch(/Carrying 2/);
-    expect(buy(sim, 'smokegrenade', false)).toBe(true);
+    expect(priceOf(sim.player, 'hegrenade')).toBe(300);
+    expect(buy(sim, sim.player, 'hegrenade', false)).toBe(true);
+    expect(unavailableReason(sim.player, 'hegrenade')).toBe('Already owned');
+    expect(buy(sim, sim.player, 'flashbang', false)).toBe(true);
+    expect(buy(sim, sim.player, 'flashbang', false)).toBe(true);
+    expect(unavailableReason(sim.player, 'flashbang')).toMatch(/Carrying 2/);
+    expect(buy(sim, sim.player, 'smokegrenade', false)).toBe(true);
     expect(grenadeTotal(sim.player.inv)).toBe(4);
-    expect(unavailableReason(sim, 'molotov')).toMatch(/Grenades full/);
-    expect(buy(sim, 'molotov', false)).toBe(false);
+    expect(unavailableReason(sim.player, 'molotov')).toMatch(/Grenades full/);
+    expect(buy(sim, sim.player, 'molotov', false)).toBe(false);
     // Buying doesn't pull out the grenade.
     expect(sim.player.inv.active).toBe('secondary');
   });
 
   it('are lost on death with the rest of the loadout', () => {
     const sim = shop();
-    buy(sim, 'hegrenade', false);
+    buy(sim, sim.player, 'hegrenade', false);
     sim.resetLoadout(sim.player);
     expect(grenadeTotal(sim.player.inv)).toBe(0);
     expect(sim.player.inv.grenade).toBeNull();

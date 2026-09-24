@@ -376,6 +376,7 @@ function hitscan(a: Actor, def: WeaponDef, start: Vec3, d: Vec3, ctx: WeaponCont
     if (tr.fraction >= 1 || !tr.brush) return hit;
     ctx.events.push({
       type: 'impact',
+      actorId: a.id,
       pos: hit,
       normal: vec3(tr.normal.x, tr.normal.y, tr.normal.z),
       material: tr.brush.material,
@@ -400,6 +401,7 @@ function hitscan(a: Actor, def: WeaponDef, start: Vec3, d: Vec3, ctx: WeaponCont
     const oz = tr.endZ + d.z * (thickness + 0.01);
     ctx.events.push({
       type: 'impact',
+      actorId: a.id,
       pos: vec3(ox, oy, oz),
       normal: vec3(d.x, d.y, d.z),
       material: b.material,
@@ -466,6 +468,7 @@ function knifeAttack(a: Actor, def: WeaponDef, alt: boolean, cmd: UserCmd, ctx: 
   } else if (tr.fraction < 1 && tr.brush) {
     ctx.events.push({
       type: 'impact',
+      actorId: a.id,
       pos: vec3(tr.endX, tr.endY, tr.endZ),
       normal: vec3(tr.normal.x, tr.normal.y, tr.normal.z),
       material: tr.brush.material,

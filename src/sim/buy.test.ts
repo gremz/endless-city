@@ -11,7 +11,7 @@ import { Simulation } from './Simulation';
 function makeSim() {
   const sim = new Simulation(parseParams('', 1), { autoBhop: false }, TICK);
   sim.time = 100;
-  sim.economy.money = 10000;
+  sim.player.money = 10000;
   teleport(sim.player, sim.params.spawnCx * CHUNK + 32, 0, sim.params.spawnCz * CHUNK + 32);
   return sim;
 }
@@ -21,11 +21,11 @@ describe('buying ammo', () => {
     const sim = makeSim();
     sim.player.inv = makeInventory('glock', 'ak47');
     const ak = sim.player.inv.primary!;
-    expect(unavailableReason(sim, 'ammo_primary')).toBe('Ammo full');
+    expect(unavailableReason(sim.player, 'ammo_primary')).toBe('Ammo full');
     ak.reserve -= 1;
-    expect(priceOf(sim, 'ammo_primary')).toBe(80);
+    expect(priceOf(sim.player, 'ammo_primary')).toBe(80);
     ak.reserve = ak.def.reserve - ak.def.magSize - 1;
-    expect(priceOf(sim, 'ammo_primary')).toBe(160);
+    expect(priceOf(sim.player, 'ammo_primary')).toBe(160);
   });
 
   it('refills the reserve, charges money and keeps the active weapon', () => {
@@ -34,29 +34,29 @@ describe('buying ammo', () => {
     const ak = sim.player.inv.primary!;
     ak.reserve = 0;
     ak.clip = 5;
-    const price = priceOf(sim, 'ammo_primary');
+    const price = priceOf(sim.player, 'ammo_primary');
     const active = sim.player.inv.active;
-    expect(buy(sim, 'ammo_primary', false)).toBe(true);
+    expect(buy(sim, sim.player, 'ammo_primary', false)).toBe(true);
     expect(ak.reserve).toBe(ak.def.reserve);
     expect(ak.clip).toBe(5);
-    expect(sim.economy.money).toBe(10000 - price);
+    expect(sim.player.money).toBe(10000 - price);
     expect(sim.player.inv.active).toBe(active);
-    expect(buy(sim, 'ammo_primary', false)).toBe(false);
+    expect(buy(sim, sim.player, 'ammo_primary', false)).toBe(false);
   });
 
   it('needs a gun in the slot', () => {
     const sim = makeSim();
     sim.player.inv = makeInventory('glock');
-    expect(unavailableReason(sim, 'ammo_primary')).toBe('No primary weapon');
-    expect(buy(sim, 'ammo_primary', false)).toBe(false);
+    expect(unavailableReason(sim.player, 'ammo_primary')).toBe('No primary weapon');
+    expect(buy(sim, sim.player, 'ammo_primary', false)).toBe(false);
   });
 
   it('only works in a buy zone', () => {
     const sim = makeSim();
     sim.player.inv.secondary!.reserve = 0;
     teleport(sim.player, (sim.params.spawnCx + 3) * CHUNK + 32, 0, sim.params.spawnCz * CHUNK + 32);
-    expect(buy(sim, 'ammo_secondary', false)).toBe(false);
+    expect(buy(sim, sim.player, 'ammo_secondary', false)).toBe(false);
     sim.cleared.add(chunkKey(sim.params.spawnCx + 3, sim.params.spawnCz));
-    expect(buy(sim, 'ammo_secondary', false)).toBe(true);
+    expect(buy(sim, sim.player, 'ammo_secondary', false)).toBe(true);
   });
 });

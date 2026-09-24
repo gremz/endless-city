@@ -9,12 +9,14 @@ import { Simulation } from '../sim/Simulation';
 import { addGrenades, makeInventory } from '../weapons/Inventory';
 import { brushesFromPacked } from '../world/chunkBrushes';
 import { chunkKey } from '../world/chunkMath';
+import type { WorldStreamer } from '../world/WorldStreamer';
+import { WEAPONS } from '../weapons/weaponDefs';
 import { BrushWriter } from '../world/gen/BrushWriter';
 import { Material, type ChunkData } from '../world/gen/ChunkData';
 import { bakeNav } from '../world/gen/navBake';
 import { Bot, TargetHistory, type BotContext, type Squad } from './Bot';
 import { skillFor } from './difficulty';
-import { hearingRadius } from './EncounterManager';
+import { EncounterManager, hearingRadius } from './EncounterManager';
 import { AStar, smooth } from './nav/astar';
 import { NavGrid } from './nav/NavGrid';
 
@@ -41,7 +43,7 @@ function flatWorld(boxes: [number, number, number, number, number, number][] = [
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
     pickups: new Float32Array(0),
-    hasEncounter: false,
+    hasEncounter: false as boolean,
     genMs: 0,
   } satisfies ChunkData;
   const sim = new Simulation(parseParams('', 1), { autoBhop: false }, TICK);
@@ -144,12 +146,13 @@ function makeBot(sim: Simulation, x: number, z: number, yaw: number, level = 5) 
 }
 
 function runBots(sim: Simulation, bots: Bot[], seconds: number) {
-  const ctx: BotContext = { sim, astar: new AStar(sim.nav), history: new TargetHistory(), pathBudget: 2 };
+  const histories = new Map(sim.players.map((p) => [p.id, new TargetHistory()]));
+  const ctx: BotContext = { sim, astar: new AStar(sim.nav), histories, pathBudget: 2 };
   const idle = makeCmd();
   for (let i = 0; i < seconds * 64; i++) {
     ctx.pathBudget = 2;
     sim.step(idle);
-    ctx.history.record(sim.player, sim.tick);
+    for (const p of sim.players) histories.get(p.id)!.record(p, sim.tick);
     for (const b of bots) b.update(ctx);
   }
 }
@@ -284,5 +287,96 @@ describe('bots at night and in the rain', () => {
     expect(hearingRadius('footstep', 18, 1)).toBe(9);
     expect(hearingRadius('footstep', 18, 0)).toBe(18);
     expect(hearingRadius('gunshot', 70, 1)).toBe(70);
+  });
+});
+
+describe('co-op', () => {
+  it('bots turn on another player when their target dies', () => {
+    const { sim } = flatWorld();
+    const p1 = sim.player;
+    const p2 = sim.addPlayer('Two');
+    teleport(p1, 32, 0.02, 20);
+    teleport(p2, 27, 0.02, 22);
+    const bot = makeBot(sim, 32, 38, 0);
+    runBots(sim, [bot], 1);
+    const first = bot.target!;
+    expect(first).not.toBeNull();
+    const other = first === p1 ? p2 : p1;
+    other.health = 100000;
+    const otherHealth = other.health;
+    first.alive = false;
+    first.health = 0;
+    runBots(sim, [bot], 3);
+    expect(bot.target).toBe(other);
+    expect(bot.state).not.toBe('idle');
+    expect(other.health).toBeLessThan(otherHealth);
+  });
+
+  it('an encounter wakes up for any player, pays the shooter per kill and everyone for the clear', () => {
+    // Players south of a wall, the encounter's spawn slots north of it.
+    const { sim, data } = flatWorld([[0, 0, 20, 64, 4, 20.5]]);
+    data.hasEncounter = true;
+    data.spawns = new Float32Array([20, 0.02, 45, 30, 0.02, 45, 40, 0.02, 45, 50, 0.02, 45]);
+    const streamer = {
+      resident: new Map([[data.key, { data, visible: true }]]),
+      getChunk: () => data,
+    } as unknown as WorldStreamer;
+    const enc = new EncounterManager(sim, streamer);
+    sim.systems.push(enc);
+    const p1 = sim.player;
+    const p2 = sim.addPlayer('Two');
+    // The first player is far away; the second one is close enough to wake the squad.
+    teleport(p1, 500, 0.02, 500);
+    p1.alive = false;
+    teleport(p2, 32, 0.02, 5);
+    const idle = makeCmd();
+    for (let i = 0; i < 32; i++) sim.step(idle);
+    expect(enc.aliveCount).toBeGreaterThan(0);
+
+    const start1 = p1.money;
+    const start2 = p2.money;
+    const def = WEAPONS.ak47;
+    let kills = 0;
+    for (const b of [...enc.bots]) {
+      b.actor.health = 1;
+      b.actor.armor = 0;
+      sim.onHit({ attacker: p2, victim: b.actor, def, group: 0, distance: 5, damageScale: 1, penetrated: false, pos: b.actor.move.pos });
+      kills++;
+    }
+    expect(enc.isCleared(data.key)).toBe(true);
+    const bonus = 500 + 200 * data.level;
+    expect(p1.money - start1).toBe(bonus);
+    expect(p2.money - start2).toBe(Math.min(bonus + kills * def.killReward, 16000 - start2));
+  });
+
+  it('squads only forget and heal once every player is down', () => {
+    const { sim, data } = flatWorld([[0, 0, 20, 64, 4, 20.5]]);
+    data.hasEncounter = true;
+    data.spawns = new Float32Array([20, 0.02, 45, 30, 0.02, 45, 40, 0.02, 45]);
+    const streamer = { resident: new Map([[data.key, { data, visible: true }]]), getChunk: () => data } as unknown as WorldStreamer;
+    const enc = new EncounterManager(sim, streamer);
+    sim.systems.push(enc);
+    const p1 = sim.player;
+    const p2 = sim.addPlayer('Two');
+    teleport(p1, 30, 0.02, 5);
+    teleport(p2, 34, 0.02, 5);
+    const idle = makeCmd();
+    for (let i = 0; i < 32; i++) sim.step(idle);
+    const bot = enc.bots[0];
+    bot.actor.health = 40;
+    bot.awareness = 1;
+    bot.target = p1;
+    const kill = (victim: typeof p1) => {
+      victim.health = 1;
+      victim.armor = 0;
+      sim.onHit({ attacker: bot.actor, victim, def: WEAPONS.ak47, group: 0, distance: 5, damageScale: 1, penetrated: false, pos: victim.move.pos });
+    };
+    kill(p1);
+    expect(bot.target).toBeNull();
+    expect(bot.awareness).toBe(1);
+    expect(bot.actor.health).toBe(40);
+    kill(p2);
+    expect(bot.awareness).toBe(0);
+    expect(bot.actor.health).toBe(100);
   });
 });

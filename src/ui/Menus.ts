@@ -7,6 +7,30 @@ export interface MenuCallbacks {
   onLoad(): void;
   /** Save now (pause menu). */
   onSave(): void;
+  /** Host a co-op game in this city, or continuing the save. */
+  onHost?(name: string, fromSave: boolean): void;
+  /** Join a friend's co-op game by room code. */
+  onJoin?(code: string, name: string): void;
+  /** Leave the co-op game. */
+  onLeave?(): void;
+}
+
+const NAME_KEY = 'endless-city.name';
+
+export function savedName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function storeName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    /* storage blocked */
+  }
 }
 
 const CONTROLS: [string, string][] = [
@@ -23,6 +47,7 @@ const CONTROLS: [string, string][] = [
   ['M', 'City map'],
   ['F', 'Inspect'],
   ['Esc', 'Pause'],
+  ['Enter / Tab', 'Chat / scores (co-op)'],
   ['F3', 'Debug overlay'],
 ];
 
@@ -41,6 +66,19 @@ export class MainMenu {
   private mode: 'title' | 'paused' = 'title';
   private hasSave = false;
   private canSave = false;
+  private coop: HTMLDivElement;
+  private nameInput: HTMLInputElement;
+  private codeInput: HTMLInputElement;
+  private hostBtn: HTMLButtonElement;
+  private hostSaveBtn: HTMLButtonElement;
+  private joinBtn: HTMLButtonElement;
+  private canLoad = true;
+  private room: HTMLDivElement;
+  private roomCode: HTMLSpanElement;
+  private roomPlayers: HTMLDivElement;
+  private leaveBtn: HTMLButtonElement;
+  private coopEnabled = false;
+  private online = false;
 
   constructor(parent: HTMLElement, cb: MenuCallbacks) {
     this.heading = el('h1.menu-title', { text: 'ENDLESS CITY' });
@@ -54,6 +92,43 @@ export class MainMenu {
     this.saveLine = el('div.menu-save');
     this.status = el('div.menu-status');
     this.seedLine = el('div.menu-seed');
+    this.nameInput = el('input.menu-input', { placeholder: 'Your name', maxlength: '20', value: savedName() });
+    this.codeInput = el('input.menu-input.code', { placeholder: 'Room code', maxlength: '80' });
+    this.hostBtn = el('button.btn', { text: 'Host co-op game' });
+    this.hostSaveBtn = el('button.btn', { text: 'Host from save' });
+    this.joinBtn = el('button.btn', { text: 'Join' });
+    const name = () => {
+      const n = this.nameInput.value.trim() || 'Player';
+      storeName(n);
+      return n;
+    };
+    this.hostBtn.addEventListener('click', () => cb.onHost?.(name(), false));
+    this.hostSaveBtn.addEventListener('click', () => cb.onHost?.(name(), true));
+    const join = () => cb.onJoin?.(this.codeInput.value, name());
+    this.joinBtn.addEventListener('click', join);
+    this.codeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') join();
+    });
+    this.coop = el('div.menu-coop', {}, [
+      el('div.menu-coop-title', { text: 'Co-op · up to 4 players' }),
+      el('div.menu-coop-row', {}, [this.nameInput, this.hostBtn]),
+      el('div.menu-coop-row', {}, [this.codeInput, this.joinBtn]),
+      el('div.menu-coop-row.right', {}, [this.hostSaveBtn]),
+    ]);
+    this.roomCode = el('span.room-code');
+    const copyBtn = el('button.btn.small', { text: 'Copy invite link' });
+    copyBtn.addEventListener('click', () => {
+      const code = this.roomCode.textContent ?? '';
+      const link = `${location.origin}${location.pathname}?join=${code}`;
+      navigator.clipboard?.writeText(link).then(
+        () => this.setStatus('Invite link copied.'),
+        () => this.setStatus(link),
+      );
+    });
+    this.roomPlayers = el('div.room-players');
+    this.room = el('div.menu-room', {}, [el('div', {}, [el('span', { text: 'Room code ' }), this.roomCode, copyBtn]), this.roomPlayers]);
+    this.leaveBtn = el('button.btn', { text: 'Leave game' });
+    this.leaveBtn.addEventListener('click', () => cb.onLeave?.());
     const controls = el(
       'div.controls',
       {},
@@ -70,8 +145,10 @@ export class MainMenu {
     const panel = el('div.menu-panel', {}, [
       this.heading,
       sub,
-      el('div.menu-buttons', {}, [this.playBtn, this.fsBtn, this.continueBtn, this.saveBtn, this.loadBtn, settingsBtn]),
+      el('div.menu-buttons', {}, [this.playBtn, this.fsBtn, this.continueBtn, this.saveBtn, this.loadBtn, settingsBtn, this.leaveBtn]),
       this.saveLine,
+      this.room,
+      this.coop,
       this.status,
       controls,
       this.seedLine,
@@ -90,10 +167,11 @@ export class MainMenu {
     this.updateSaveButtons();
   }
 
-  /** Describe the save slot (null = empty) and whether this game can be saved at all. */
-  setSave(summary: string | null, canSave: boolean): void {
+  /** Describe the save slot (null = empty), whether this game can be saved, and loaded from here. */
+  setSave(summary: string | null, canSave: boolean, canLoad = true): void {
     this.hasSave = summary !== null;
     this.canSave = canSave;
+    this.canLoad = canLoad;
     this.saveLine.textContent = summary ? `Save: ${summary}` : '';
     this.updateSaveButtons();
   }
@@ -101,7 +179,38 @@ export class MainMenu {
   private updateSaveButtons(): void {
     this.continueBtn.hidden = this.mode !== 'title' || !this.hasSave;
     this.saveBtn.hidden = this.mode !== 'paused' || !this.canSave;
-    this.loadBtn.hidden = this.mode !== 'paused' || !this.hasSave;
+    this.loadBtn.hidden = this.mode !== 'paused' || !this.hasSave || !this.canLoad;
+    this.coop.hidden = this.mode !== 'title' || !this.coopEnabled || this.online;
+    this.hostSaveBtn.hidden = !this.hasSave;
+    this.leaveBtn.hidden = !this.online;
+    this.room.hidden = !this.online || !this.roomCode.textContent;
+  }
+
+  /** Offer hosting and joining (title screen of a solo city game). */
+  setCoop(enabled: boolean, joinCode = ''): void {
+    this.coopEnabled = enabled;
+    if (joinCode) this.codeInput.value = joinCode;
+    this.updateSaveButtons();
+  }
+
+  /** In a co-op game: the room code to share and who's playing. */
+  setOnline(code: string | null, host: boolean): void {
+    this.online = true;
+    this.roomCode.textContent = code ?? '';
+    this.leaveBtn.textContent = host ? 'End game' : 'Leave game';
+    this.updateSaveButtons();
+  }
+
+  setPlayers(names: readonly string[]): void {
+    const text = `Players: ${names.join(', ')}`;
+    if (this.roomPlayers.textContent !== text) this.roomPlayers.textContent = text;
+  }
+
+  /** Block the co-op buttons while connecting. */
+  setBusy(busy: boolean): void {
+    this.hostBtn.disabled = busy;
+    this.hostSaveBtn.disabled = busy;
+    this.joinBtn.disabled = busy;
   }
 
   hide(): void {

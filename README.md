@@ -2,7 +2,7 @@
 
 A browser first-person shooter with Counter-Strike movement and gunplay, set in an endless,
 procedurally generated city. Clear bot squads to earn money, buy better guns, and push further
-from spawn, where the bots get sharper.
+from spawn, where the bots get sharper. Play alone or co-op with up to three friends.
 
 Built with Vite, TypeScript and three.js. It uses no art or audio assets: textures, gun models,
 sounds and music are all generated in code.
@@ -12,7 +12,7 @@ sounds and music are all generated in code.
 ```bash
 npm install
 npm run dev        # http://localhost:5173 (also reachable from Windows when running in WSL)
-npm run test:run   # unit tests (movement, weapons, generation, nav, bots, boundaries)
+npm run test:run   # unit tests (movement, weapons, generation, nav, bots, co-op networking, boundaries)
 npm run build      # type-check + production build to dist/
 ```
 
@@ -31,6 +31,9 @@ If `localhost` doesn't reach WSL from Windows, use the Network URL that Vite pri
 | `?tick=16` | Simulation tick rate (default 64), for checking interpolation |
 | `?time=22` | Fix the hour of day (0–24) instead of running the day/night cycle |
 | `?weather=rain` | Fix the weather: `clear`, `overcast`, `rain`, `fog` or `storm` |
+| `?join=CODE` | Join a co-op game (this is what invite links are) |
+| `?netsim=120,5` | Co-op testing: simulate a 120 ms round trip with 5% packet loss on your connection |
+| `?peerdebug=3` | Log WebRTC signalling (PeerJS) to the console |
 
 `/gen.html?seed=…` shows a top-down map of the generator output: layouts, nav reachability,
 spawn slots and perches.
@@ -114,6 +117,34 @@ Settings can fix the time of day, turn the weather off and lower the number of r
   A squad that was fighting you when you saved comes back later with just its survivors, at
   their spawn points.
 
+## Co-op
+
+Up to four players can clear the city together. There's no server to run: one player hosts in
+their browser and friends join with a room code.
+
+- **Hosting.** On the title screen, enter a name and press **Host co-op game** (or **Host from
+  save** to continue your saved city). You get a six-letter room code and a **Copy invite link**
+  button in the pause menu. The host's time-of-day and weather settings apply to everyone.
+- **Joining.** Enter the code and press **Join**, or open the invite link. You spawn at the
+  buy zone nearest to a teammate.
+- **Playing together.** Cleared areas and buy zones are shared, and every player gets the clear
+  bonus. Kill rewards go to whoever made the kill, and each player has their own money and
+  loadout. There's no friendly fire. Squads get one extra bot for each player after the first
+  (up to two). Bots go after whoever they see, or whoever shot them. When everyone is down,
+  squads heal and forget you, as in solo play. Teammates appear in blue, with names and health
+  bars over their heads, and on the radar and the city map.
+- **Keys.** Enter opens the chat. Hold Tab for the scoreboard (kills, deaths, money).
+- **Saving.** Only the host can save a co-op game (pause menu, and automatically after clears).
+  The save keeps the shared progress and the host's own position and gear. Guests start fresh
+  each session.
+- **Leaving.** If a guest leaves, the gear they dropped when they died goes too. If the host
+  ends the game, everyone returns to the title screen, because the game runs on the host's
+  machine.
+
+It all goes through WebRTC. The free PeerJS broker only introduces players to each other, and
+its default STUN/TURN servers get most home networks connected. The debug overlay (F3) shows
+round-trip time, traffic and prediction corrections.
+
 ## How it works
 
 - **Simulation** (`src/sim`, `src/physics`, `src/player`, `src/weapons`, `src/ai`): the
@@ -131,3 +162,20 @@ Settings can fix the time of day, turn the weather off and lower the number of r
   events to draw the world, the viewmodel, effects and HUD, and to play synthesized positional
   audio. The background music is generative: an ambient pad and arpeggio, with a soft pulse
   that fades in while you're fighting. It has its own volume slider in Settings.
+- **Networking** (`src/net`): the host's authoritative game (`ServerGame`) runs the same
+  simulation, bots and pickups in a Web Worker, so it keeps full speed when the host's tab is in
+  the background. Every player, the host included, connects to it as a client: the host
+  through a `MessageChannel`, friends over WebRTC, with PeerJS for signalling. Only inputs,
+  snapshots and events go over the wire. The city is regenerated from the seed on every machine.
+  - **Channels.** Commands (with the last few repeated) and 32 Hz binary snapshots use an
+    unreliable, unordered data channel. Events, pickups, progress and chat use a reliable one.
+  - **Prediction.** Each client predicts its own movement and weapon with the same code and
+    replays unacknowledged commands on every snapshot. Deterministic movement means
+    corrections are rare.
+  - **Interpolation.** Everyone else is drawn 100 ms in the past, interpolated between
+    snapshots.
+  - **Lag compensation.** The host checks a player's shots against where that player saw their
+    targets, up to 250 ms back.
+  - **Tests.** `src/net/net.test.ts` runs a host with several clients in one process. It covers
+    packet loss and reordering, prediction accuracy, lag compensation, buying, clears, chat and
+    saves.

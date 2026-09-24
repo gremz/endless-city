@@ -57,7 +57,7 @@ interface ThrowPlan {
 /** Bots are blinded (no vision, no shooting) above this flash whiteness. */
 const BLIND = 0.35;
 
-/** Player position history (per tick) used for the bots' tracking delay. */
+/** A player's position history (per tick) used for the bots' tracking delay. */
 export class TargetHistory {
   private xs = new Float32Array(64);
   private ys = new Float32Array(64);
@@ -90,7 +90,8 @@ export class TargetHistory {
 export interface BotContext {
   sim: Simulation;
   astar: AStar;
-  history: TargetHistory;
+  /** Position history per player actor id. */
+  histories: ReadonlyMap<number, TargetHistory>;
   /** Remaining path queries this tick (shared budget). */
   pathBudget: number;
 }
@@ -117,6 +118,8 @@ export class Bot {
   readonly r: Rand;
 
   // Perception.
+  /** The player this bot is fighting (last one seen or that hurt it), or null. */
+  target: Actor | null = null;
   awareness = 0;
   visible = false;
   lastSeen = -100;
@@ -189,9 +192,10 @@ export class Bot {
     this.cover = null;
   }
 
-  /** Forget the player (after they die): go back to posting/patrolling. */
+  /** Forget the players (after they all die): go back to posting/patrolling. */
   reset(now: number): void {
     if (this.throwPlan) this.cancelThrow();
+    this.target = null;
     this.awareness = 0;
     this.lastKnown = null;
     this.visible = false;
@@ -199,7 +203,10 @@ export class Bot {
   }
 
   /** Called when the bot takes damage: it now knows roughly where the shooter is. */
-  onDamaged(from: Vec3, now: number): void {
+  onDamaged(attacker: Actor, now: number): void {
+    const from = attacker.move.pos;
+    // Turn on whoever is shooting unless the current target is right in view.
+    if (attacker.team !== this.actor.team && (!this.target || !this.visible)) this.target = attacker;
     this.awareness = Math.max(this.awareness, 1);
     this.lastKnown = vec3(from.x, from.y, from.z);
     this.squad.lastKnown = this.lastKnown;
@@ -209,7 +216,7 @@ export class Bot {
   }
 
   /**
-   * A sound the player made. `reveal` is false for sounds that don't give away where the
+   * A sound a player made. `reveal` is false for sounds that don't give away where the
    * player is (a grenade going off somewhere): they only put the bot on edge.
    */
   hear(pos: Vec3, radius: number, now: number, reveal = true): void {
@@ -237,49 +244,38 @@ export class Bot {
 
   private perceive(ctx: BotContext, dt: number): void {
     const sim = ctx.sim;
-    const p = sim.player;
     const a = this.actor;
     this.visible = false;
-    if (!p.alive) {
+    if (this.target && !this.target.alive) this.target = null;
+    if (!sim.players.some((p) => p.alive)) {
       this.awareness = Math.max(0, this.awareness - dt * 0.2);
       return;
     }
     if (flashAmount(a, sim.time) > BLIND) return;
-    const ex = a.move.pos.x;
-    const ey = a.move.pos.y + eyeHeight(a.move);
-    const ez = a.move.pos.z;
-    const dx = p.move.pos.x - ex;
-    const dz = p.move.pos.z - ez;
-    const dist = Math.hypot(dx, dz);
-    // Darkness and fog shorten how far the bot can make you out; a flashlight gives you away.
-    const env = sim.env;
-    const dark = env.darkness > 0.05 || env.fog > 0.05;
-    const vis = dark ? visibilityAt(env, nearestLampDist(p.move.pos.x, p.move.pos.z), p.flashlight) : 1;
-    if (dist <= this.skill.visionRange * vis) {
-      // Field of view against the current view direction (very close = always noticed).
-      const ang = Math.atan2(-dx, -dz);
-      const off = Math.abs(wrapAngle(ang - this.aimYaw));
-      if (off <= (this.skill.fov * DEG) / 2 || dist < 2.5) {
-        const k = bodyScale(p.move);
-        va.x = ex;
-        va.y = ey;
-        va.z = ez;
-        lookHeights[0] = eyeHeight(p.move) + 0.05;
-        lookHeights[1] = 1.2 * k;
-        lookHeights[2] = 0.4;
-        for (const h of lookHeights) {
-          vb.x = p.move.pos.x;
-          vb.y = p.move.pos.y + h;
-          vb.z = p.move.pos.z;
-          sim.world.traceRay(tr, va, vb, MASK_SHOT);
-          if (tr.fraction >= 0.999 && !sim.grenades.blocksSight(va, vb)) {
-            this.visible = true;
-            break;
-          }
+    // Stick with the current target while it's in view, otherwise take the closest one seen.
+    let p: Actor | null = null;
+    let dist = Infinity;
+    if (this.target) {
+      const d = this.sees(sim, this.target);
+      if (d >= 0) {
+        p = this.target;
+        dist = d;
+      }
+    }
+    if (!p) {
+      for (const q of sim.players) {
+        if (!q.alive || q === this.target) continue;
+        const d = this.sees(sim, q);
+        if (d >= 0 && d < dist) {
+          p = q;
+          dist = d;
         }
       }
     }
-    if (this.visible) {
+    if (p) {
+      this.target = p;
+      this.visible = true;
+      const env = sim.env;
       const speed = Math.hypot(p.move.vel.x, p.move.vel.z);
       const moving = speed > 150 * HU ? 1.3 : 1;
       const close = clamp(18 / Math.max(1, dist), 0.35, 3);
@@ -297,6 +293,41 @@ export class Bot {
     } else {
       this.awareness = Math.max(0, this.awareness - dt * 0.04);
     }
+  }
+
+  /** Horizontal distance to a player this bot can see right now, or -1. */
+  private sees(sim: Simulation, p: Actor): number {
+    const a = this.actor;
+    const ex = a.move.pos.x;
+    const ey = a.move.pos.y + eyeHeight(a.move);
+    const ez = a.move.pos.z;
+    const dx = p.move.pos.x - ex;
+    const dz = p.move.pos.z - ez;
+    const dist = Math.hypot(dx, dz);
+    // Darkness and fog shorten how far the bot can make you out; a flashlight gives you away.
+    const env = sim.env;
+    const dark = env.darkness > 0.05 || env.fog > 0.05;
+    const vis = dark ? visibilityAt(env, nearestLampDist(p.move.pos.x, p.move.pos.z), p.flashlight) : 1;
+    if (dist > this.skill.visionRange * vis) return -1;
+    // Field of view against the current view direction (very close = always noticed).
+    const ang = Math.atan2(-dx, -dz);
+    const off = Math.abs(wrapAngle(ang - this.aimYaw));
+    if (off > (this.skill.fov * DEG) / 2 && dist >= 2.5) return -1;
+    const k = bodyScale(p.move);
+    va.x = ex;
+    va.y = ey;
+    va.z = ez;
+    lookHeights[0] = eyeHeight(p.move) + 0.05;
+    lookHeights[1] = 1.2 * k;
+    lookHeights[2] = 0.4;
+    for (const h of lookHeights) {
+      vb.x = p.move.pos.x;
+      vb.y = p.move.pos.y + h;
+      vb.z = p.move.pos.z;
+      sim.world.traceRay(tr, va, vb, MASK_SHOT);
+      if (tr.fraction >= 0.999 && !sim.grenades.blocksSight(va, vb)) return dist;
+    }
+    return -1;
   }
 
   // -------------------------------------------------------------- decisions
@@ -456,12 +487,18 @@ export class Bot {
 
   // -------------------------------------------------------------- aiming
 
-  private aimAt(ctx: BotContext, dt: number): { onTarget: boolean; dist: number } {
+  private aimAt(ctx: BotContext, p: Actor, dt: number): { onTarget: boolean; dist: number } {
     const sim = ctx.sim;
     const a = this.actor;
-    const p = sim.player;
     const ticks = Math.round(this.skill.trackingDelay / sim.dt);
-    const h = ctx.history.at(sim.tick, ticks, tgt);
+    const history = ctx.histories.get(p.id);
+    let h = { eye: eyeHeight(p.move), scale: bodyScale(p.move) };
+    if (history) h = history.at(sim.tick, ticks, tgt);
+    else {
+      tgt.x = p.move.pos.x;
+      tgt.y = p.move.pos.y;
+      tgt.z = p.move.pos.z;
+    }
     const ex = a.move.pos.x;
     const ey = a.move.pos.y + eyeHeight(a.move);
     const ez = a.move.pos.z;
@@ -484,7 +521,6 @@ export class Bot {
     yaw += this.errYaw * err;
     pitch += this.errPitch * err;
     this.turnTowards(yaw, pitch, dt, true);
-    void p;
     const dist = Math.hypot(hd, dy);
     const cone = Math.atan2(0.5, dist) + 1.2 * DEG;
     const offYaw = Math.abs(wrapAngle(trueYaw - this.aimYaw));
@@ -502,9 +538,8 @@ export class Bot {
   }
 
   /** Line of sight right now from eye to the target's chest (re-checked before every shot). */
-  private clearShot(ctx: BotContext): boolean {
+  private clearShot(ctx: BotContext, p: Actor): boolean {
     const a = this.actor;
-    const p = ctx.sim.player;
     va.x = a.move.pos.x;
     va.y = a.move.pos.y + eyeHeight(a.move);
     va.z = a.move.pos.z;
@@ -523,7 +558,10 @@ export class Bot {
 
   update(ctx: BotContext): void {
     const a = this.actor;
-    if (!a.alive) return;
+    if (!a.alive) {
+      a.engaging = a.flashlight = false;
+      return;
+    }
     const sim = ctx.sim;
     const now = sim.time;
     const dt = sim.dt;
@@ -555,7 +593,9 @@ export class Bot {
     }
 
     // Acquisition: first sighting starts the reaction timer and picks the aim point/error.
-    const engaged = (this.state === 'engage' || this.state === 'overwatch' || this.state === 'cover') && this.visible && this.awareness >= 1;
+    const target = this.target;
+    const engaged =
+      !!target && (this.state === 'engage' || this.state === 'overwatch' || this.state === 'cover') && this.visible && this.awareness >= 1;
     if (engaged && !this.wasVisible) {
       this.reactionEnd = now + this.skill.reaction * (0.8 + this.r() * 0.4);
       this.acquiredAt = now;
@@ -572,7 +612,7 @@ export class Bot {
     let dist = 0;
 
     if (engaged) {
-      const aim = this.aimAt(ctx, dt);
+      const aim = this.aimAt(ctx, target, dt);
       dist = aim.dist;
       wantFire = aim.onTarget && now >= this.reactionEnd;
     } else if (now < this.lookAwayUntil) {
@@ -657,10 +697,9 @@ export class Bot {
       case 'flank': {
         if (this.lastKnown) {
           if (!this.goal) {
-            const target = this.pickFlankPoint(ctx);
-            if (target) {
-              const p = sim.player;
-              const fy = p.yaw;
+            const point = this.pickFlankPoint(ctx);
+            if (point) {
+              const fy = this.target?.yaw ?? 0;
               const fx = -Math.sin(fy);
               const fz = -Math.cos(fy);
               const lk = this.lastKnown;
@@ -671,7 +710,7 @@ export class Bot {
                 if (d > 30 || d < 0.1) return 0;
                 return (x * fx + z * fz) / d > Math.cos(30 * DEG) ? 6 : 0;
               };
-              this.goTo(ctx, target, extra);
+              this.goTo(ctx, point, extra);
             } else this.setState('alert', now);
           }
           const rest = this.followPath(move);
@@ -738,7 +777,7 @@ export class Bot {
       }
       const speed = Math.hypot(a.move.vel.x, a.move.vel.z);
       const slowEnough = speed < def.maxSpeed * 0.34 || !a.move.onGround;
-      if (this.burstLeft > 0 && slowEnough && this.clearShot(ctx)) {
+      if (this.burstLeft > 0 && slowEnough && target && this.clearShot(ctx, target)) {
         // Semi-autos need the trigger released between shots.
         if (def.automatic || !a.wpn.triggerHeld) {
           cmd.buttons |= Buttons.ATTACK;
@@ -773,6 +812,14 @@ export class Bot {
     this.finishTick(ctx);
   }
 
+  /** Flags other code (radar, buying, presentation) reads off the actor. */
+  private publishState(sim: Simulation): void {
+    const a = this.actor;
+    a.engaging = this.state === 'engage';
+    // After dark, bots moving about or hunting carry a lit flashlight.
+    a.flashlight = sim.env.darkness >= 0.25 && this.state !== 'idle' && this.state !== 'overwatch';
+  }
+
   /** Send this tick's command through the same movement and weapon code as the player. */
   private finishTick(ctx: BotContext): void {
     const a = this.actor;
@@ -786,11 +833,12 @@ export class Bot {
     updateWeapon(a, cmd, sim);
     sim.footsteps(a);
     cmd.pressed = 0;
+    this.publishState(sim);
   }
 
   // -------------------------------------------------------------- grenades
 
-  /** Remember how long the player has been holding the same spot (molotov bait). */
+  /** Remember how long the target has been holding the same spot (molotov bait). */
   private trackCamping(now: number): void {
     const lk = this.squad.lastKnown;
     if (!lk) return;
@@ -800,7 +848,7 @@ export class Bot {
     }
   }
 
-  /** The player just broke line of sight nearby and the squad's grenade is ready. */
+  /** The target just broke line of sight nearby and the squad's grenade is ready. */
   private wantsToThrow(now: number): boolean {
     const a = this.actor;
     if (this.visible || !this.lastKnown || this.awareness < 0.6 || grenadeTotal(a.inv) <= 0) return false;
@@ -812,7 +860,7 @@ export class Bot {
     return d > 6 && d < 24;
   }
 
-  /** Pick a grenade and find an arc that lands it on the player's last known spot. */
+  /** Pick a grenade and find an arc that lands it on the target's last known spot. */
   private planThrow(ctx: BotContext, now: number): void {
     const sim = ctx.sim;
     const a = this.actor;

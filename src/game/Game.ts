@@ -14,7 +14,7 @@ import { Atmosphere } from '../render/Atmosphere';
 import { Weather } from '../render/fx/Weather';
 import { MASK_SHOT } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
-import { teleport } from '../sim/Actor';
+import { Team, teleport, type Actor } from '../sim/Actor';
 import { makeInventory } from '../weapons/Inventory';
 import { Simulation } from '../sim/Simulation';
 import { PickupManager } from '../sim/Pickups';
@@ -22,6 +22,9 @@ import { flashAmount } from '../sim/Grenades';
 import { DebugOverlay } from '../ui/DebugOverlay';
 import { Hud } from '../ui/Hud';
 import { Minimap } from '../ui/Minimap';
+import { NameTags } from '../ui/NameTags';
+import { Chat } from '../ui/Chat';
+import { Scoreboard } from '../ui/Scoreboard';
 import { WorldMap, type WorldMapView } from '../ui/WorldMap';
 import { levelFor } from '../world/gen/district';
 import { MainMenu } from '../ui/Menus';
@@ -35,16 +38,20 @@ import { Presentation } from './Presentation';
 import { EncounterManager } from '../ai/EncounterManager';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SoundEvents } from '../audio/sounds';
-import { buy, buyZoneStatus, OUT_OF_COMBAT, priceOf, unavailableReason, type BuyItem } from '../sim/buy';
+import { buy, buyZoneStatus, engagedNear, OUT_OF_COMBAT, priceOf, unavailableReason, type BuyItem } from '../sim/buy';
 import { BuyMenu, itemName } from '../ui/BuyMenu';
 import { SettingsMenu } from '../ui/SettingsMenu';
 import { BUY_AMMO_KEYS, MAP_KEY, SLOT_KEYS } from '../input/bindings';
 import { stuckSnaps } from '../ai/Bot';
 import { Buttons } from '../input/UserCmd';
-import { chunkKey, keyToCoords } from '../world/chunkMath';
+import { chunkKey } from '../world/chunkMath';
 import { WEAPONS, type WeaponId } from '../weapons/weaponDefs';
 import { eyeHeight } from '../player/pmove';
 import { describeSave, loadSave, writeSave } from '../core/saveStorage';
+import { RESPAWN_DELAY, respawnPoint } from '../sim/respawn';
+import { Mirror } from '../net/Mirror';
+import type { NetClient } from '../net/NetClient';
+import { Prediction } from '../net/Prediction';
 import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
 
 type State = 'menu' | 'playing' | 'paused' | 'map';
@@ -52,6 +59,23 @@ type State = 'menu' | 'playing' | 'paused' | 'map';
 export interface GameHooks {
   /** Throw this game away and start the saved one (the host rebuilds the Game). */
   loadSave(save: SaveData): void;
+  /** Host a co-op game (from the title screen), in a new city or continuing the save. */
+  host?(name: string, fromSave: boolean): void;
+  /** Join a co-op game by room code or invite link. */
+  join?(code: string, name: string): void;
+}
+
+/** A co-op game: this screen mirrors the host's simulation instead of running its own. */
+export interface OnlineGame {
+  net: NetClient;
+  /** Room code friends join with (shown to everyone), or null. */
+  code: string | null;
+  /** This player is the host (leaving ends the game for everyone). */
+  host: boolean;
+  /** Leave the game (menu button, or the connection dropped with `reason`). */
+  leave(reason?: string): void;
+  /** Host only: write the save slot from the host's game. Resolves with why it failed, or null. */
+  save?(explored: number[], manual: boolean): Promise<string | null>;
 }
 
 interface KeyboardLock {
@@ -62,6 +86,8 @@ interface KeyboardLock {
 /** Composition root: wires simulation, streaming, rendering, input and UI, and owns the frame loop. */
 export class Game {
   readonly sim: Simulation;
+  /** The player at this screen. */
+  readonly me: Actor;
   readonly streamer: WorldStreamer;
   readonly renderer: Renderer;
   readonly input: Input;
@@ -73,6 +99,10 @@ export class Game {
   private menu: MainMenu;
   private hud: Hud;
   private minimap: Minimap;
+  private nameTags: NameTags | null = null;
+  private chat: Chat | null = null;
+  private scoreboard: Scoreboard | null = null;
+  private scores = new Map<number, { kills: number; deaths: number; money: number }>();
   private worldMap: WorldMap;
   private presentation: Presentation;
   private atmosphere: Atmosphere;
@@ -104,6 +134,9 @@ export class Game {
   /** An area was cleared: save as soon as the fight is over. */
   private pendingAutosave = false;
   timeScale = 1;
+  private mirror: Mirror | null = null;
+  private prediction: Prediction | null = null;
+  private gotSnapshot = false;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -112,11 +145,19 @@ export class Game {
     /** Saved game this one continues, or null for a fresh start. */
     private save: SaveData | null = null,
     private hooks: GameHooks | null = null,
+    readonly online: OnlineGame | null = null,
   ) {
     this.settings = loadSettings();
     const tickDt = 1 / params.tickRate;
     this.loop = new FixedLoop(tickDt);
     this.sim = new Simulation(params, { autoBhop: this.settings.autoBhop }, tickDt);
+    this.me = this.sim.player;
+    if (online) {
+      // Our actor on the host.
+      this.me.id = online.net.actorId;
+      this.me.name = online.net.name;
+    }
+    this.sounds.localId = this.me.id;
 
     this.renderer = new Renderer(canvas);
     this.materials = new MaterialLibrary(this.renderer.anisotropy);
@@ -131,15 +172,33 @@ export class Game {
     this.streamer.addListener(this.chunkRenderer);
     this.streamer.addListener(this.sim.nav);
     this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
-    if (this.encounters) this.sim.systems.push(this.encounters);
     this.pickups = new PickupManager(this.sim);
-    this.streamer.addListener(this.pickups);
-    this.sim.systems.push(this.pickups);
+    if (online) {
+      // Bots and items live on the host; they only show up here.
+      this.mirror = new Mirror(this.sim, this.me.id, this.pickups, this.encounters, true);
+      this.prediction = new Prediction(this.sim, this.me);
+    } else {
+      if (this.encounters) this.sim.systems.push(this.encounters);
+      this.streamer.addListener(this.pickups);
+      this.sim.systems.push(this.pickups);
+    }
 
     this.input = new Input(canvas);
     this.hud = new Hud(ui, this.settings);
     this.hud.setVisible(false);
     this.minimap = new Minimap(this.hud.root);
+    if (online) {
+      this.nameTags = new NameTags(this.hud.root);
+      this.scoreboard = new Scoreboard(this.hud.root);
+      this.chat = new Chat(
+        this.hud.root,
+        (text) => online.net.sendChat(text),
+        (open) => {
+          // Typing shouldn't walk you around.
+          this.input.enabled = !open;
+        },
+      );
+    }
     this.streamer.addListener(this.minimap);
     this.worldMap = new WorldMap(ui, {
       seed: params.seed,
@@ -150,6 +209,7 @@ export class Game {
     this.streamer.addListener(this.worldMap);
     this.presentation = new Presentation(this.renderer, this.hud, this.camCtl, this.input, this.settings);
     this.presentation.pickups = this.pickups.items;
+    this.presentation.localId = this.me.id;
     this.atmosphere = new Atmosphere(this.renderer, this.materials);
     this.atmosphere.lampsEnabled = params.world === 'city';
     this.atmosphere.onLightning = (delay, strength) => this.sounds.thunder(delay, strength);
@@ -166,18 +226,20 @@ export class Game {
     this.presentation.sinks.push(this.sounds);
     this.presentation.sinks.push({
       handle: (e) => {
-        if (e.type === 'money') this.hud.flashMoney(e.amount);
+        if (e.type === 'money') {
+          if (e.actorId === this.me.id) this.hud.flashMoney(e.amount);
+        }
         else if (e.type === 'chunkCleared') {
           this.hud.message(`AREA CLEARED  +$${e.bonus}  ·  buy zone unlocked`, 3.5);
           this.pendingAutosave = true;
         }
-        else if (e.type === 'buy') {
+        else if (e.type === 'buy' && e.actorId === this.me.id) {
           const text = e.ok ? `Bought ${itemName(e.item as BuyItem)}` : (e.reason ?? 'Cannot buy');
           this.buyMenu.feedback(text, e.ok);
           // Quick buys happen with the menu closed.
           if (!this.buyMenu.open) this.hud.message(text, 1.5);
         }
-        else if (e.type === 'kill' && e.victimId === this.sim.player.id) {
+        else if (e.type === 'kill' && e.victimId === this.me.id) {
           const k = this.sim.getActor(e.attackerId);
           const w = WEAPONS[e.weapon as WeaponId]?.name ?? e.weapon;
           this.death = { killer: e.attackerId, text: `Killed by ${k?.name ?? 'someone'} (${w}${e.headshot ? ', headshot' : ''})` };
@@ -192,6 +254,14 @@ export class Game {
         this.settingsMenu.show();
       },
       onSave: () => {
+        if (this.online?.save) {
+          this.menu.setStatus('Saving…');
+          void this.online.save(this.worldMap.exploredKeys(), true).then((err) => {
+            this.menu.setStatus(err ?? 'Game saved.');
+            if (!err) this.refreshSaveInfo();
+          });
+          return;
+        }
         const err = this.saveGame(true);
         this.menu.setStatus(err ?? 'Game saved.');
       },
@@ -200,7 +270,12 @@ export class Game {
         if (save && this.hooks) this.hooks.loadSave(save);
         else this.menu.setStatus('The save could not be read.');
       },
+      onHost: (name, fromSave) => this.hooks?.host?.(name, fromSave),
+      onJoin: (code, name) => this.hooks?.join?.(code, name),
+      onLeave: () => this.online?.leave(),
     });
+    if (online) this.menu.setOnline(online.code, online.host);
+    else this.menu.setCoop(params.world === 'city' && !!hooks?.host);
     this.settingsMenu = new SettingsMenu(
       ui,
       this.settings,
@@ -210,25 +285,26 @@ export class Game {
         this.menu.show(this.state === 'menu' ? 'title' : 'paused');
       },
     );
-    const economy = this.sim.economy;
+    const me = this.me;
     this.buyMenu = new BuyMenu(
       ui,
       {
         get money() {
-          return economy.money;
+          return me.money;
         },
-        price: (item) => priceOf(this.sim, item),
-        unavailable: (item) => unavailableReason(this.sim, item),
-        slotWeapon: (slot) => this.sim.player.inv[slot]?.def.name ?? null,
-        zone: () => buyZoneStatus(this.sim, this.engagedNearby()),
+        price: (item) => priceOf(me, item),
+        unavailable: (item) => unavailableReason(me, item),
+        slotWeapon: (slot) => me.inv[slot]?.def.name ?? null,
+        zone: () => buyZoneStatus(this.sim, me, this.engagedNearby()),
       },
-      (item: BuyItem) => buy(this.sim, item, this.engagedNearby()),
+      (item: BuyItem) => this.buy(item),
     );
     this.menu.setSeed(params.seedText);
     this.refreshSaveInfo();
     // Progress, items and the map come back before any chunk streams in.
     if (save) {
-      applyWorldSave(save, this.sim, this.pickups, this.encounters);
+      // Online, the host's worker restored the world; only our map is ours.
+      if (!online) applyWorldSave(save, this.sim, this.pickups, this.encounters, this.me.id);
       this.worldMap.restoreExplored(save.explored);
     }
 
@@ -251,12 +327,14 @@ export class Game {
     this.audio.setVolume(s.masterVolume);
     this.audio.setMusicVolume(s.musicVolume);
     this.audio.setSfxVolume(s.sfxVolume);
-    // URL parameters beat the settings for time of day and weather.
+    // URL parameters beat the settings for time of day and weather. Online, the host decides.
     const p = this.params;
-    this.sim.envOverride = {
-      hour: p.hour ?? (s.timeOfDay === 'day' ? 13 : s.timeOfDay === 'night' ? 0.5 : undefined),
-      weather: p.weather ?? (s.weather === 'clear' ? 'clear' : undefined),
-    };
+    this.sim.envOverride = this.online
+      ? { hour: p.hour ?? undefined, weather: p.weather ?? undefined }
+      : {
+          hour: p.hour ?? (s.timeOfDay === 'day' ? 13 : s.timeOfDay === 'night' ? 0.5 : undefined),
+          weather: p.weather ?? (s.weather === 'clear' ? 'clear' : undefined),
+        };
     this.sim.updateEnv();
     if (this.weather) this.weather.density = s.rainParticles;
     if (this.debug) {
@@ -269,6 +347,12 @@ export class Game {
 
   /** Choose the spawn point; the player is placed once the surrounding chunks exist. */
   private spawnPlayer(): void {
+    if (this.online) {
+      // The host places us; we learn where from the first snapshot.
+      this.menu.setReady(false);
+      this.menu.setStatus('Joining…');
+      return;
+    }
     if (this.params.world === 'range') {
       this.spawnX = CHUNK + 5;
       this.spawnZ = 30;
@@ -283,14 +367,21 @@ export class Game {
       this.spawnX = this.params.spawnCx * CHUNK + 32;
       this.spawnZ = this.params.spawnCz * CHUNK + 22;
     }
-    teleport(this.sim.player, this.spawnX, 30, this.spawnZ);
+    teleport(this.me, this.spawnX, 30, this.spawnZ);
     this.menu.setReady(false);
     this.menu.setStatus(this.save ? 'Loading your save…' : 'Generating the city…');
   }
 
   private finishSpawn(): void {
     this.loading = false;
-    const p = this.sim.player;
+    const p = this.me;
+    if (this.online) {
+      this.input.yaw = p.yaw;
+      this.input.pitch = 0;
+      this.menu.setStatus('');
+      this.menu.setReady(true);
+      return;
+    }
     teleport(p, this.spawnX, this.sim.findFloor(this.spawnX, this.spawnZ, 20), this.spawnZ);
     this.input.pitch = 0;
     if (this.params.world === 'range') {
@@ -314,7 +405,7 @@ export class Game {
     } else if (this.save) {
       const s = this.save.player;
       teleport(p, s.x, this.sim.findFloor(s.x, s.z, s.y + 1), s.z);
-      applyPlayerSave(s, p);
+      applyPlayerSave(s, p, this.save.money);
       this.input.yaw = s.yaw;
       this.input.pitch = s.pitch;
       this.menu.show('paused', 'SAVE LOADED');
@@ -327,11 +418,12 @@ export class Game {
 
   /** Write the save slot. Returns why it couldn't, or null on success. */
   private saveGame(manual: boolean): string | null {
+    if (this.online) return 'Saving is not available in co-op games.';
     if (this.params.world !== 'city') return 'Saving only works in the city.';
     if (this.loading) return 'Still loading.';
-    if (!this.sim.player.alive) return 'You can’t save while dead.';
+    if (!this.me.alive) return 'You can’t save while dead.';
     if (manual && this.inCombat()) return 'You can’t save during a fight.';
-    const data = captureSave(this.sim, this.pickups, this.encounters, this.worldMap.exploredKeys());
+    const data = captureSave(this.sim, this.me, this.pickups, this.encounters, this.worldMap.exploredKeys());
     if (!writeSave(data)) return 'Could not write the save (storage blocked or full).';
     this.pendingAutosave = false;
     this.refreshSaveInfo();
@@ -339,13 +431,29 @@ export class Game {
   }
 
   private refreshSaveInfo(): void {
+    if (this.online) {
+      // The host can save the co-op game; loading happens from the title screen.
+      const save = this.online.save ? loadSave() : null;
+      this.menu.setSave(save ? describeSave(save) : null, !!this.online.save, false);
+      return;
+    }
     const save = loadSave();
     this.menu.setSave(save ? describeSave(save) : null, this.params.world === 'city');
   }
 
   /** Autosave after an area is cleared, once the player is alive and out of combat. */
   private autosave(): void {
-    if (!this.pendingAutosave || this.state !== 'playing' || !this.sim.player.alive || this.inCombat()) return;
+    if (this.online?.save) {
+      if (!this.pendingAutosave || !this.me.alive || this.inCombat()) return;
+      // The host saves the shared progress after a clear, once the fight is over.
+      this.pendingAutosave = false;
+      void this.online.save(this.worldMap.exploredKeys(), false).then((err) => {
+        if (!err) this.hud.message('Game saved', 1.5);
+      });
+      return;
+    }
+    if (this.online) return;
+    if (!this.pendingAutosave || this.state !== 'playing' || !this.me.alive || this.inCombat()) return;
     if (this.saveGame(false) === null) this.hud.message('Game saved', 1.5);
     else this.pendingAutosave = false;
   }
@@ -392,7 +500,12 @@ export class Game {
 
     this.disposers.push(
       this.input.onKeyDown((code) => {
+        if (this.chat?.open) return;
         if (code === DEBUG_KEYS.overlay) this.debug.toggle();
+        if (this.chat && this.state === 'playing' && code === 'Enter') {
+          this.chat.show();
+          return;
+        }
         if (this.state === 'map') {
           if (code === MAP_KEY || code === 'Escape') this.closeMap();
           else if (code === 'KeyC') this.worldMap.recenter();
@@ -402,13 +515,13 @@ export class Game {
           this.openMap();
           return;
         }
-        if (this.state === 'playing' && this.sim.player.alive) {
+        if (this.state === 'playing' && this.me.alive) {
           if (code === 'KeyB') this.buyMenu.toggle();
           else if (this.buyMenu.open && code in SLOT_KEYS) this.buyMenu.select(SLOT_KEYS[code]);
-          else if (code in BUY_AMMO_KEYS) buy(this.sim, BUY_AMMO_KEYS[code], this.engagedNearby());
+          else if (code in BUY_AMMO_KEYS) this.buy(BUY_AMMO_KEYS[code]);
         }
-        if (!this.params.debug && this.params.world !== 'gym') return;
-        if (code === DEBUG_KEYS.noclip) this.sim.player.move.noclip = !this.sim.player.move.noclip;
+        if ((!this.params.debug && this.params.world !== 'gym') || this.online) return;
+        if (code === DEBUG_KEYS.noclip) this.me.move.noclip = !this.me.move.noclip;
         if (code === DEBUG_KEYS.slowmo) this.timeScale = this.timeScale === 1 ? 0.25 : 1;
       }),
     );
@@ -464,7 +577,7 @@ export class Game {
   }
 
   private mapView(): WorldMapView {
-    const pos = this.sim.player.move.pos;
+    const pos = this.me.move.pos;
     return {
       x: pos.x,
       z: pos.z,
@@ -472,15 +585,15 @@ export class Game {
       spawnCx: this.params.spawnCx,
       spawnCz: this.params.spawnCz,
       cleared: this.sim.cleared,
-      encounters: [...(this.encounters?.states.values() ?? [])].map((s) => ({
-        cx: s.cx,
-        cz: s.cz,
-        level: s.level,
-        cleared: s.cleared,
-        active: !!s.squad,
-      })),
-      stash: this.pickups.stashPos,
+      encounters: this.encounters?.summaries() ?? [],
+      stash: this.pickups.stashPos(this.me.id),
+      allies: this.allies().map((a) => ({ x: a.move.pos.x, z: a.move.pos.z, alive: a.alive, name: a.name })),
     };
+  }
+
+  /** The other players in a co-op game. */
+  private allies(): Actor[] {
+    return this.sim.players.filter((a) => a !== this.me);
   }
 
   start(): void {
@@ -493,13 +606,15 @@ export class Game {
   }
 
   private frame(now: number): void {
-    const frameMs = now - this.lastFrame;
+    const frameMs = Math.max(0, now - this.lastFrame);
     this.lastFrame = now;
     const dt = Math.min(frameMs / 1000, 0.25) * this.timeScale;
-    const p = this.sim.player;
+    const p = this.me;
 
     let alpha = 1;
-    if (this.state === 'playing') {
+    if (this.online) {
+      alpha = this.onlineTick(frameMs / 1000, now);
+    } else if (this.state === 'playing') {
       // Never simulate on top of an unloaded chunk.
       const ready = this.streamer.isLoaded(p.move.pos.x, p.move.pos.z);
       if (ready) {
@@ -512,7 +627,16 @@ export class Game {
     }
     this.updateDeathView(dt);
 
-    if (this.loading) {
+    if (this.online && this.loading) {
+      // Wait for the host to tell us where we are, then for the city around it.
+      if (this.gotSnapshot) {
+        this.spawnX = p.move.pos.x;
+        this.spawnZ = p.move.pos.z;
+        this.streamer.update(this.spawnX, this.spawnZ, this.input.yaw);
+        this.streamer.apply(4, 2);
+        if (this.streamer.allLoaded(this.spawnX, this.spawnZ, 1)) this.finishSpawn();
+      }
+    } else if (this.loading) {
       this.streamer.update(this.spawnX, this.spawnZ, this.input.yaw);
       this.streamer.apply(4, 2);
       if (this.streamer.allLoaded(this.spawnX, this.spawnZ, 1)) this.finishSpawn();
@@ -539,15 +663,18 @@ export class Game {
     this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, this.fwd.x, this.fwd.y, this.fwd.z, this.up.x, this.up.y, this.up.z);
     this.sounds.tick(frameMs / 1000);
     this.sounds.fires(this.sim);
-    this.audio.setDeafen(this.sim.player.alive ? Math.min(1, flashAmount(this.sim.player, this.sim.time) * 1.2) : 0);
+    this.audio.setDeafen(this.me.alive ? Math.min(1, flashAmount(this.me, this.sim.time) * 1.2) : 0);
     this.audio.setMusicIntensity(this.inCombat() ? 1 : 0);
     this.audio.updateMusic();
     this.presentation.handleEvents(this.sim);
     this.focus.set(this.camCtl.position.x, 0, this.camCtl.position.z);
     this.renderer.updateSun(this.focus);
     this.renderer.render();
+    this.nameTags?.update(cam, this.allies());
 
     this.updateHudExtras();
+    this.updateCoopHud(now / 1000);
+    if (this.online && this.state !== 'playing' && (this.sim.tick & 31) === 0) this.menu.setPlayers(this.sim.players.map((a) => a.name));
     this.autosave();
     this.debug.frame(frameMs);
     this.debug.setSpeed(Math.hypot(p.move.vel.x, p.move.vel.z) / HU, p.move.onGround);
@@ -556,33 +683,18 @@ export class Game {
 
   /** While dead: after 3 s, fire or jump respawns at the nearest cleared area (or spawn). */
   private deadTick(): void {
-    const p = this.sim.player;
+    const p = this.me;
     const since = this.sim.time - p.diedAt;
-    if (since < 3 || !(this.cmd.pressed & (Buttons.ATTACK | Buttons.JUMP))) return;
-    const pcx = worldToChunk(p.move.pos.x);
-    const pcz = worldToChunk(p.move.pos.z);
-    let best = chunkKey(this.params.spawnCx, this.params.spawnCz);
-    let bestD = Math.max(Math.abs(pcx - this.params.spawnCx), Math.abs(pcz - this.params.spawnCz));
-    for (const key of this.sim.cleared) {
-      const [cx, cz] = keyToCoords(key);
-      const d = Math.max(Math.abs(pcx - cx), Math.abs(pcz - cz));
-      if (d < bestD && this.streamer.resident.has(key)) {
-        best = key;
-        bestD = d;
-      }
-    }
-    const [cx, cz] = keyToCoords(best);
-    // Sidewalk on the chunk's west side: always walkable.
-    const x = cx * CHUNK + 5;
-    const z = cz * CHUNK + 14;
-    this.sim.respawnPlayer(x, z);
+    if (since < RESPAWN_DELAY || !(this.cmd.pressed & (Buttons.ATTACK | Buttons.JUMP))) return;
+    const { x, z } = respawnPoint(this.sim, p, (key) => this.streamer.resident.has(key));
+    this.sim.respawnPlayer(this.me, x, z);
     this.death = null;
     this.hud.showDeath(null);
     this.camCtl.bobY = 0;
   }
 
   private updateDeathView(dt: number): void {
-    const p = this.sim.player;
+    const p = this.me;
     if (p.alive) {
       if (this.death) {
         this.death = null;
@@ -592,7 +704,7 @@ export class Game {
       return;
     }
     const since = this.sim.time - p.diedAt;
-    this.hud.showDeath(this.death?.text ?? 'You died', since >= 3 ? 'Click or press Space to respawn' : '');
+    this.hud.showDeath(this.death?.text ?? 'You died', since >= RESPAWN_DELAY ? 'Click or press Space to respawn' : '');
     // Death cam: drop to the floor and turn to face the killer.
     this.camCtl.bobY = -Math.min(1, since * 2) * (eyeHeight(p.move) - 0.35);
     const k = this.death ? this.sim.getActor(this.death.killer) : undefined;
@@ -613,7 +725,7 @@ export class Game {
 
   /** Fighting right now: bots engaging nearby, or damage taken/dealt recently. Drives the music. */
   private inCombat(): boolean {
-    const p = this.sim.player;
+    const p = this.me;
     if (!p.alive) return false;
     const t = this.sim.time;
     return t - p.lastDamagedAt < OUT_OF_COMBAT || t - p.lastDealtAt < OUT_OF_COMBAT || this.engagedNearby();
@@ -621,22 +733,17 @@ export class Game {
 
   /** Any bot fighting within 40 m blocks buying. */
   private engagedNearby(): boolean {
-    const p = this.sim.player.move.pos;
-    return (
-      this.encounters?.bots.some(
-        (b) => b.actor.alive && b.state === 'engage' && Math.hypot(b.actor.move.pos.x - p.x, b.actor.move.pos.z - p.z) < 40,
-      ) ?? false
-    );
+    return engagedNear(this.sim, this.me);
   }
 
   private updateHudExtras(): void {
-    const p = this.sim.player;
-    this.hud.setMoney(this.sim.economy.money);
+    const p = this.me;
+    this.hud.setMoney(p.money);
     if (!p.alive && this.buyMenu.open) this.buyMenu.close();
     this.input.menuOpen = this.buyMenu.open;
-    const zone = buyZoneStatus(this.sim, false);
+    const zone = buyZoneStatus(this.sim, p, false);
     this.hud.setBuyHint(zone.ok && !this.buyMenu.open && this.params.world === 'city');
-    const swap = this.pickups.swapCandidate;
+    const swap = this.pickups.swapCandidate(p.id);
     let prompt: string | null = null;
     if (swap?.item.kind === 'weapon' && p.alive) {
       const def = WEAPONS[swap.item.weapon];
@@ -661,7 +768,7 @@ export class Game {
   }
 
   private updateMinimap(): void {
-    const pos = this.sim.player.move.pos;
+    const pos = this.me.move.pos;
     const encounters = this.encounters;
     this.minimap.draw({
       x: pos.x,
@@ -671,16 +778,17 @@ export class Game {
       showZones: this.params.world === 'city',
       encounters: encounters?.nearbyEncounters(pos.x, pos.z) ?? [],
       // Only bots that are fighting you show up: no free wallhacks.
-      enemies: encounters?.bots.filter((b) => b.actor.alive && b.state === 'engage').map((b) => b.actor.move.pos) ?? [],
+      enemies: this.sim.actors.filter((a) => a.alive && a.engaging).map((a) => a.move.pos),
+      allies: this.allies().map((a) => ({ x: a.move.pos.x, z: a.move.pos.z, alive: a.alive })),
       pickups: this.pickups.items,
-      stash: this.pickups.stashPos,
+      stash: this.pickups.stashPos(this.me.id),
     });
   }
 
   private updateDebug(): void {
     const f = this.debug.frameStats();
     const info = this.renderer.renderer.info;
-    const p = this.sim.player;
+    const p = this.me;
     const m = p.move;
     const chunk = this.streamer.getChunkAt(m.pos.x, m.pos.z);
     this.debug.set([
@@ -699,7 +807,8 @@ export class Game {
       ['speed', `${(Math.hypot(m.vel.x, m.vel.z) / HU).toFixed(0)} HU/s  vy ${(m.vel.y / HU).toFixed(0)}`],
       ['state', `${m.onGround ? 'ground' : 'air'}${m.ducked ? ' ducked' : ''}${m.noclip ? ' NOCLIP' : ''}  stuck ${m.stuckEvents}`],
       ['bots', `${this.encounters?.aliveCount ?? 0} alive  paths ${this.encounters?.pathQueries ?? 0}  snaps ${stuckSnaps}`],
-      ['money', `$${this.sim.economy.money}  cleared ${this.sim.cleared.size}`],
+      ['money', `$${p.money}  cleared ${this.sim.cleared.size}`],
+      ...this.netDebug(),
       ['seed', this.params.seedText],
     ]);
   }
@@ -709,9 +818,9 @@ export class Game {
   private botTorches(darkness: number): ReadonlySet<number> {
     const set = this.torchSet;
     set.clear();
-    if (darkness < 0.25 || !this.encounters) return set;
-    for (const b of this.encounters.bots) {
-      if (b.actor.alive && b.state !== 'idle' && b.state !== 'overwatch') set.add(b.actor.id);
+    if (darkness < 0.25) return set;
+    for (const a of this.sim.actors) {
+      if (a.alive && a.flashlight && a.team === Team.Bots) set.add(a.id);
     }
     return set;
   }
@@ -722,6 +831,87 @@ export class Game {
     this.roofTo.set(x, -40, z);
     this.sim.world.traceRay(this.roofTrace, this.roofFrom, this.roofTo, MASK_SHOT);
     return this.roofTrace.fraction < 1 ? this.roofTrace.endY : -Infinity;
+  }
+
+  /** Buy through the host online, directly in a local game. */
+  /** Message on the title/pause menu (connection progress and errors). */
+  setMenuStatus(text: string, busy = false): void {
+    this.menu.setStatus(text);
+    this.menu.setBusy(busy);
+  }
+
+  private buy(item: BuyItem): void {
+    if (this.online) this.online.net.sendBuy(item);
+    else buy(this.sim, this.me, item, this.engagedNearby());
+  }
+
+  /**
+   * Online frame: apply what the host sent (re-predicting our own player on top of it), send and
+   * predict one command per tick, and place everyone else between snapshots. Returns the
+   * interpolation alpha for our own (predicted) player.
+   */
+  private onlineTick(frameDt: number, now: number): number {
+    const online = this.online!;
+    const net = online.net;
+    const mirror = this.mirror!;
+    const prediction = this.prediction!;
+    const me = this.me;
+    if (!net.connected) {
+      online.leave(net.closedReason ?? 'Disconnected');
+      return 1;
+    }
+    for (const m of net.takeMessages()) {
+      if (mirror.applyMessage(m)) continue;
+      if (m.t === 'chat') this.chat?.add(m.from, m.text, now / 1000);
+      else if (m.t === 'scores') {
+        this.scores.clear();
+        for (const [id, , kills, deaths, money] of m.s) this.scores.set(id, { kills, deaths, money });
+      }
+    }
+    prediction.active = !this.loading && this.streamer.isLoaded(me.move.pos.x, me.move.pos.z);
+    const snap = net.takeSnapshot();
+    const seconds = now / 1000;
+    if (snap) {
+      const { x, y, z } = me.move.pos;
+      mirror.applySnapshot(snap, seconds);
+      prediction.reconcile(snap.ackCmd, snap.tick, snap.time, x, y, z);
+      this.gotSnapshot = true;
+    }
+    const alpha = this.loop.advance(frameDt, () => {
+      // Menus and maps release the mouse; buildCmd then sends an idle command.
+      this.input.buildCmd(this.cmd);
+      const seq = net.sendCmd(this.cmd, mirror.renderTime(seconds));
+      if (this.gotSnapshot) prediction.predict(seq, this.cmd);
+    });
+    mirror.interpolate(mirror.renderTime(seconds));
+    return alpha;
+  }
+
+  /** Chat fading and the Tab scoreboard (co-op). */
+  private updateCoopHud(now: number): void {
+    this.chat?.update(now);
+    const board = this.scoreboard;
+    if (!board) return;
+    const show = this.state === 'playing' && this.input.isHeld('Tab') && !this.chat?.open;
+    board.setVisible(show);
+    if (!show) return;
+    const rows = this.sim.players.map((p) => {
+      const s = this.scores.get(p.id);
+      return { id: p.id, name: p.name, kills: s?.kills ?? 0, deaths: s?.deaths ?? 0, money: p === this.me ? p.money : (s?.money ?? 0), alive: p.alive };
+    });
+    rows.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+    const code = this.online?.code ? `  ·  ROOM ${this.online.code}` : '';
+    board.render(`CO-OP  ·  ${rows.length} PLAYER${rows.length === 1 ? '' : 'S'}${code}`, rows, this.me.id);
+  }
+
+  private netDebug(): [string, string][] {
+    const net = this.online?.net;
+    if (!net) return [];
+    return [
+      ['net', `rtt ${net.rtt.toFixed(0)} ms  snaps ${net.snapshotsIn}  in ${(net.bytesIn / 1024).toFixed(0)} KB  out ${(net.bytesOut / 1024).toFixed(0)} KB`],
+      ['predict', `corrections ${this.prediction?.corrections ?? 0}  last ${(this.prediction?.lastError ?? 0).toFixed(3)} m`],
+      ['players', this.sim.players.map((p) => p.name).join(', ')],
+    ];
   }
 
   dispose(): void {

@@ -22,6 +22,8 @@ export interface MinimapView {
   showZones: boolean;
   encounters: { cx: number; cz: number; active: boolean }[];
   enemies: { x: number; z: number }[];
+  /** Other players (co-op); dead ones are drawn as crosses. */
+  allies?: { x: number; z: number; alive: boolean }[];
   /** Items on the ground. */
   pickups: readonly { pos: { x: number; z: number }; item: { kind: string }; stash: boolean }[];
   /** Where the player's death stash lies. */
@@ -165,6 +167,19 @@ export class Minimap implements StreamerListener {
       ctx.fill();
     }
 
+    // Teammates: blue dots, pinned to the rim when out of range.
+    for (const t of v.allies ?? []) {
+      let dx = t.x - v.x;
+      let dz = t.z - v.z;
+      const l = Math.hypot(dx, dz);
+      if (l > range * 0.9) {
+        dx = (dx / l) * range * 0.9;
+        dz = (dz / l) * range * 0.9;
+      }
+      const [sx, sy] = toScreen(dx, dz);
+      drawAlly(ctx, sx, sy, this.dpr, t.alive);
+    }
+
     // Nearest buy zone off the radar: a "$" on the rim pointing at it.
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -214,6 +229,30 @@ export class Minimap implements StreamerListener {
     ctx.stroke();
     ctx.restore();
   }
+}
+
+export const ALLY = '#5aa9ff';
+
+/** Teammate marker: a blue dot with a dark rim (a cross when they're down). */
+export function drawAlly(ctx: CanvasRenderingContext2D, x: number, y: number, k: number, alive: boolean): void {
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.lineWidth = 1.5 * k;
+  if (!alive) {
+    ctx.strokeStyle = ALLY;
+    ctx.lineWidth = 2 * k;
+    ctx.beginPath();
+    ctx.moveTo(x - 3.5 * k, y - 3.5 * k);
+    ctx.lineTo(x + 3.5 * k, y + 3.5 * k);
+    ctx.moveTo(x + 3.5 * k, y - 3.5 * k);
+    ctx.lineTo(x - 3.5 * k, y + 3.5 * k);
+    ctx.stroke();
+    return;
+  }
+  ctx.fillStyle = ALLY;
+  ctx.beginPath();
+  ctx.arc(x, y, 4 * k, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
 }
 
 /** Death stash marker: a dark disc with a light-blue bag, shared with the world map. */

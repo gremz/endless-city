@@ -4,12 +4,12 @@ import { describe, expect, it } from 'vitest';
  * The simulation must stay headless (testable in Node, network-ready): these folders may not
  * import three.js or touch the DOM, and generation/simulation code may not use Math.random.
  */
-const SOURCES = import.meta.glob<string>(['./{core,physics,player,weapons,ai,world,sim}/**/*.ts', '!./**/*.test.ts'], {
+const SOURCES = import.meta.glob<string>(['./{core,physics,player,weapons,ai,world,sim,net}/**/*.ts', '!./**/*.test.ts'], {
   query: '?raw',
   import: 'default',
   eager: true,
 });
-const ALLOWED = new Set(['core/settings.ts', 'player/CameraController.ts', 'world/WorkerChunkSource.ts', 'world/gen.worker.ts', 'physics/testUtil.ts']);
+const ALLOWED = new Set(['core/settings.ts', 'player/CameraController.ts', 'world/WorkerChunkSource.ts', 'world/gen.worker.ts', 'physics/testUtil.ts', 'net/Session.ts', 'net/host.worker.ts']);
 const NO_RANDOM = ['world/gen', 'sim', 'weapons', 'physics', 'player'];
 
 describe('architecture boundaries', () => {

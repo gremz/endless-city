@@ -72,7 +72,7 @@ function played(): { save: SaveData; time: number } {
   const bot = makeActor(sim.newActorId(), 'Bot', Team.Bots, 30, 0.05, 30);
   p.alive = false;
   pickups.onHit(sim, { attacker: bot, victim: p, def: bot.inv.secondary!.def, group: 0, distance: 5, damageScale: 1, penetrated: false, pos: p.move.pos }, true);
-  sim.respawnPlayer(40, 40);
+  sim.respawnPlayer(sim.player, 40, 40);
   p.inv = makeInventory('glock', 'm4a4');
   p.inv.primary!.clip = 11;
   p.inv.primary!.reserve = 33;
@@ -85,13 +85,13 @@ function played(): { save: SaveData; time: number } {
   p.medkits = 2;
   p.yaw = 1.25;
   p.pitch = -0.2;
-  sim.economy.money = 4321;
+  sim.player.money = 4321;
   sim.cleared.add(chunkKey(1, 0));
   encounters.restore([
     { key: chunkKey(1, 0), level: 1, cleared: true, remaining: 0, spawnedOnce: true },
     { key: chunkKey(2, 0), level: 2, cleared: false, remaining: 2, spawnedOnce: true },
   ]);
-  const save = JSON.parse(JSON.stringify(captureSave(sim, pickups, encounters, [chunkKey(0, 0), chunkKey(1, 0)], 1234))) as unknown;
+  const save = JSON.parse(JSON.stringify(captureSave(sim, sim.player, pickups, encounters, [chunkKey(0, 0), chunkKey(1, 0)], 1234))) as unknown;
   const valid = validateSave(save);
   expect(valid).not.toBeNull();
   return { save: valid!, time: sim.time };
@@ -104,13 +104,13 @@ describe('save games', () => {
     expect(params).toMatchObject({ seed: save.seed, seedText: 'abc', world: 'city', debug: true });
 
     const { sim, pickups, encounters } = world(`?seed=${save.seedText}`);
-    applyWorldSave(save, sim, pickups, encounters);
+    applyWorldSave(save, sim, pickups, encounters, sim.player.id);
     load(sim, pickups);
-    applyPlayerSave(save.player, sim.player);
+    applyPlayerSave(save.player, sim.player, save.money);
     const p = sim.player;
 
     expect(sim.time).toBe(time);
-    expect(sim.economy.money).toBe(4321);
+    expect(sim.player.money).toBe(4321);
     expect([...sim.cleared]).toEqual([chunkKey(1, 0)]);
     expect(p).toMatchObject({ alive: true, health: 64, armor: 80, helmet: true, medkits: 2, yaw: 1.25, pitch: -0.2 });
     expect(p.inv.active).toBe('primary');
@@ -129,7 +129,7 @@ describe('save games', () => {
     const stash = pickups.items.filter((i) => i.stash);
     expect(stash.map((i) => i.item.kind === 'weapon' && i.item.weapon).sort()).toEqual(['ak47', 'deagle', false]);
     expect(stash.every((i) => i.expiresAt === Infinity)).toBe(true);
-    expect(pickups.stashPos!.x).toBeCloseTo(5, 0);
+    expect(pickups.stashPos(sim.player.id)!.x).toBeCloseTo(5, 0);
 
     expect(encounters.isCleared(chunkKey(1, 0))).toBe(true);
     expect(encounters.states.get(chunkKey(2, 0))).toMatchObject({ remaining: 2, cleared: false, level: 2, cx: 2, cz: 0 });
@@ -162,12 +162,12 @@ describe('save games', () => {
     expect(v).not.toBeNull();
     expect(v.pickups.drops.at(-1)!.item).toEqual({ kind: 'grenade', grenade: 'molotov', count: 1 });
     const { sim } = world();
-    applyPlayerSave(v.player, sim.player);
+    applyPlayerSave(v.player, sim.player, v.money);
     expect(grenadeTotal(sim.player.inv)).toBe(0);
     expect(sim.player.inv.grenade).toBeNull();
     // A save can't smuggle in more grenades than you can carry.
     s.player.grenades = { flashbang: 9, hegrenade: 9, smokegrenade: 9, molotov: 9 };
-    applyPlayerSave(validateSave(s)!.player, sim.player);
+    applyPlayerSave(validateSave(s)!.player, sim.player, 0);
     expect(grenadeTotal(sim.player.inv)).toBe(4);
   });
 
