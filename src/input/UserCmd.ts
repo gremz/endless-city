@@ -8,6 +8,8 @@ export const Buttons = {
   USE: 64,
   INSPECT: 128,
   BUY: 256,
+  HEAL: 512,
+  FLASHLIGHT: 1024,
 } as const;
 
 /** One tick of input, produced by the local player's Input or by a bot brain. */

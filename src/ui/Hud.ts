@@ -35,8 +35,22 @@ export class Hud {
   private deathTitle: HTMLDivElement;
   private deathHint: HTMLDivElement;
   private buyHint: HTMLDivElement;
+  private prompt: HTMLDivElement;
+  private promptText: string | null = null;
+  private medkitBox: HTMLDivElement;
+  private medkitCount: HTMLSpanElement;
+  private healBar: HTMLDivElement;
+  private healHint: HTMLDivElement;
+  private healFlash: HTMLDivElement;
+  private healUntil = 0;
+  private flashOverlay: HTMLDivElement;
+  private flashLevel = -1;
+  private nades: HTMLDivElement;
+  private nadeKey = '';
+  private clockEl: HTMLDivElement;
+  private clockKey = '';
   private lastGap = -1;
-  private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1 };
+  private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1, kits: -1, heal: -1 };
   private clock = 0;
 
   constructor(parent: HTMLElement, private settings: Settings) {
@@ -48,14 +62,20 @@ export class Hud {
     this.helmetIcon = el('span.hud-helmet', { text: '⛑' });
     this.armorBox = el('div.hud-vital', {}, [el('span.hud-icon', { text: '◈' }), this.armor, this.helmetIcon]);
     this.money = el('div.hud-money', { text: '$800' });
+    this.medkitCount = el('span.hud-kits', { text: '×0' });
+    this.healBar = el('div.heal-bar');
+    this.medkitBox = el('div.hud-vital.hud-medkit.none', {}, [el('span.medkit-icon'), this.medkitCount, this.healBar]);
     const vitals = el('div.hud-vitals', {}, [
       this.money,
-      el('div.hud-row', {}, [el('div.hud-vital', {}, [el('span.hud-icon', { text: '✚' }), this.health]), this.armorBox]),
+      el('div.hud-row', {}, [el('div.hud-vital', {}, [el('span.hud-icon', { text: '✚' }), this.health]), this.armorBox, this.medkitBox]),
     ]);
     this.ammo = el('span.hud-ammo', { text: '20' });
     this.reserve = el('span.hud-reserve', { text: '/ 120' });
     this.weaponName = el('div.hud-weapon', { text: 'Glock-18' });
-    const ammoBox = el('div.hud-ammo-box', {}, [this.weaponName, el('div', {}, [this.ammo, this.reserve])]);
+    this.nades = el('div.hud-nades');
+    const ammoBox = el('div.hud-ammo-box', {}, [this.nades, this.weaponName, el('div', {}, [this.ammo, this.reserve])]);
+    this.flashOverlay = el('div.flash-overlay');
+    this.clockEl = el('div.hud-clock');
     this.hitMarker = el('div.hitmarker', {}, [0, 1, 2, 3].map((i) => el(`div.hm.hm-${i}`)));
     this.feed = el('div.killfeed');
     this.scope = el('div.scope', {}, [el('div.scope-h'), el('div.scope-v')]);
@@ -64,12 +84,17 @@ export class Hud {
     this.arcs = el('div.dmg-arcs');
     this.compass = el('div.compass');
     this.buyHint = el('div.buy-hint', { text: 'Press B to buy' });
+    this.healHint = el('div.heal-hint', { text: 'Press H to use a medkit' });
+    this.prompt = el('div.use-prompt');
+    this.healFlash = el('div.heal-flash');
     this.deathTitle = el('div.death-title');
     this.deathHint = el('div.death-hint');
     this.death = el('div.death', {}, [this.deathTitle, this.deathHint]);
     this.death.hidden = true;
     this.root = el('div.hud', {}, [
+      this.flashOverlay,
       this.damageFlash,
+      this.healFlash,
       this.scope,
       this.crosshair,
       this.hitMarker,
@@ -79,11 +104,16 @@ export class Hud {
       this.feed,
       this.center,
       this.compass,
+      this.clockEl,
       this.buyHint,
+      this.healHint,
+      this.prompt,
       this.death,
     ]);
     this.scope.hidden = true;
     this.buyHint.hidden = true;
+    this.healHint.hidden = true;
+    this.prompt.hidden = true;
     parent.append(this.root);
     this.applyCrosshairStyle();
   }
@@ -131,19 +161,78 @@ export class Hud {
     }
   }
 
-  setAmmo(name: string, clip: number, reserve: number, melee: boolean): void {
+  /** Ammo readout: a gun shows clip / reserve, a grenade its count, the knife nothing. */
+  setAmmo(name: string, clip: number, reserve: number, kind: 'gun' | 'melee' | 'count'): void {
     const l = this.last;
     if (name !== l.name) {
       this.weaponName.textContent = name;
       l.name = name;
+      l.clip = -1;
     }
     if (clip !== l.clip || reserve !== l.res) {
-      this.ammo.textContent = melee ? '' : String(clip);
-      this.reserve.textContent = melee ? '' : `/ ${reserve}`;
-      this.ammo.classList.toggle('low', !melee && clip <= 5);
+      this.ammo.textContent = kind === 'melee' ? '' : kind === 'count' ? `×${clip}` : String(clip);
+      this.reserve.textContent = kind === 'gun' ? `/ ${reserve}` : '';
+      this.ammo.classList.toggle('low', kind === 'gun' && clip <= 5);
       l.clip = clip;
       l.res = reserve;
     }
+  }
+
+  /** Grenade belt above the ammo box: one chip per carried grenade, the selected type lit. */
+  setGrenades(list: readonly { label: string; count: number; kind: string }[], selected: string, inHand: boolean): void {
+    const key = `${list.map((g) => `${g.kind}${g.count}`).join()}|${selected}|${inHand}`;
+    if (key === this.nadeKey) return;
+    this.nadeKey = key;
+    const chips: HTMLElement[] = [];
+    for (const g of list) {
+      for (let i = 0; i < g.count; i++) {
+        const chip = el(`span.nade-chip.nade-${g.kind}`, { text: g.label });
+        if (g.kind === selected) chip.classList.add(inHand ? 'active' : 'selected');
+        chips.push(chip);
+      }
+    }
+    this.nades.replaceChildren(...chips);
+  }
+
+  /** Time of day under the radar: sun or moon, HH:MM and the weather. */
+  setClock(hour: number, daylight: number, weather: string): void {
+    const h = Math.floor(hour);
+    const m = Math.floor((hour - h) * 6) * 10;
+    const icon = daylight > 0.5 ? '☀' : '☾';
+    const sky = weather === 'clear' ? '' : `  ·  ${weather}`;
+    const key = `${icon} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${sky}`;
+    if (key === this.clockKey) return;
+    this.clockKey = key;
+    this.clockEl.textContent = key;
+  }
+
+  /** Flashbang whiteout, 0..1. */
+  setFlash(v: number): void {
+    const q = Math.round(v * 100) / 100;
+    if (q === this.flashLevel) return;
+    this.flashLevel = q;
+    this.flashOverlay.style.opacity = String(q);
+  }
+
+  /** Carried medkits, and 0..1 progress of the one being applied (0 = not healing). */
+  setMedkits(count: number, healProgress: number, hint: boolean): void {
+    const l = this.last;
+    if (count !== l.kits) {
+      this.medkitCount.textContent = `×${count}`;
+      this.medkitBox.classList.toggle('none', count <= 0);
+      l.kits = count;
+    }
+    if (healProgress !== l.heal) {
+      this.healBar.style.transform = `scaleX(${healProgress})`;
+      this.healBar.classList.toggle('active', healProgress > 0);
+      l.heal = healProgress;
+    }
+    this.healHint.hidden = !hint;
+  }
+
+  healed(): void {
+    this.healUntil = this.clock + 0.35;
+    this.healFlash.classList.add('show');
   }
 
   setMoney(money: number): void {
@@ -173,6 +262,14 @@ export class Hud {
 
   setBuyHint(on: boolean): void {
     this.buyHint.hidden = !on;
+  }
+
+  /** Interaction prompt under the crosshair (e.g. weapon swap), or null to hide. */
+  setPrompt(text: string | null): void {
+    if (text === this.promptText) return;
+    this.promptText = text;
+    this.prompt.hidden = text === null;
+    if (text !== null) this.prompt.replaceChildren(el('kbd', { text: 'E' }), ` ${text}`);
   }
 
   hit(kind: 'body' | 'head' | 'kill'): void {
@@ -232,6 +329,7 @@ export class Hud {
     if (this.clock > this.hitUntil) this.hitMarker.classList.remove('show');
     if (this.clock > this.centerUntil) this.center.classList.remove('show');
     if (this.clock > this.dmgUntil) this.damageFlash.classList.remove('show');
+    if (this.clock > this.healUntil) this.healFlash.classList.remove('show');
     for (const f of this.feedEntries) {
       const age = this.clock - f.born;
       if (age > 6) f.node.style.opacity = String(Math.max(0, 1 - (age - 6)));

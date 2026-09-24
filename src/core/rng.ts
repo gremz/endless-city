@@ -64,6 +64,9 @@ export const Salt = {
   Tint: 8,
   Spread: 9,
   Bot: 10,
+  Pickups: 11,
+  Loot: 12,
+  Grenade: 13,
 } as const;
 
 /** Integer in [lo, hi] inclusive. */

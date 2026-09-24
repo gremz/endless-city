@@ -61,25 +61,26 @@ export class SettingsMenu {
     return el('label.set-row', {}, [el('span.set-label', { text: label }), input]);
   }
 
+  /** Drop-down for a setting with a fixed set of values. */
+  private select<K extends keyof Settings>(label: string, key: K, options: readonly (readonly [Settings[K], string])[]): HTMLElement {
+    const sel = el('select');
+    options.forEach(([v, t], i) => {
+      const o = el('option', { value: String(i), text: t });
+      if (this.settings[key] === v) o.selected = true;
+      sel.append(o);
+    });
+    sel.addEventListener('change', () => {
+      this.settings[key] = options[Number(sel.value)][0];
+      this.onChange();
+    });
+    return el('label.set-row', {}, [el('span.set-label', { text: label }), sel]);
+  }
+
   private build(): void {
     const s = this.settings;
     const color = el('input', { type: 'color', value: s.crosshairColor });
     color.addEventListener('input', () => {
       s.crosshairColor = color.value;
-      this.onChange();
-    });
-    const shadows = el('select');
-    for (const [v, t] of [
-      [0, 'Off'],
-      [1024, 'Medium'],
-      [2048, 'High'],
-    ] as const) {
-      const o = el('option', { value: String(v), text: t });
-      if (s.shadows === v) o.selected = true;
-      shadows.append(o);
-    }
-    shadows.addEventListener('change', () => {
-      s.shadows = Number(shadows.value) as Settings['shadows'];
       this.onChange();
     });
     this.form.replaceChildren(
@@ -99,12 +100,32 @@ export class SettingsMenu {
       this.check('Dynamic (shows spread)', 'crosshairDynamic'),
       el('div.set-group', { text: 'Audio' }),
       this.slider('Master volume', 'masterVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this.slider('Effects volume', 'sfxVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this.slider('Music volume', 'musicVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
       el('div.set-group', { text: 'Graphics' }),
-      el('label.set-row', {}, [el('span.set-label', { text: 'Shadows' }), shadows]),
+      this.select('Shadows', 'shadows', [
+        [0, 'Off'],
+        [1024, 'Medium'],
+        [2048, 'High'],
+      ]),
       this.slider('Render scale', 'renderScale', 0.5, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this.select('Rain particles', 'rainParticles', [
+        [0, 'Off'],
+        [0.5, 'Low'],
+        [1, 'High'],
+      ]),
       this.check('Show FPS / debug overlay', 'showFps'),
       el('div.set-group', { text: 'Gameplay' }),
       this.check('Auto bunny-hop (hold space)', 'autoBhop'),
+      this.select('Time of day', 'timeOfDay', [
+        ['cycle', 'Day/night cycle'],
+        ['day', 'Always day'],
+        ['night', 'Always night'],
+      ]),
+      this.select('Weather', 'weather', [
+        ['dynamic', 'Changing'],
+        ['clear', 'Always clear'],
+      ]),
     );
   }
 }

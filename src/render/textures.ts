@@ -333,7 +333,138 @@ function paintTex(): HTMLCanvasElement {
   return c;
 }
 
+/*
+ * Car textures are box-mapped (each face spans the whole texture, canvas top = face top) and
+ * near-white so the brush palette supplies the color.
+ */
+
+function carPaint(): HTMLCanvasElement {
+  const [c, ctx] = canvas(128);
+  const r = sfc32(111);
+  const n = [makeNoise(r, 4), makeNoise(r, 16)];
+  paint(ctx, (u, v) => {
+    const up = 1 - v;
+    // Darker towards the sills, a soft sky highlight along the shoulder line, faint flake.
+    const grad = 0.8 + 0.2 * Math.min(1, up * 1.4);
+    const band = Math.exp(-(((up - 0.78) / 0.07) ** 2)) * 0.1;
+    const f = (fbm(n, u, v) - 0.5) * 0.05 + (r() - 0.5) * 0.035;
+    const k = (grad + band + f) * 245;
+    return [clamp255(k), clamp255(k), clamp255(k + 2)];
+  });
+  return c;
+}
+
+function carGlass(): HTMLCanvasElement {
+  const [c, ctx] = canvas(128);
+  const S = 128;
+  const sky = ctx.createLinearGradient(0, 0, 0, S);
+  sky.addColorStop(0, '#6f8193');
+  sky.addColorStop(0.45, '#2c3642');
+  sky.addColorStop(1, '#161b22');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, S, S);
+  // Diagonal reflection streaks.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const [x, w, a] of [[34, 18, 0.14], [62, 7, 0.1]] as const) {
+    const g = ctx.createLinearGradient(x - w, 0, x + w, 0);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.5, `rgba(255,255,255,${a})`);
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.setTransform(1, 0, -0.6, 1, 0.6 * S * 0.5, 0);
+    ctx.fillRect(x - w, 0, w * 2, S);
+  }
+  ctx.restore();
+  // Rubber seal.
+  ctx.strokeStyle = '#0b0b0c';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, S - 6, S - 6);
+  return c;
+}
+
+function carWheel(): HTMLCanvasElement {
+  const [c, ctx] = canvas(128);
+  const r = sfc32(122);
+  const S = 128;
+  const m = S / 2;
+  // Wheel-arch shadow.
+  ctx.fillStyle = '#0c0c0c';
+  ctx.fillRect(0, 0, S, S);
+  // Tire with speckled tread.
+  ctx.fillStyle = '#202020';
+  ctx.beginPath();
+  ctx.arc(m, m, m - 2, 0, Math.PI * 2);
+  ctx.fill();
+  for (let i = 0; i < 400; i++) {
+    const a = r() * Math.PI * 2;
+    const d = 40 + r() * 21;
+    const k = 24 + r() * 22;
+    ctx.fillStyle = `rgb(${k | 0},${k | 0},${k | 0})`;
+    ctx.fillRect(m + Math.cos(a) * d, m + Math.sin(a) * d, 1.5, 1.5);
+  }
+  // Rim.
+  const rim = ctx.createRadialGradient(m - 8, m - 8, 4, m, m, 40);
+  rim.addColorStop(0, '#d6d8dc');
+  rim.addColorStop(0.7, '#9a9da3');
+  rim.addColorStop(1, '#5e6166');
+  ctx.fillStyle = rim;
+  ctx.beginPath();
+  ctx.arc(m, m, 38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#3a3c40';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // Spoke gaps.
+  ctx.fillStyle = '#18191b';
+  for (let i = 0; i < 5; i++) {
+    const a0 = (i / 5) * Math.PI * 2 - Math.PI / 2 + 0.3;
+    const a1 = a0 + 0.62;
+    ctx.beginPath();
+    ctx.arc(m, m, 32, a0, a1);
+    ctx.arc(m, m, 14, a1 - 0.1, a0 + 0.1, true);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Center cap and lug ring.
+  ctx.fillStyle = '#b4b7bc';
+  ctx.beginPath();
+  ctx.arc(m, m, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#4a4c50';
+  ctx.beginPath();
+  ctx.arc(m, m, 3, 0, Math.PI * 2);
+  ctx.fill();
+  return c;
+}
+
+function carTrim(): HTMLCanvasElement {
+  const [c, ctx] = canvas(64);
+  const r = sfc32(133);
+  paint(ctx, (u, v) => {
+    // Bevel: lit top edge, shaded bottom edge, so lenses and plates read as separate parts.
+    const edge = Math.min(u, 1 - u, v, 1 - v);
+    let k = 225 + (r() - 0.5) * 10;
+    if (edge < 0.1) k += v < 0.5 ? 25 : -60;
+    return [clamp255(k), clamp255(k), clamp255(k)];
+  });
+  return c;
+}
+
+/** Frosted lamp glass (it glows through the material's emissive at night). */
+function lampGlass(): HTMLCanvasElement {
+  const [c, ctx] = canvas(16);
+  ctx.fillStyle = '#ece6d4';
+  ctx.fillRect(0, 0, 16, 16);
+  return c;
+}
+
 const PAINTERS: Record<number, () => HTMLCanvasElement> = {
+  [Material.LampGlow]: lampGlass,
+  [Material.CarPaint]: carPaint,
+  [Material.CarGlass]: carGlass,
+  [Material.CarWheel]: carWheel,
+  [Material.CarTrim]: carTrim,
   [Material.Paint]: paintTex,
   [Material.Concrete]: concrete,
   [Material.Plaster]: plaster,

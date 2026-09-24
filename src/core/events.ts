@@ -33,9 +33,28 @@ export type SimEvent =
   | { type: 'chunkCleared'; chunkKey: number; bonus: number; level: number }
   | { type: 'respawn'; actorId: number }
   | { type: 'buy'; item: string; ok: boolean; reason?: string }
-  | { type: 'message'; text: string };
+  | { type: 'pickup'; actorId: number; /** 'medkit', 'ammo' or a weapon id. */ item: string; pos: Vec3; amount: number }
+  | { type: 'heal'; actorId: number; phase: 'start' | 'done' | 'cancel'; amount: number }
+  | { type: 'message'; text: string }
+  | { type: 'nade_pin'; actorId: number; weapon: string }
+  | { type: 'nade_throw'; actorId: number; weapon: string }
+  | { type: 'nade_bounce'; pos: Vec3; speed: number; material: number }
+  | {
+      type: 'nade_detonate';
+      /** Grenade id. */
+      kind: string;
+      pos: Vec3;
+      /** Molotov that burst in the air (no fire). */
+      airburst: boolean;
+      /** Surface under the burst, for scorch marks. */
+      normal: Vec3 | null;
+      chunkKey: number;
+    }
+  | { type: 'flashed'; actorId: number; strength: number; duration: number }
+  | { type: 'fire_out'; pos: Vec3 }
+  | { type: 'flashlight'; actorId: number; on: boolean };
 
-export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife';
+export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife' | 'grenade';
 
 /** Simple append-only queue drained once per frame by presentation. */
 export class EventQueue {

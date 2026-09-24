@@ -1,3 +1,4 @@
+import type { WeatherKind } from '../sim/Environment';
 import { fnv1a } from './rng';
 
 export type WorldKind = 'city' | 'gym' | 'range';
@@ -15,7 +16,13 @@ export interface GameParams {
   spawnCz: number;
   /** Simulation tick rate override. */
   tickRate: number;
+  /** Fixed hour of day (0..24), or null for the day/night cycle. */
+  hour: number | null;
+  /** Fixed weather, or null for the seeded forecast. */
+  weather: WeatherKind | null;
 }
+
+const WEATHERS: readonly WeatherKind[] = ['clear', 'overcast', 'rain', 'fog', 'storm'];
 
 export function parseParams(search: string, randomSeed: number): GameParams {
   const q = new URLSearchParams(search);
@@ -32,6 +39,8 @@ export function parseParams(search: string, randomSeed: number): GameParams {
   const spawn = (q.get('spawn') ?? '').split(',').map((v) => Number.parseInt(v, 10));
   const tickRate = Number.parseInt(q.get('tick') ?? '', 10);
   const level = Number.parseInt(q.get('level') ?? '', 10);
+  const hour = Number.parseFloat(q.get('time') ?? '');
+  const weatherRaw = q.get('weather') as WeatherKind | null;
   return {
     seed,
     seedText,
@@ -43,5 +52,7 @@ export function parseParams(search: string, randomSeed: number): GameParams {
     spawnCx: Number.isFinite(spawn[0]) ? spawn[0] : 0,
     spawnCz: Number.isFinite(spawn[1]) ? spawn[1] : 0,
     tickRate: Number.isFinite(tickRate) && tickRate >= 8 && tickRate <= 256 ? tickRate : 64,
+    hour: Number.isFinite(hour) ? ((hour % 24) + 24) % 24 : null,
+    weather: weatherRaw && WEATHERS.includes(weatherRaw) ? weatherRaw : null,
   };
 }

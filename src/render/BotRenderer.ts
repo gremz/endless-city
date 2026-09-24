@@ -38,6 +38,10 @@ export class BotRenderer {
   private color = new THREE.Color();
   private walkPhase = new Map<number, number>();
   private tilt = new THREE.Matrix4();
+  /** Flashlight beams on bots that are out hunting at night. */
+  private beams: THREE.InstancedMesh;
+  private beamMat!: THREE.MeshBasicMaterial;
+  private beamCount = 0;
 
   constructor(shadows: boolean) {
     const head = STAND_BOXES[0];
@@ -71,14 +75,43 @@ export class BotRenderer {
       this.meshes.push(mesh);
       this.root.add(mesh);
     }
+    this.beams = this.initBeams();
+  }
+
+  private initBeams(): THREE.InstancedMesh {
+    // A long open cone, narrow end at the origin, opening towards -Z.
+    const geo = new THREE.CylinderGeometry(1.5, 0.04, 9, 16, 1, true);
+    geo.translate(0, 4.5, 0);
+    geo.rotateX(-Math.PI / 2);
+    this.beamMat = new THREE.MeshBasicMaterial({
+      color: '#fff1d6',
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.InstancedMesh(geo, this.beamMat, MAX);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
+    mesh.count = 0;
+    mesh.name = 'bot-torch';
+    this.root.add(mesh);
+    return mesh;
   }
 
   setShadows(on: boolean): void {
     for (const m of this.meshes) m.castShadow = on;
   }
 
-  /** Rebuild all instances for this frame. */
-  update(actors: readonly Actor[], playerId: number, alpha: number, time: number, frameDt: number): void {
+  /**
+   * Rebuild all instances for this frame. `torches` are actors carrying a lit flashlight;
+   * `torchLevel` (0..1) is how dark it is.
+   */
+  update(actors: readonly Actor[], playerId: number, alpha: number, time: number, frameDt: number, torches?: ReadonlySet<number>, torchLevel = 0): void {
+    this.torches = torchLevel > 0.05 ? torches ?? null : null;
+    this.beamMat.opacity = 0.07 * torchLevel;
+    this.beamCount = 0;
     let n = 0;
     for (const a of actors) {
       if (a.id === playerId) continue;
@@ -92,7 +125,11 @@ export class BotRenderer {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    this.beams.count = this.beamCount;
+    this.beams.instanceMatrix.needsUpdate = true;
   }
+
+  private torches: ReadonlySet<number> | null = null;
 
   private writeActor(a: Actor, i: number, alpha: number, time: number, frameDt: number): void {
     const m = a.move;
@@ -157,6 +194,22 @@ export class BotRenderer {
     // Gun at chest height pointing along aim.
     const gunY = shoulderY - 0.12 + Math.sin(aimPitch) * 0.3;
     place(7, 0.05, gunY, -0.42 - Math.cos(aimPitch) * 0.05, aimPitch, 0);
+    // Dropped their guns (dead bodies): hide the gun.
+    if (!a.alive && !a.inv.primary && !a.inv.secondary) this.meshes[7].setMatrixAt(i, this.m.makeScale(0, 0, 0));
+    if (a.alive && this.torches?.has(a.id)) {
+      // Torch taped under the barrel.
+      this.q.setFromEuler(this.e.set(aimPitch, 0, 0, 'YXZ'));
+      this.local.compose(this.v.set(0.05, gunY - 0.05, -0.7), this.q, this.s.set(1, 1, 1));
+      this.m.multiplyMatrices(this.root4, this.local);
+      this.beams.setMatrixAt(this.beamCount++, this.m);
+    }
+    if (a.alive && a.inv.active === 'grenade') {
+      // Grenade in hand: a small lump raised by the head, ready to throw.
+      this.q.setFromEuler(this.e.set(0, 0, 0, 'YXZ'));
+      this.local.compose(this.v.set(0.22, shoulderY + 0.12, -0.12), this.q, this.s.set(1.1, 1, 0.14));
+      this.m.multiplyMatrices(this.root4, this.local);
+      this.meshes[7].setMatrixAt(i, this.m);
+    }
   }
 
   dispose(): void {

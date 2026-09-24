@@ -10,6 +10,7 @@ import { Occupancy, rect, rd, rw, type GenContext, type Rect } from './genContex
 import { splitLot, typeParcels } from './lots';
 import { bakeMeshes } from './meshBake';
 import { bakeNav } from './navBake';
+import { placePickups } from './pickups';
 import { lowWalls, scatterProps } from './props';
 import { buildLot, buildStreets, CURB, LOT0, LOT1 } from './streets';
 
@@ -101,6 +102,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
   const meshes = bakeMeshes(brushes);
   const nav = bakeNav(brushes);
   const enc = placeEncounters(sfc32(hash3(seed, cx, cz, Salt.Encounter)), nav, cx, cz, level, ctx.perches);
+  const pickups = placePickups(sfc32(hash3(seed, cx, cz, Salt.Pickups)), nav, cx, cz, enc.hasEncounter, district.id === District.Spawn);
 
   return {
     cx,
@@ -117,6 +119,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     spawns: enc.spawns,
     perches: enc.perches,
     patrol: enc.patrol,
+    pickups,
     hasEncounter: enc.hasEncounter,
     genMs: performance.now() - t0,
   };

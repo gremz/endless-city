@@ -1,17 +1,27 @@
-import { BUY_MENU, WEAPONS } from '../weapons/weaponDefs';
-import type { BuyItem } from '../sim/buy';
+import { BUY_MENU, WEAPONS, type BuyItem, type WeaponSlot } from '../weapons/weaponDefs';
 import { el } from './dom';
 
 export interface BuyMenuModel {
   money: number;
   price(item: BuyItem): number;
-  owned(item: BuyItem): boolean;
+  /** Why the item can't be bought (owned, ammo full...), or null. */
+  unavailable(item: BuyItem): string | null;
   zone(): { ok: boolean; reason: string };
+  /** Name of the gun in a slot, for the ammo rows. */
+  slotWeapon(slot: WeaponSlot): string | null;
 }
 
-const GEAR_NAMES: Record<string, string> = { kevlar: 'Kevlar Vest', helmet: 'Kevlar + Helmet' };
+const NAMES: Record<string, string> = {
+  kevlar: 'Kevlar Vest',
+  helmet: 'Kevlar + Helmet',
+  ammo_primary: 'Primary ammo',
+  ammo_secondary: 'Secondary ammo',
+};
 
-const itemName = (item: BuyItem) => (item === 'kevlar' || item === 'helmet' ? GEAR_NAMES[item] : WEAPONS[item].name);
+export const itemName = (item: BuyItem) => NAMES[item] ?? WEAPONS[item as keyof typeof WEAPONS].name;
+
+/** Short label for an unavailable row, in place of the price. */
+const unavailableLabel = (reason: string) => (reason === 'Already owned' ? 'owned' : reason === 'Ammo full' ? 'full' : '—');
 
 /** CS-style keyboard buy menu: pick a category with a number key, then an item. */
 export class BuyMenu {
@@ -86,13 +96,18 @@ export class BuyMenu {
       rows.push(el('div.buy-cat', { text: c.title }));
       c.items.forEach((item, i) => {
         const price = this.model.price(item);
-        const owned = this.model.owned(item);
+        const unavailable = this.model.unavailable(item);
+        let name = itemName(item);
+        if (item === 'ammo_primary' || item === 'ammo_secondary') {
+          const gun = this.model.slotWeapon(item === 'ammo_primary' ? 'primary' : 'secondary');
+          if (gun) name += ` (${gun})`;
+        }
         const row = el('div.buy-row', {}, [
           el('kbd', { text: String(i + 1) }),
-          el('span.buy-name', { text: itemName(item) }),
-          el('span.buy-price', { text: owned ? 'owned' : `$${price}` }),
+          el('span.buy-name', { text: name }),
+          el('span.buy-price', { text: unavailable ? unavailableLabel(unavailable) : `$${price}` }),
         ]);
-        if (owned || price > this.model.money || !zone.ok) row.classList.add('disabled');
+        if (unavailable || price > this.model.money || !zone.ok) row.classList.add('disabled');
         rows.push(row);
       });
     }

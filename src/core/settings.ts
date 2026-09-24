@@ -14,11 +14,18 @@ export interface Settings {
   crosshairDynamic: boolean;
   masterVolume: number;
   sfxVolume: number;
+  musicVolume: number;
   /** 0 = off, else shadow map size. */
   shadows: 0 | 1024 | 2048;
   renderScale: number;
   showFps: boolean;
   autoBhop: boolean;
+  /** Day/night: follow the clock, or keep it day or night. */
+  timeOfDay: 'cycle' | 'day' | 'night';
+  /** Seeded weather, or always clear skies. */
+  weather: 'dynamic' | 'clear';
+  /** Rain streak amount (0 off, 0.5 low, 1 high). */
+  rainParticles: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -35,10 +42,22 @@ export const DEFAULT_SETTINGS: Settings = {
   crosshairDynamic: true,
   masterVolume: 0.7,
   sfxVolume: 1,
+  musicVolume: 0.35,
   shadows: 2048,
   renderScale: 1,
   showFps: false,
   autoBhop: false,
+  timeOfDay: 'cycle',
+  weather: 'dynamic',
+  rainParticles: 1,
+};
+
+/** Allowed values for the settings that are really enums (stored as strings or numbers). */
+const CHOICES: Partial<Record<keyof Settings, readonly unknown[]>> = {
+  shadows: [0, 1024, 2048],
+  timeOfDay: ['cycle', 'day', 'night'],
+  weather: ['dynamic', 'clear'],
+  rainParticles: [0, 0.5, 1],
 };
 
 const KEY = 'owcs.settings.v1';
@@ -51,6 +70,7 @@ export function loadSettings(): Settings {
     const out = { ...DEFAULT_SETTINGS };
     for (const k of Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]) {
       if (k in parsed && typeof parsed[k] === typeof DEFAULT_SETTINGS[k]) {
+        if (CHOICES[k] && !CHOICES[k].includes(parsed[k])) continue;
         (out as Record<string, unknown>)[k] = parsed[k];
       }
     }

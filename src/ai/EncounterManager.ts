@@ -1,4 +1,5 @@
 import { CHUNK } from '../core/config';
+import type { SoundEventKind } from '../core/events';
 import { vec3, type Vec3 } from '../core/math';
 import { hash3, Salt, sfc32 } from '../core/rng';
 import { MASK_SHOT } from '../physics/brush';
@@ -6,20 +7,36 @@ import { makeTrace } from '../physics/trace';
 import { eyeHeight } from '../player/pmove';
 import { makeActor, Team, teleport } from '../sim/Actor';
 import type { Simulation, SimSystem } from '../sim/Simulation';
-import { makeInventory } from '../weapons/Inventory';
+import { addGrenades, makeInventory } from '../weapons/Inventory';
 import type { HitInfo } from '../weapons/WeaponSystem';
-import { chunkDist, chunkKey, worldToChunk } from '../world/chunkMath';
+import { chunkDist, chunkKey, keyToCoords, worldToChunk } from '../world/chunkMath';
 import type { ChunkData } from '../world/gen/ChunkData';
 import type { WorldStreamer } from '../world/WorldStreamer';
 import { Bot, TargetHistory, type BotContext, type BotRole, type Squad } from './Bot';
 import { BOT_NAMES, skillFor, weaponFor } from './difficulty';
 import { AStar } from './nav/astar';
 
+/** How far a sound carries: rain drowns out footsteps and quieter noises (not gunfire). */
+export function hearingRadius(kind: SoundEventKind, radius: number, rain: number): number {
+  if (kind === 'footstep') return radius * (1 - 0.5 * rain);
+  if (kind === 'reload') return radius * (1 - 0.3 * rain);
+  return radius;
+}
+
 const ACTIVATE_DIST = 90;
 const MIN_SPAWN_DIST = 25;
 const MAX_BOTS = 16;
 const DESPAWN_UNSEEN = 10;
 const BODY_TIME = 12;
+
+/** An encounter area as stored in a save: squads in progress are saved as their survivors. */
+export interface SavedEncounter {
+  key: number;
+  level: number;
+  cleared: boolean;
+  remaining: number;
+  spawnedOnce: boolean;
+}
 
 interface EncounterState {
   key: number;
@@ -74,7 +91,7 @@ export class EncounterManager implements SimSystem {
         cx: d.cx,
         cz: d.cz,
         level: this.levelOf(d),
-        cleared: false,
+        cleared: this.sim.cleared.has(d.key),
         remaining: skill.squadSize + (skill.overwatch && d.perches.length ? 1 : 0),
         squad: null,
         spawnedOnce: false,
@@ -95,9 +112,12 @@ export class EncounterManager implements SimSystem {
     if (sounds.length) {
       for (const s of sounds) {
         if (s.sourceId !== p.id) continue;
+        // Grenades give away that you're around, not where you are.
+        const reveal = s.kind !== 'grenade';
+        const radius = hearingRadius(s.kind, s.radius, sim.env.rain);
         for (const b of this.bots) {
           if (!b.actor.alive) continue;
-          b.hear(s.pos, this.losTo(b, s.pos) ? s.radius : s.radius * 0.6, sim.time);
+          b.hear(s.pos, this.losTo(b, s.pos) ? radius : radius * 0.6, sim.time, reveal);
         }
       }
     }
@@ -115,7 +135,7 @@ export class EncounterManager implements SimSystem {
     const from = vec3(a.x, a.y + 1.5, a.z);
     const to = vec3(pos.x, pos.y + 1.0, pos.z);
     this.sim.world.traceRay(this.tr, from, to, MASK_SHOT);
-    return this.tr.fraction >= 0.999;
+    return this.tr.fraction >= 0.999 && !this.sim.grenades.blocksSight(from, to);
   }
 
   /** Activation, despawn and clear checks (4 Hz). */
@@ -183,6 +203,7 @@ export class EncounterManager implements SimSystem {
       lastKnownTime: -100,
       calloutAt: Infinity,
       lastSeen: sim.time,
+      nextNadeAt: sim.time + 4,
     };
     const patrol: { x: number; y: number; z: number }[] = [];
     for (let i = 0; i < d.patrol.length; i += 3) patrol.push({ x: d.patrol[i], y: d.patrol[i + 1], z: d.patrol[i + 2] });
@@ -196,6 +217,11 @@ export class EncounterManager implements SimSystem {
       a.inv = makeInventory(isSecondary ? wid : 'glock', isSecondary ? null : wid);
       a.armor = skill.armor;
       a.helmet = skill.helmet;
+      if (role !== 'overwatch' && skill.nades > 0) {
+        // Own stream so grenades never change the rest of the spawn.
+        const gr = sfc32(hash3(sim.params.seed, a.id, st.level, Salt.Grenade));
+        for (let i = 0; i < skill.nades; i++) addGrenades(a.inv, skill.nadeKinds[Math.floor(gr() * skill.nadeKinds.length)], 1);
+      }
       teleport(a, pos.x, pos.y, pos.z);
       sim.addActor(a);
       const bot = new Bot(a, skill, squad, role, pos, patrol, sim.params.seed);
@@ -241,7 +267,11 @@ export class EncounterManager implements SimSystem {
       }
       if (killed) {
         this.deadBodies.push({ bot: victimBot, at: sim.time });
-        if (info.attacker === sim.player) sim.economy.add(info.def.killReward, 'kill');
+        if (info.attacker === sim.player) {
+          // Fighting in the dark pays a quarter more.
+          const night = sim.env.darkness > 0.5;
+          sim.economy.add(Math.round(info.def.killReward * (night ? 1.25 : 1)), night ? 'kill (night bonus)' : 'kill');
+        }
         this.checkCleared(victimBot.squad);
       }
     }
@@ -272,6 +302,34 @@ export class EncounterManager implements SimSystem {
       b.reset(this.sim.time);
       b.squad.lastKnown = null;
       b.squad.calloutAt = Infinity;
+    }
+  }
+
+  serialize(): SavedEncounter[] {
+    return [...this.states.values()].map((s) => ({
+      key: s.key,
+      level: s.level,
+      cleared: s.cleared,
+      // A squad in the field comes back later as its survivors, like a despawn.
+      remaining: s.remaining + (s.squad?.members.filter((m) => m.actor.alive).length ?? 0),
+      spawnedOnce: s.spawnedOnce,
+    }));
+  }
+
+  /** Recreate encounter progress from a save (before any chunk streams in). */
+  restore(list: readonly SavedEncounter[]): void {
+    for (const e of list) {
+      const [cx, cz] = keyToCoords(e.key);
+      this.states.set(e.key, {
+        key: e.key,
+        cx,
+        cz,
+        level: e.level,
+        cleared: e.cleared || this.sim.cleared.has(e.key),
+        remaining: e.remaining,
+        squad: null,
+        spawnedOnce: e.spawnedOnce,
+      });
     }
   }
 

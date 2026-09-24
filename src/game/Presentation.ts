@@ -5,16 +5,23 @@ import type { Settings } from '../core/settings';
 import type { Input } from '../input/Input';
 import type { CameraController } from '../player/CameraController';
 import { BotRenderer } from '../render/BotRenderer';
+import { GrenadeRenderer } from '../render/GrenadeRenderer';
+import { PickupRenderer } from '../render/PickupRenderer';
 import { Decals, MuzzleLight, Particles, Tracers } from '../render/fx/Effects';
 import type { Renderer } from '../render/Renderer';
 import { Viewmodel } from '../render/viewmodel/Viewmodel';
 import type { Simulation } from '../sim/Simulation';
+import { flashAmount } from '../sim/Grenades';
+import { healProgress } from '../sim/medkit';
+import type { Pickup } from '../sim/Pickups';
 import type { Hud } from '../ui/Hud';
 import { activeItem } from '../weapons/Inventory';
 import { getPattern, patternAt } from '../weapons/sprayPatterns';
 import { currentInaccuracy } from '../weapons/WeaponSystem';
-import { WEAPONS, type WeaponId } from '../weapons/weaponDefs';
+import { GRENADE_IDS, WEAPONS, type WeaponId } from '../weapons/weaponDefs';
 import type { SimEvent } from '../core/events';
+
+const NADE_LABELS: Record<string, string> = { hegrenade: 'HE', flashbang: 'FL', smokegrenade: 'SM', molotov: 'MO' };
 
 export interface EventSink {
   handle(e: SimEvent, sim: Simulation): void;
@@ -26,11 +33,18 @@ export interface EventSink {
  */
 export class Presentation {
   readonly bots: BotRenderer;
+  readonly pickupRenderer: PickupRenderer;
+  /** Items lying in the world (set by the game when pickups exist). */
+  pickups: readonly Pickup[] = [];
+  /** Bots with a lit flashlight (set by the game at night). */
+  torches: ReadonlySet<number> = new Set();
+  private torchLevel = 0;
   readonly viewmodel: Viewmodel;
   readonly tracers = new Tracers();
   readonly decals = new Decals();
   readonly particles = new Particles();
   readonly muzzleLight = new MuzzleLight();
+  readonly grenades: GrenadeRenderer;
   /** Extra event consumers (audio, kill rewards UI...). */
   readonly sinks: EventSink[] = [];
   private tmp = new THREE.Vector3();
@@ -45,8 +59,10 @@ export class Presentation {
     private settings: Settings,
   ) {
     this.bots = new BotRenderer(settings.shadows > 0);
+    this.pickupRenderer = new PickupRenderer(settings.shadows > 0);
+    this.grenades = new GrenadeRenderer(this.particles);
     const scene = renderer.scene;
-    scene.add(this.bots.root, this.tracers.mesh, this.decals.mesh, this.particles.points, this.muzzleLight.light);
+    scene.add(this.bots.root, this.pickupRenderer.root, this.grenades.root, this.tracers.mesh, this.decals.mesh, this.particles.points, this.muzzleLight.light);
     this.viewmodel = new Viewmodel(renderer.camera.aspect);
     this.viewmodel.setFovFromHorizontal43(settings.viewmodelFov);
     renderer.overlays.push({ scene: this.viewmodel.scene, camera: this.viewmodel.camera });
@@ -57,6 +73,7 @@ export class Presentation {
     this.viewmodel.setFovFromHorizontal43(this.settings.viewmodelFov);
     this.baseFov = this.renderer.camera.fov;
     this.bots.setShadows(this.settings.shadows > 0);
+    this.pickupRenderer.setShadows(this.settings.shadows > 0);
     this.hud.applyCrosshairStyle();
   }
 
@@ -128,8 +145,39 @@ export class Presentation {
         case 'land':
           if (e.actorId === player.id) this.viewmodel.onLand(e.speed);
           break;
+        case 'nade_throw':
+          if (e.actorId === player.id) this.viewmodel.onThrow();
+          break;
+        case 'nade_detonate': {
+          const pos = e.pos;
+          if (e.kind === 'hegrenade') {
+            this.particles.explosion(pos);
+            this.muzzleLight.flash(pos.x, pos.y + 0.5, pos.z, 5, 0.14, 24);
+            if (e.normal) this.decals.add(pos, e.normal, e.chunkKey, 2.4);
+          } else if (e.kind === 'flashbang') {
+            this.particles.flashPop(pos);
+            this.muzzleLight.flash(pos.x, pos.y, pos.z, 8, 0.07, 30);
+          } else if (e.kind === 'molotov') {
+            this.particles.glass(pos);
+            this.muzzleLight.flash(pos.x, pos.y + 0.4, pos.z, 3, 0.2, 12);
+            if (e.normal) this.decals.add(pos, e.normal, e.chunkKey, 2.2);
+          }
+          break;
+        }
         case 'message':
           this.hud.message(e.text);
+          break;
+        case 'pickup':
+          if (e.actorId !== player.id) break;
+          if (e.item === 'medkit') this.hud.message(`+1 Medkit  (${player.medkits})`, 1.4, 'heal');
+          else if (e.item === 'ammo') this.hud.message(`+${e.amount} rounds`, 1.4);
+          else this.hud.message(`Picked up ${WEAPONS[e.item as WeaponId]?.name ?? e.item}`, 1.6);
+          break;
+        case 'heal':
+          if (e.actorId === player.id && e.phase === 'done') {
+            this.hud.healed();
+            this.hud.message(`+${e.amount} HP`, 1.2, 'heal');
+          }
           break;
       }
       for (const s of this.sinks) s.handle(e, sim);
@@ -139,10 +187,12 @@ export class Presentation {
   update(sim: Simulation, alpha: number, frameDt: number): void {
     const p = sim.player;
     const simTime = sim.time + alpha * sim.dt;
-    this.bots.update(sim.actors, p.id, alpha, sim.time, frameDt);
+    this.bots.update(sim.actors, p.id, alpha, sim.time, frameDt, this.torches, this.torchLevel);
+    this.pickupRenderer.update(this.pickups, simTime, frameDt);
     this.tracers.update(frameDt);
     this.particles.update(frameDt);
     this.muzzleLight.update(frameDt);
+    this.grenades.update(sim.grenades, alpha, simTime, frameDt, this.renderer.camera.position);
 
     // Recoil view punch: the camera follows part of the spray pattern.
     const item = activeItem(p.inv);
@@ -170,10 +220,25 @@ export class Presentation {
 
     // HUD.
     this.hud.setVitals(p.health, p.armor, p.helmet);
-    this.hud.setAmmo(def.name, item.clip, item.reserve, def.category === 'knife');
+    this.hud.setMedkits(p.medkits, healProgress(p, simTime), p.alive && p.medkits > 0 && p.health <= 50 && p.healEnd < 0);
+    this.hud.setAmmo(def.name, item.clip, item.reserve, def.category === 'knife' ? 'melee' : def.category === 'grenade' ? 'count' : 'gun');
+    this.hud.setGrenades(
+      GRENADE_IDS.filter((id) => p.inv.nades[id] > 0).map((id) => ({ kind: id, label: NADE_LABELS[id], count: p.inv.nades[id] })),
+      p.inv.nadeSel,
+      p.inv.active === 'grenade',
+    );
+    this.hud.setFlash(p.alive ? flashAmount(p, simTime) : 0);
+    this.hud.setClock(sim.env.hour, sim.env.daylight, sim.env.weather);
     const inacc = currentInaccuracy(p) * 0.001;
     this.hud.setSpread(inacc, cam.fov * DEG, window.innerHeight, !scoped && p.alive);
     this.hud.update(frameDt);
+  }
+
+  /** World light level for things lit outside the scene (viewmodel) and tinted smoke. */
+  setWorldLight(viewmodel: number, daylight: number): void {
+    this.torchLevel = Math.max(0, Math.min(1, (0.75 - daylight) / 0.5));
+    this.viewmodel.setLightScale(viewmodel);
+    this.grenades.smokeColor.setScalar(0.8 * (0.22 + 0.78 * daylight));
   }
 
   onChunkUnloaded(key: number): void {
@@ -182,6 +247,8 @@ export class Presentation {
 
   dispose(): void {
     this.bots.dispose();
+    this.pickupRenderer.dispose();
+    this.grenades.dispose();
     this.viewmodel.dispose();
   }
 }

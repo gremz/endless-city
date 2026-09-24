@@ -35,6 +35,16 @@ export interface Actor {
   lastDealtAt: number;
   /** Distance accumulated towards the next footstep. */
   stepAccum: number;
+  /** Carried health packs. */
+  medkits: number;
+  /** Sim time the current medkit use finishes, or -1 when not healing. */
+  healEnd: number;
+  /** Flashbang blindness: when it started, when it ends, and peak whiteness (0..1). */
+  flashStart: number;
+  flashUntil: number;
+  flashPeak: number;
+  /** Flashlight switched on (players; makes you easier to spot at night). */
+  flashlight: boolean;
 }
 
 export function makeActor(id: number, name: string, team: TeamId, x: number, y: number, z: number): Actor {
@@ -62,6 +72,12 @@ export function makeActor(id: number, name: string, team: TeamId, x: number, y: 
     lastDamagedAt: -100,
     lastDealtAt: -100,
     stepAccum: 0,
+    medkits: 0,
+    healEnd: -1,
+    flashStart: -10,
+    flashUntil: -10,
+    flashPeak: 0,
+    flashlight: false,
   };
 }
 

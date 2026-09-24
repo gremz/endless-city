@@ -4,8 +4,8 @@ A browser first-person shooter with Counter-Strike movement and gunplay, set in 
 procedurally generated city. Clear bot squads to earn money, buy better guns, and push further
 from spawn, where the bots get sharper.
 
-Built with Vite, TypeScript and three.js. It uses no art or audio assets: textures, gun models
-and sounds are all generated in code.
+Built with Vite, TypeScript and three.js. It uses no art or audio assets: textures, gun models,
+sounds and music are all generated in code.
 
 ## Run
 
@@ -29,6 +29,8 @@ If `localhost` doesn't reach WSL from Windows, use the Network URL that Vite pri
 | `?nobots=1`, `?god=1` | No encounters / invulnerable |
 | `?spawn=cx,cz` | Spawn in another chunk |
 | `?tick=16` | Simulation tick rate (default 64), for checking interpolation |
+| `?time=22` | Fix the hour of day (0–24) instead of running the day/night cycle |
+| `?weather=rain` | Fix the weather: `clear`, `overcast`, `rain`, `fog` or `storm` |
 
 `/gen.html?seed=…` shows a top-down map of the generator output: layouts, nav reachability,
 spawn slots and perches.
@@ -36,10 +38,81 @@ spawn slots and perches.
 ## Controls
 
 WASD to move, mouse to aim and shoot, right mouse to scope. Space jumps, C crouches (Ctrl
-also works in fullscreen), and Shift walks silently. R reloads. 1/2/3 select weapons, Q
+also works in fullscreen), and Shift walks silently. R reloads. 1/2/3 select weapons and 4 selects grenades (press 4 again to cycle types), Q
 switches to the last weapon, and the mouse wheel cycles. F inspects the weapon. B opens the
-buy menu, which works only in the spawn area or areas you have cleared. Esc pauses. F3 toggles
-the debug overlay.
+buy menu, which works only in the spawn area or areas you have cleared. The Ammo category
+refills your reserve at a per-magazine price; `,` and `.` buy primary and secondary ammo
+without opening the menu. Red-cross health packs lie around the city (and bots sometimes drop one): walk over one to
+carry it (up to 3), and press H to use it for +50 HP. Using one takes a second and lowers your
+gun; H again or firing cancels and keeps the pack. The radar in the top-left corner shows buy zones in green, with a
+`$` on its rim pointing to the nearest one when it's out of range. M opens the city map.
+L toggles your flashlight. Esc pauses. F3 toggles the debug overlay.
+
+## Grenades
+
+The buy menu has a Grenades category: HE ($300), flashbang ($200), smoke ($300) and molotov
+($400). You can carry one of each, except flashbangs (two), and four in total. Hold the left
+mouse button to pull the pin and release to throw. The right button lobs the grenade
+underhand, and both buttons together throw it at medium strength.
+
+- **HE** explodes after 1.6 s and does up to 98 damage. The damage falls off with distance
+  and walls block it.
+- **Flashbang** blinds anyone who can see it. The effect lasts longest if you're looking at
+  it and close to it. Blinded bots stop shooting and back off, and a flashbang that blinds you
+  also muffles your hearing.
+- **Smoke** pops once the grenade stops rolling and lasts 18 s. Bots can't see or shoot
+  through it, but bullets still pass through.
+- **Molotov** bursts into fire on the first floor it hits. The fire burns for 7 s and armor
+  doesn't protect against it. Bots walk around fire, and a smoke puts it out.
+
+Bots from difficulty level 3 up carry grenades. Level 5 and up adds flashbangs and level 7 up
+adds molotovs. A bot throws a grenade when you break line of sight nearby, and uses a molotov
+if you hold one spot too long. Grenades go into your death stash with the rest of your gear,
+and dead bots drop theirs.
+
+## Day, night and weather
+
+A full day lasts 24 minutes, and a new game starts at 09:00. Night falls around 21:00. At
+night bots see about half as far, less when you stand under a street lamp. Turning on your
+flashlight lets you see, but bots spot you easily. Kills after dark pay 25% more. Bots out
+hunting carry flashlights, which gives them away too.
+
+The weather changes every few minutes and is seeded, so the same seed always has the same
+forecast. It can be clear, overcast, rain, fog or a thunderstorm. Rain covers the sound of
+your footsteps, and fog cuts everyone's view. The radar shows the time and the weather.
+Settings can fix the time of day, turn the weather off and lower the number of rain particles.
+
+## Loot, the city map and saving
+
+- **Drops.** Dead bots drop their guns, with whatever ammo was left in them, and they stay on
+  the ground for 60 s. Walk over a gun to take it if that slot is empty, or to take its ammo if
+  it's the gun you already carry. For a different gun, press E to swap: the one in your hand
+  goes on the ground.
+- **Corpse run.** When you die, your guns, ammo and medkits stay where you fell until you pick
+  them up. A light beam marks the spot, and so does a bag icon on the radar (pinned to the rim
+  when it's out of range) and on the map. If you die again before you get back to it, that
+  older pile is lost.
+- **City map (M).** Pauses the game and shows the city around you. Blocks you've explored are
+  drawn in detail, and the rest are coloured by district (Old Town, Downtown, Industrial). The
+  map also shows:
+  - danger rings for each difficulty level
+  - buy zones and cleared areas
+  - hostile areas you've come across
+  - spawn and your dropped gear
+
+  Drag to pan, scroll to zoom, C recenters, and M or Esc goes back to the game.
+- **Saving.** There is one save slot in localStorage, and it only exists in the city world. The
+  game autosaves after you clear an area, once the fight is over. You can also press "Save
+  game" in the pause menu, but not while you're dead or fighting. "Continue" on the title
+  screen and "Load save" in the pause menu rebuild the saved world. A save keeps:
+  - your position and loadout
+  - money and cleared areas
+  - encounter progress
+  - dropped items and health-pack timers
+  - the explored map
+
+  A squad that was fighting you when you saved comes back later with just its survivors, at
+  their spawn points.
 
 ## How it works
 
@@ -56,4 +129,5 @@ the debug overlay.
   Chunks stream in around the player.
 - **Presentation** (`src/render`, `src/ui`, `src/audio`, `src/game`) reads simulation state and
   events to draw the world, the viewmodel, effects and HUD, and to play synthesized positional
-  audio.
+  audio. The background music is generative: an ambient pad and arpeggio, with a soft pulse
+  that fades in while you're fighting. It has its own volume slider in Settings.

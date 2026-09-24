@@ -9,9 +9,9 @@ import { makeTrace, rayExitFraction } from '../physics/trace';
 import { eyeHeight } from '../player/pmove';
 import type { Actor } from '../sim/Actor';
 import { decayFireInacc, inaccuracy, sampleSpread } from './inaccuracy';
-import { activeItem, cycleSlot, slotFromNumber, type WeaponItem } from './Inventory';
+import { activeItem, cycleSlot, nextGrenadeType, slotFromNumber, syncGrenade, type WeaponItem } from './Inventory';
 import { getPattern, patternAt } from './sprayPatterns';
-import type { WeaponDef, WeaponSlot } from './weaponDefs';
+import type { GrenadeId, WeaponDef, WeaponSlot } from './weaponDefs';
 
 /** Gunshot hearing radii by weapon sound (meters). */
 const GUNSHOT_RADIUS: Record<string, number> = {
@@ -47,7 +47,12 @@ export interface WeaponContext {
   onHit(info: HitInfo): void;
   /** Whether attacker's bullets can hit victim. */
   canHit(attacker: Actor, victim: Actor): boolean;
+  /** Launch a grenade from the actor's eye along the view angles. */
+  throwGrenade(a: Actor, id: GrenadeId, strength: number, yaw: number, pitch: number): void;
 }
+
+/** Seconds after a throw before the next grenade is drawn. */
+const THROW_RECOVER = 0.45;
 
 const tr = makeTrace();
 const eye = vec3();
@@ -65,8 +70,16 @@ export function isReloading(a: Actor): boolean {
 
 export function switchTo(a: Actor, slot: WeaponSlot, ctx: WeaponContext): void {
   if (slot === a.inv.active || !a.inv[slot]) return;
-  a.inv.last = a.inv.active;
-  a.inv.active = slot;
+  equipSlot(a, slot, ctx);
+}
+
+/** Draw the weapon in a slot, redeploying even if that slot is in hand (its gun was just replaced). */
+export function equipSlot(a: Actor, slot: WeaponSlot, ctx: WeaponContext): void {
+  if (!a.inv[slot]) return;
+  if (a.inv.active !== slot) {
+    a.inv.last = a.inv.active;
+    a.inv.active = slot;
+  }
   const w = a.wpn;
   const def = activeItem(a.inv).def;
   w.reloadEnd = -1;
@@ -77,6 +90,8 @@ export function switchTo(a: Actor, slot: WeaponSlot, ctx: WeaponContext): void {
   w.scope = 0;
   w.rescopeAt = -1;
   w.triggerHeld = true;
+  w.pinPulled = false;
+  w.thrownAt = -1;
   ctx.events.push({ type: 'deploy', actorId: a.id, weapon: def.id });
 }
 
@@ -118,7 +133,15 @@ export function updateWeapon(a: Actor, cmd: UserCmd, ctx: WeaponContext): void {
     else if (cmd.weaponSelect === SELECT_NEXT) slot = cycleSlot(inv, 1);
     else if (cmd.weaponSelect === SELECT_PREV) slot = cycleSlot(inv, -1);
     else slot = slotFromNumber(cmd.weaponSelect);
-    if (slot) switchTo(a, slot, ctx);
+    if (slot === 'grenade' && inv.active === 'grenade' && cmd.weaponSelect === 4) {
+      // Pressing the grenade key again cycles through the types you carry.
+      const next = nextGrenadeType(inv);
+      if (next !== inv.nadeSel) {
+        inv.nadeSel = next;
+        syncGrenade(inv);
+        equipSlot(a, 'grenade', ctx);
+      }
+    } else if (slot) switchTo(a, slot, ctx);
   }
 
   const item = activeItem(inv);
@@ -165,6 +188,11 @@ export function updateWeapon(a: Actor, cmd: UserCmd, ctx: WeaponContext): void {
     w.triggerHeld = attackDown;
     return;
   }
+  if (def.category === 'grenade') {
+    grenadeLogic(a, def.id as GrenadeId, attackDown, altDown, ready, cmd, ctx);
+    w.triggerHeld = attackDown;
+    return;
+  }
 
   if (attackDown && ready && (def.automatic || !w.triggerHeld)) {
     if (item.clip <= 0) {
@@ -180,6 +208,42 @@ export function updateWeapon(a: Actor, cmd: UserCmd, ctx: WeaponContext): void {
     }
   }
   w.triggerHeld = attackDown;
+}
+
+/**
+ * Grenades, CS style: hold attack to pull the pin, release to throw. Primary alone is a full
+ * throw, secondary alone an underhand lob, both together in between.
+ */
+function grenadeLogic(a: Actor, id: GrenadeId, attackDown: boolean, altDown: boolean, ready: boolean, cmd: UserCmd, ctx: WeaponContext): void {
+  const w = a.wpn;
+  const inv = a.inv;
+  const t = ctx.time;
+  if (w.thrownAt >= 0) {
+    // Just threw: draw the next grenade once the arm has come back.
+    if (t - w.thrownAt >= THROW_RECOVER) equipSlot(a, 'grenade', ctx);
+    return;
+  }
+  if (!w.pinPulled) {
+    if (ready && (attackDown || altDown) && inv.nades[id] > 0) {
+      w.pinPulled = true;
+      ctx.events.push({ type: 'nade_pin', actorId: a.id, weapon: id });
+    }
+  }
+  if (!w.pinPulled) return;
+  if (attackDown || altDown) {
+    w.throwStrength = attackDown && altDown ? 0.7 : attackDown ? 1 : 0.4;
+    return;
+  }
+  // Released: throw.
+  w.pinPulled = false;
+  w.lastShot = t;
+  w.nextAttack = t + THROW_RECOVER;
+  inv.nades[id]--;
+  ctx.throwGrenade(a, id, w.throwStrength, cmd.yaw, cmd.pitch);
+  ctx.events.push({ type: 'nade_throw', actorId: a.id, weapon: id });
+  syncGrenade(inv);
+  if (inv.active === 'grenade') w.thrownAt = t;
+  else equipSlot(a, inv.active, ctx);
 }
 
 function viewBasis(yaw: number, pitch: number): void {

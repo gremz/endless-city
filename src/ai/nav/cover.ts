@@ -29,6 +29,12 @@ export function findCover(
   threatEye: Vec3,
   radius = 15,
   avoidNear?: Vec3,
+  opts: {
+    /** Spots to skip (on fire). */
+    reject?: (x: number, z: number) => boolean;
+    /** Extra sight blockers (smoke) that also count as cover. */
+    blocksSight?: (a: Vec3, b: Vec3) => boolean;
+  } = {},
 ): CoverSpot | null {
   const gx0 = toCell(x);
   const gz0 = toCell(z);
@@ -52,6 +58,7 @@ export function findCover(
       const tdist = Math.hypot(threatEye.x - cx, threatEye.z - cz);
       if (tdist < 6) continue;
       if (avoidNear && Math.hypot(avoidNear.x - cx, avoidNear.z - cz) < 1.5) continue;
+      if (opts.reject?.(cx, cz)) continue;
       cands.push({ gx, gz, d: Math.sqrt(d2) * 0.5, crouch: !(f & NavFlag.CoverFull) });
     }
   }
@@ -67,7 +74,7 @@ export function findCover(
     b.y = y + (c.crouch ? 1.05 : 1.6);
     b.z = cellCenter(c.gz);
     world.traceRay(tr, a, b, MASK_SHOT);
-    if (tr.fraction < 0.98) return { x: b.x, y, z: b.z, crouch: c.crouch };
+    if (tr.fraction < 0.98 || opts.blocksSight?.(a, b)) return { x: b.x, y, z: b.z, crouch: c.crouch };
   }
   return null;
 }

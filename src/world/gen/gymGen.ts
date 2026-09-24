@@ -52,6 +52,8 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     spawns: new Float32Array(0),
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
+    // Two health packs beside the course start, for trying medkits out.
+    pickups: cx === 0 && cz === 0 ? new Float32Array([26, 0.02, 26, 38, 0.02, 26]) : new Float32Array(0),
     hasEncounter: false,
     genMs: performance.now() - t0,
   };

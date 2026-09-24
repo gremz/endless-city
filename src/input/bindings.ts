@@ -10,6 +10,8 @@ export const BUTTON_KEYS: Record<string, number> = {
   KeyE: Buttons.USE,
   KeyF: Buttons.INSPECT,
   KeyB: Buttons.BUY,
+  KeyH: Buttons.HEAL,
+  KeyL: Buttons.FLASHLIGHT,
 };
 
 /** Keys that also crouch when the keyboard is locked (fullscreen), where Ctrl+W is safe. */
@@ -37,6 +39,15 @@ export const SLOT_KEYS: Record<string, number> = {
 };
 
 export const LAST_WEAPON_KEY = 'KeyQ';
+
+/** Opens the full-screen city map. */
+export const MAP_KEY = 'KeyM';
+
+/** CS-style quick ammo buys, usable without opening the buy menu. */
+export const BUY_AMMO_KEYS: Record<string, 'ammo_primary' | 'ammo_secondary'> = {
+  Comma: 'ammo_primary',
+  Period: 'ammo_secondary',
+};
 
 /** Debug keys (F5 is avoided on purpose: it reloads the page if not intercepted). */
 export const DEBUG_KEYS = {

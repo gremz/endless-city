@@ -1,5 +1,5 @@
 import { lerp } from '../core/math';
-import type { WeaponId } from '../weapons/weaponDefs';
+import type { GrenadeId, WeaponId } from '../weapons/weaponDefs';
 
 export interface BotSkill {
   level: number;
@@ -27,6 +27,9 @@ export interface BotSkill {
   overwatch: boolean;
   armor: number;
   helmet: boolean;
+  /** Grenades each bot carries, and the kinds it may be given. */
+  nades: number;
+  nadeKinds: GrenadeId[];
 }
 
 /** Skill parameters interpolated from level 0 (novice) to level 10 (veteran). */
@@ -50,6 +53,8 @@ export function skillFor(level: number): BotSkill {
     overwatch: level >= 4,
     armor: level >= 3 ? 100 : 0,
     helmet: level >= 6,
+    nades: level >= 7 ? 2 : level >= 3 ? 1 : 0,
+    nadeKinds: level >= 7 ? ['hegrenade', 'flashbang', 'molotov'] : level >= 5 ? ['hegrenade', 'flashbang'] : ['hegrenade'],
   };
 }
 
@@ -64,7 +69,7 @@ export function weaponFor(level: number, r: number, overwatch = false): WeaponId
 
 export const BOT_NAMES = [
   'Ivan', 'Dima', 'Kolya', 'Pasha', 'Sasha', 'Misha', 'Artem', 'Boris', 'Yuri', 'Lev',
-  'Karim', 'Omar', 'Farid', 'Tariq', 'Nadir', 'Rafi', 'Samir', 'Hakim', 'Zaid', 'Jamal',
+  'Karim', 'Omar', 'Farid', 'Tariq', 'Nadir', 'Rafi', 'Samir', 'Wladek', 'Zaid', 'Jamal',
   'Viktor', 'Oleg', 'Gleb', 'Timur', 'Rustam', 'Emil', 'Anton', 'Sergei', 'Maks', 'Roman',
   'Hassan', 'Idris', 'Khalid', 'Malik', 'Yusuf', 'Bashir', 'Sami', 'Adel', 'Reza', 'Kamal',
 ];

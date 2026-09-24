@@ -21,10 +21,17 @@ export const MATERIAL_TILE: Record<number, number> = {
   [Material.Dev]: 2,
   [Material.Wood]: 2,
   [Material.Paint]: 2,
+  [Material.CarPaint]: 0,
+  [Material.CarGlass]: 0,
+  [Material.CarWheel]: 0,
+  [Material.CarTrim]: 0,
+  [Material.LampGlow]: 0,
 };
 
+type Rgb = readonly [number, number, number];
+
 /** Container / painted-metal colors chosen by brush tint. */
-const METAL_PALETTE: readonly [number, number, number][] = [
+const METAL_PALETTE: readonly Rgb[] = [
   [0.62, 0.16, 0.12],
   [0.14, 0.3, 0.52],
   [0.2, 0.42, 0.22],
@@ -32,6 +39,48 @@ const METAL_PALETTE: readonly [number, number, number][] = [
   [0.55, 0.55, 0.52],
   [0.36, 0.2, 0.36],
 ];
+
+/** Car paint colors, weighted towards the whites, silvers and blacks of a real street. */
+export const CAR_PAINT_PALETTE: readonly Rgb[] = [
+  [0.92, 0.92, 0.9],
+  [0.7, 0.72, 0.74],
+  [0.12, 0.12, 0.13],
+  [0.4, 0.42, 0.44],
+  [0.55, 0.08, 0.08],
+  [0.1, 0.16, 0.34],
+  [0.86, 0.86, 0.84],
+  [0.6, 0.62, 0.64],
+  [0.16, 0.26, 0.18],
+  [0.66, 0.6, 0.48],
+  [0.2, 0.2, 0.22],
+  [0.26, 0.4, 0.58],
+];
+
+/** Car trim colors by tint index. */
+export const CarTrim = { Plastic: 0, Chrome: 1, Headlight: 2, Taillight: 3, Amber: 4, Plate: 5 } as const;
+const CAR_TRIM_PALETTE: readonly Rgb[] = [
+  [0.1, 0.1, 0.1],
+  [0.72, 0.73, 0.75],
+  [1, 0.97, 0.86],
+  [0.72, 0.06, 0.05],
+  [0.95, 0.5, 0.08],
+  [0.95, 0.95, 0.92],
+];
+
+const NEUTRAL: readonly Rgb[] = [[1, 1, 1]];
+
+/** Materials whose color comes from a palette indexed by brush tint. */
+const PALETTES: Record<number, readonly Rgb[]> = {
+  [Material.Metal]: METAL_PALETTE,
+  [Material.CarPaint]: CAR_PAINT_PALETTE,
+  [Material.CarTrim]: CAR_TRIM_PALETTE,
+  [Material.CarGlass]: NEUTRAL,
+  [Material.CarWheel]: NEUTRAL,
+  [Material.LampGlow]: NEUTRAL,
+};
+
+/** Materials that skip ground-contact AO (small floating details; shading is in the texture). */
+const NO_AO = new Set<number>([Material.CarPaint, Material.CarGlass, Material.CarWheel, Material.CarTrim, Material.LampGlow]);
 
 /** Height over which the fake ground-contact AO fades out. */
 const AO_HEIGHT = 1.2;
@@ -67,6 +116,7 @@ interface BrushInfo {
   z1: number;
   material: number;
   tile: number;
+  ao: boolean;
   r: number;
   g: number;
   b: number;
@@ -124,7 +174,7 @@ function emit(
       v = y / tile;
     }
     bld.uv.push(u, v);
-    const ao = vertical ? aoAt(y, y0) : 1;
+    const ao = vertical && info.ao ? aoAt(y, y0) : 1;
     bld.col.push(
       Math.round(Math.min(1, info.r * ao) * 255),
       Math.round(Math.min(1, info.g * ao) * 255),
@@ -187,7 +237,7 @@ function emitSide(
 export function bakeMeshes(brushes: Int32Array): MeshData[] {
   const builders: (Builder | null)[] = new Array(MATERIAL_COUNT).fill(null);
   const n = brushes.length / BRUSH_STRIDE;
-  const info: BrushInfo = { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0, material: 0, tile: 1, r: 1, g: 1, b: 1 };
+  const info: BrushInfo = { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0, material: 0, tile: 1, ao: true, r: 1, g: 1, b: 1 };
 
   for (let i = 0; i < n; i++) {
     const o = i * BRUSH_STRIDE;
@@ -204,8 +254,10 @@ export function bakeMeshes(brushes: Int32Array): MeshData[] {
     info.z1 = brushes[o + 5] / 100;
     info.material = material;
     info.tile = MATERIAL_TILE[material] ?? 2;
-    if (material === Material.Metal) {
-      const c = METAL_PALETTE[tint % METAL_PALETTE.length];
+    info.ao = !NO_AO.has(material);
+    const palette = PALETTES[material];
+    if (palette) {
+      const c = palette[tint % palette.length];
       info.r = c[0];
       info.g = c[1];
       info.b = c[2];

@@ -10,11 +10,20 @@ import { CameraController } from '../player/CameraController';
 import { ChunkRenderer } from '../render/ChunkRenderer';
 import { MaterialLibrary } from '../render/materials';
 import { Renderer } from '../render/Renderer';
+import { Atmosphere } from '../render/Atmosphere';
+import { Weather } from '../render/fx/Weather';
+import { MASK_SHOT } from '../physics/brush';
+import { makeTrace } from '../physics/trace';
 import { teleport } from '../sim/Actor';
 import { makeInventory } from '../weapons/Inventory';
 import { Simulation } from '../sim/Simulation';
+import { PickupManager } from '../sim/Pickups';
+import { flashAmount } from '../sim/Grenades';
 import { DebugOverlay } from '../ui/DebugOverlay';
 import { Hud } from '../ui/Hud';
+import { Minimap } from '../ui/Minimap';
+import { WorldMap, type WorldMapView } from '../ui/WorldMap';
+import { levelFor } from '../world/gen/district';
 import { MainMenu } from '../ui/Menus';
 import { worldToChunk } from '../world/chunkMath';
 import { DISTRICT_NAMES } from '../world/gen/ChunkData';
@@ -26,17 +35,24 @@ import { Presentation } from './Presentation';
 import { EncounterManager } from '../ai/EncounterManager';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SoundEvents } from '../audio/sounds';
-import { buy, buyZoneStatus, owned, priceOf, type BuyItem } from '../sim/buy';
-import { BuyMenu } from '../ui/BuyMenu';
+import { buy, buyZoneStatus, OUT_OF_COMBAT, priceOf, unavailableReason, type BuyItem } from '../sim/buy';
+import { BuyMenu, itemName } from '../ui/BuyMenu';
 import { SettingsMenu } from '../ui/SettingsMenu';
-import { SLOT_KEYS } from '../input/bindings';
+import { BUY_AMMO_KEYS, MAP_KEY, SLOT_KEYS } from '../input/bindings';
 import { stuckSnaps } from '../ai/Bot';
 import { Buttons } from '../input/UserCmd';
 import { chunkKey, keyToCoords } from '../world/chunkMath';
 import { WEAPONS, type WeaponId } from '../weapons/weaponDefs';
 import { eyeHeight } from '../player/pmove';
+import { describeSave, loadSave, writeSave } from '../core/saveStorage';
+import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
 
-type State = 'menu' | 'playing' | 'paused';
+type State = 'menu' | 'playing' | 'paused' | 'map';
+
+export interface GameHooks {
+  /** Throw this game away and start the saved one (the host rebuilds the Game). */
+  loadSave(save: SaveData): void;
+}
 
 interface KeyboardLock {
   lock(keys?: string[]): Promise<void>;
@@ -56,8 +72,16 @@ export class Game {
   private debug: DebugOverlay;
   private menu: MainMenu;
   private hud: Hud;
+  private minimap: Minimap;
+  private worldMap: WorldMap;
   private presentation: Presentation;
+  private atmosphere: Atmosphere;
+  private weather: Weather;
+  private roofTrace = makeTrace();
+  private roofFrom = new THREE.Vector3();
+  private roofTo = new THREE.Vector3();
   readonly encounters: EncounterManager | null;
+  readonly pickups: PickupManager;
   private death: { killer: number; text: string } | null = null;
   private buyMenu: BuyMenu;
   readonly audio = new AudioEngine();
@@ -77,12 +101,17 @@ export class Game {
   private lastFrame = 0;
   private disposers: (() => void)[] = [];
   private focus = new THREE.Vector3();
+  /** An area was cleared: save as soon as the fight is over. */
+  private pendingAutosave = false;
   timeScale = 1;
 
   constructor(
     private canvas: HTMLCanvasElement,
     private ui: HTMLElement,
     readonly params: GameParams,
+    /** Saved game this one continues, or null for a fresh start. */
+    private save: SaveData | null = null,
+    private hooks: GameHooks | null = null,
   ) {
     this.settings = loadSettings();
     const tickDt = 1 / params.tickRate;
@@ -103,24 +132,50 @@ export class Game {
     this.streamer.addListener(this.sim.nav);
     this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
     if (this.encounters) this.sim.systems.push(this.encounters);
+    this.pickups = new PickupManager(this.sim);
+    this.streamer.addListener(this.pickups);
+    this.sim.systems.push(this.pickups);
 
     this.input = new Input(canvas);
     this.hud = new Hud(ui, this.settings);
     this.hud.setVisible(false);
+    this.minimap = new Minimap(this.hud.root);
+    this.streamer.addListener(this.minimap);
+    this.worldMap = new WorldMap(ui, {
+      seed: params.seed,
+      levelAt: (cx, cz) => (params.level >= 0 ? params.level : levelFor(cx, cz)),
+      fixedLevel: params.level >= 0 || params.world !== 'city',
+      onClose: () => this.closeMap(),
+    });
+    this.streamer.addListener(this.worldMap);
     this.presentation = new Presentation(this.renderer, this.hud, this.camCtl, this.input, this.settings);
+    this.presentation.pickups = this.pickups.items;
+    this.atmosphere = new Atmosphere(this.renderer, this.materials);
+    this.atmosphere.lampsEnabled = params.world === 'city';
+    this.atmosphere.onLightning = (delay, strength) => this.sounds.thunder(delay, strength);
+    this.weather = new Weather((x, z) => this.roofAt(x, z), this.presentation.particles);
+    this.renderer.scene.add(this.weather.mesh);
     this.streamer.addListener({
-      onChunkLoaded: () => {},
+      onChunkLoaded: () => this.weather.resetRoofs(),
       onChunkVisibility: () => {},
-      onChunkUnloaded: (key) => this.presentation.onChunkUnloaded(key),
+      onChunkUnloaded: (key) => {
+        this.presentation.onChunkUnloaded(key);
+        this.weather.resetRoofs();
+      },
     });
     this.presentation.sinks.push(this.sounds);
     this.presentation.sinks.push({
       handle: (e) => {
         if (e.type === 'money') this.hud.flashMoney(e.amount);
-        else if (e.type === 'chunkCleared') this.hud.message(`AREA CLEARED  +$${e.bonus}  ·  buy zone unlocked`, 3.5);
+        else if (e.type === 'chunkCleared') {
+          this.hud.message(`AREA CLEARED  +$${e.bonus}  ·  buy zone unlocked`, 3.5);
+          this.pendingAutosave = true;
+        }
         else if (e.type === 'buy') {
-          const name = e.item === 'kevlar' ? 'Kevlar Vest' : e.item === 'helmet' ? 'Kevlar + Helmet' : (WEAPONS[e.item as WeaponId]?.name ?? e.item);
-          this.buyMenu.feedback(e.ok ? `Bought ${name}` : (e.reason ?? 'Cannot buy'), e.ok);
+          const text = e.ok ? `Bought ${itemName(e.item as BuyItem)}` : (e.reason ?? 'Cannot buy');
+          this.buyMenu.feedback(text, e.ok);
+          // Quick buys happen with the menu closed.
+          if (!this.buyMenu.open) this.hud.message(text, 1.5);
         }
         else if (e.type === 'kill' && e.victimId === this.sim.player.id) {
           const k = this.sim.getActor(e.attackerId);
@@ -135,6 +190,15 @@ export class Game {
       onSettings: () => {
         this.menu.hide();
         this.settingsMenu.show();
+      },
+      onSave: () => {
+        const err = this.saveGame(true);
+        this.menu.setStatus(err ?? 'Game saved.');
+      },
+      onLoad: () => {
+        const save = loadSave();
+        if (save && this.hooks) this.hooks.loadSave(save);
+        else this.menu.setStatus('The save could not be read.');
       },
     });
     this.settingsMenu = new SettingsMenu(
@@ -154,12 +218,19 @@ export class Game {
           return economy.money;
         },
         price: (item) => priceOf(this.sim, item),
-        owned: (item) => owned(this.sim, item),
+        unavailable: (item) => unavailableReason(this.sim, item),
+        slotWeapon: (slot) => this.sim.player.inv[slot]?.def.name ?? null,
         zone: () => buyZoneStatus(this.sim, this.engagedNearby()),
       },
       (item: BuyItem) => buy(this.sim, item, this.engagedNearby()),
     );
     this.menu.setSeed(params.seedText);
+    this.refreshSaveInfo();
+    // Progress, items and the map come back before any chunk streams in.
+    if (save) {
+      applyWorldSave(save, this.sim, this.pickups, this.encounters);
+      this.worldMap.restoreExplored(save.explored);
+    }
 
     this.applySettings();
     this.spawnPlayer();
@@ -178,6 +249,16 @@ export class Game {
     this.chunkRenderer.setShadows(s.shadows > 0);
     this.sim.opts.autoBhop = s.autoBhop;
     this.audio.setVolume(s.masterVolume);
+    this.audio.setMusicVolume(s.musicVolume);
+    this.audio.setSfxVolume(s.sfxVolume);
+    // URL parameters beat the settings for time of day and weather.
+    const p = this.params;
+    this.sim.envOverride = {
+      hour: p.hour ?? (s.timeOfDay === 'day' ? 13 : s.timeOfDay === 'night' ? 0.5 : undefined),
+      weather: p.weather ?? (s.weather === 'clear' ? 'clear' : undefined),
+    };
+    this.sim.updateEnv();
+    if (this.weather) this.weather.density = s.rainParticles;
     if (this.debug) {
       const want = this.params.debug || s.showFps;
       if (want !== this.debug.visible) this.debug.toggle();
@@ -194,6 +275,9 @@ export class Game {
     } else if (this.params.world === 'gym') {
       this.spawnX = this.params.spawnCx * CHUNK + 32;
       this.spawnZ = this.params.spawnCz * CHUNK + 20;
+    } else if (this.save) {
+      this.spawnX = this.save.player.x;
+      this.spawnZ = this.save.player.z;
     } else {
       // City: the spawn plaza, just south of the fountain.
       this.spawnX = this.params.spawnCx * CHUNK + 32;
@@ -201,7 +285,7 @@ export class Game {
     }
     teleport(this.sim.player, this.spawnX, 30, this.spawnZ);
     this.menu.setReady(false);
-    this.menu.setStatus('Generating the city…');
+    this.menu.setStatus(this.save ? 'Loading your save…' : 'Generating the city…');
   }
 
   private finishSpawn(): void {
@@ -227,11 +311,43 @@ export class Game {
     } else if (this.params.world === 'gym') {
       this.input.yaw = Math.PI; // face +Z (towards the test course)
       this.sim.spawnDummy(32, 0.05, 30, 0, 100, true);
+    } else if (this.save) {
+      const s = this.save.player;
+      teleport(p, s.x, this.sim.findFloor(s.x, s.z, s.y + 1), s.z);
+      applyPlayerSave(s, p);
+      this.input.yaw = s.yaw;
+      this.input.pitch = s.pitch;
+      this.menu.show('paused', 'SAVE LOADED');
     } else {
       this.input.yaw = Math.PI;
     }
     this.menu.setStatus('');
     this.menu.setReady(true);
+  }
+
+  /** Write the save slot. Returns why it couldn't, or null on success. */
+  private saveGame(manual: boolean): string | null {
+    if (this.params.world !== 'city') return 'Saving only works in the city.';
+    if (this.loading) return 'Still loading.';
+    if (!this.sim.player.alive) return 'You can’t save while dead.';
+    if (manual && this.inCombat()) return 'You can’t save during a fight.';
+    const data = captureSave(this.sim, this.pickups, this.encounters, this.worldMap.exploredKeys());
+    if (!writeSave(data)) return 'Could not write the save (storage blocked or full).';
+    this.pendingAutosave = false;
+    this.refreshSaveInfo();
+    return null;
+  }
+
+  private refreshSaveInfo(): void {
+    const save = loadSave();
+    this.menu.setSave(save ? describeSave(save) : null, this.params.world === 'city');
+  }
+
+  /** Autosave after an area is cleared, once the player is alive and out of combat. */
+  private autosave(): void {
+    if (!this.pendingAutosave || this.state !== 'playing' || !this.sim.player.alive || this.inCombat()) return;
+    if (this.saveGame(false) === null) this.hud.message('Game saved', 1.5);
+    else this.pendingAutosave = false;
   }
 
   private bindEvents(): void {
@@ -243,13 +359,18 @@ export class Game {
       if (document.pointerLockElement === this.canvas) {
         this.state = 'playing';
         this.menu.hide();
+        this.worldMap.hide();
         this.hud.setVisible(true);
         this.loop.reset();
+        this.audio.setMusicPaused(false);
       } else if (this.state === 'playing') {
         this.pause();
       }
     };
-    const onLockError = () => this.menu.setStatus('Could not capture the mouse — click Resume again.');
+    const onLockError = () => {
+      if (this.state === 'map') this.worldMap.setStatus('Could not capture the mouse — click Close again.');
+      else this.menu.setStatus('Could not capture the mouse — click Resume again.');
+    };
     document.addEventListener('pointerlockchange', onLockChange);
     document.addEventListener('pointerlockerror', onLockError);
     this.disposers.push(() => {
@@ -272,9 +393,19 @@ export class Game {
     this.disposers.push(
       this.input.onKeyDown((code) => {
         if (code === DEBUG_KEYS.overlay) this.debug.toggle();
+        if (this.state === 'map') {
+          if (code === MAP_KEY || code === 'Escape') this.closeMap();
+          else if (code === 'KeyC') this.worldMap.recenter();
+          return;
+        }
+        if (this.state === 'playing' && code === MAP_KEY) {
+          this.openMap();
+          return;
+        }
         if (this.state === 'playing' && this.sim.player.alive) {
           if (code === 'KeyB') this.buyMenu.toggle();
           else if (this.buyMenu.open && code in SLOT_KEYS) this.buyMenu.select(SLOT_KEYS[code]);
+          else if (code in BUY_AMMO_KEYS) buy(this.sim, BUY_AMMO_KEYS[code], this.engagedNearby());
         }
         if (!this.params.debug && this.params.world !== 'gym') return;
         if (code === DEBUG_KEYS.noclip) this.sim.player.move.noclip = !this.sim.player.move.noclip;
@@ -309,9 +440,47 @@ export class Game {
 
   private pause(): void {
     this.state = 'paused';
+    this.refreshSaveInfo();
+    this.audio.setMusicPaused(true);
     this.buyMenu.close();
     this.menu.show('paused');
     this.input.keyboardLocked = !!document.fullscreenElement && this.input.keyboardLocked;
+  }
+
+  /** Full-screen map: pauses the game and hands the mouse back for panning. */
+  private openMap(): void {
+    this.state = 'map';
+    this.buyMenu.close();
+    this.audio.setMusicPaused(true);
+    this.worldMap.show(this.mapView());
+    // State is already 'map', so losing the lock doesn't open the pause menu.
+    this.input.exitLock();
+  }
+
+  /** Back to the game once the mouse is captured again (see the pointerlockchange handler). */
+  private closeMap(): void {
+    this.worldMap.setStatus('');
+    this.input.requestLock().catch(() => this.worldMap.setStatus('Could not capture the mouse — click Close again.'));
+  }
+
+  private mapView(): WorldMapView {
+    const pos = this.sim.player.move.pos;
+    return {
+      x: pos.x,
+      z: pos.z,
+      yaw: this.input.yaw,
+      spawnCx: this.params.spawnCx,
+      spawnCz: this.params.spawnCz,
+      cleared: this.sim.cleared,
+      encounters: [...(this.encounters?.states.values() ?? [])].map((s) => ({
+        cx: s.cx,
+        cz: s.cz,
+        level: s.level,
+        cleared: s.cleared,
+        active: !!s.squad,
+      })),
+      stash: this.pickups.stashPos,
+    };
   }
 
   start(): void {
@@ -355,6 +524,12 @@ export class Game {
     this.presentation.update(this.sim, alpha, frameMs / 1000);
     const cam = this.renderer.camera;
     this.camCtl.update(cam, p, alpha, this.input.yaw, this.input.pitch);
+    const env = this.sim.env;
+    this.atmosphere.update(env, frameMs / 1000, cam, p.alive && p.flashlight);
+    this.presentation.setWorldLight(this.atmosphere.viewmodelLight, env.daylight);
+    this.presentation.torches = this.botTorches(env.darkness);
+    this.weather.update(env.rain, Math.min(frameMs / 1000, 0.1), cam.position);
+    this.audio.setAmbience(env.rain, env.darkness, this.roofAt(cam.position.x, cam.position.z) > cam.position.y + 0.3);
     // Audio listener follows the camera.
     cam.getWorldDirection(this.fwd);
     this.up.set(0, 1, 0).applyQuaternion(cam.quaternion);
@@ -363,12 +538,17 @@ export class Game {
     this.sounds.listener.z = cam.position.z;
     this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, this.fwd.x, this.fwd.y, this.fwd.z, this.up.x, this.up.y, this.up.z);
     this.sounds.tick(frameMs / 1000);
+    this.sounds.fires(this.sim);
+    this.audio.setDeafen(this.sim.player.alive ? Math.min(1, flashAmount(this.sim.player, this.sim.time) * 1.2) : 0);
+    this.audio.setMusicIntensity(this.inCombat() ? 1 : 0);
+    this.audio.updateMusic();
     this.presentation.handleEvents(this.sim);
     this.focus.set(this.camCtl.position.x, 0, this.camCtl.position.z);
     this.renderer.updateSun(this.focus);
     this.renderer.render();
 
     this.updateHudExtras();
+    this.autosave();
     this.debug.frame(frameMs);
     this.debug.setSpeed(Math.hypot(p.move.vel.x, p.move.vel.z) / HU, p.move.onGround);
     if (this.debug.due(now)) this.updateDebug();
@@ -431,6 +611,14 @@ export class Game {
     }
   }
 
+  /** Fighting right now: bots engaging nearby, or damage taken/dealt recently. Drives the music. */
+  private inCombat(): boolean {
+    const p = this.sim.player;
+    if (!p.alive) return false;
+    const t = this.sim.time;
+    return t - p.lastDamagedAt < OUT_OF_COMBAT || t - p.lastDealtAt < OUT_OF_COMBAT || this.engagedNearby();
+  }
+
   /** Any bot fighting within 40 m blocks buying. */
   private engagedNearby(): boolean {
     const p = this.sim.player.move.pos;
@@ -448,6 +636,14 @@ export class Game {
     this.input.menuOpen = this.buyMenu.open;
     const zone = buyZoneStatus(this.sim, false);
     this.hud.setBuyHint(zone.ok && !this.buyMenu.open && this.params.world === 'city');
+    const swap = this.pickups.swapCandidate;
+    let prompt: string | null = null;
+    if (swap?.item.kind === 'weapon' && p.alive) {
+      const def = WEAPONS[swap.item.weapon];
+      const cur = p.inv[def.slot];
+      prompt = cur ? `Swap ${cur.def.name} for ${def.name}` : `Pick up ${def.name}`;
+    }
+    this.hud.setPrompt(prompt);
     if (this.buyMenu.open && (this.sim.tick & 15) === 0) this.buyMenu.render();
     if (this.encounters) {
       const marks = this.encounters.nearbyEncounters(p.move.pos.x, p.move.pos.z).map((e) => {
@@ -461,6 +657,24 @@ export class Game {
       });
       this.hud.setCompass(marks, this.input.yaw);
     }
+    this.updateMinimap();
+  }
+
+  private updateMinimap(): void {
+    const pos = this.sim.player.move.pos;
+    const encounters = this.encounters;
+    this.minimap.draw({
+      x: pos.x,
+      z: pos.z,
+      yaw: this.input.yaw,
+      buyZones: new Set([chunkKey(this.params.spawnCx, this.params.spawnCz), ...this.sim.cleared]),
+      showZones: this.params.world === 'city',
+      encounters: encounters?.nearbyEncounters(pos.x, pos.z) ?? [],
+      // Only bots that are fighting you show up: no free wallhacks.
+      enemies: encounters?.bots.filter((b) => b.actor.alive && b.state === 'engage').map((b) => b.actor.move.pos) ?? [],
+      pickups: this.pickups.items,
+      stash: this.pickups.stashPos,
+    });
   }
 
   private updateDebug(): void {
@@ -490,12 +704,35 @@ export class Game {
     ]);
   }
 
+  private torchSet = new Set<number>();
+  /** After dark, bots that are moving about or hunting you carry a lit flashlight. */
+  private botTorches(darkness: number): ReadonlySet<number> {
+    const set = this.torchSet;
+    set.clear();
+    if (darkness < 0.25 || !this.encounters) return set;
+    for (const b of this.encounters.bots) {
+      if (b.actor.alive && b.state !== 'idle' && b.state !== 'overwatch') set.add(b.actor.id);
+    }
+    return set;
+  }
+
+  /** Height of the first surface below the open sky at (x, z), or -Infinity over nothing. */
+  private roofAt(x: number, z: number): number {
+    this.roofFrom.set(x, 90, z);
+    this.roofTo.set(x, -40, z);
+    this.sim.world.traceRay(this.roofTrace, this.roofFrom, this.roofTo, MASK_SHOT);
+    return this.roofTrace.fraction < 1 ? this.roofTrace.endY : -Infinity;
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.raf);
+    this.worldMap.hide();
     for (const d of this.disposers) d();
     this.input.dispose();
     this.streamer.dispose();
     this.presentation.dispose();
+    this.atmosphere.dispose();
+    this.weather.dispose();
     this.audio.dispose();
     this.chunkRenderer.dispose();
     this.materials.dispose();

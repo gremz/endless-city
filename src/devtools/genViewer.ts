@@ -1,23 +1,10 @@
 import { CHUNK } from '../core/config';
 import { fnv1a } from '../core/rng';
-import { BRUSH_STRIDE, DISTRICT_NAMES, Material, NAV_RES, NavFlag, wordContents, wordMaterial } from '../world/gen/ChunkData';
+import { DISTRICT_NAMES, NAV_RES, NavFlag } from '../world/gen/ChunkData';
 import { generateChunk } from '../world/gen/generateChunk';
-import { Contents } from '../physics/brush';
+import { drawChunkTopdown } from '../ui/minimapRaster';
 
 /** Dev-only top-down map of a 9x9 chunk region, for iterating on layouts without playing. */
-
-const COLORS: Record<number, string> = {
-  [Material.Concrete]: '#8d8d88',
-  [Material.Plaster]: '#cdb78d',
-  [Material.Brick]: '#8a4a36',
-  [Material.Asphalt]: '#3b3b3e',
-  [Material.Sidewalk]: '#a8a7a2',
-  [Material.Crate]: '#9b6a30',
-  [Material.Metal]: '#4a6f8f',
-  [Material.Dev]: '#b8b0a4',
-  [Material.Wood]: '#7a5230',
-  [Material.Paint]: '#eeeeee',
-};
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('map');
@@ -46,19 +33,7 @@ function draw(): void {
       totalMs += d.genMs;
       const ox = (dx + half) * CHUNK * PX;
       const oz = (dz + half) * CHUNK * PX;
-      // Brushes sorted by top height so taller things draw last.
-      const order: number[] = [];
-      for (let i = 0; i < d.brushes.length; i += BRUSH_STRIDE) order.push(i);
-      order.sort((a, b) => d.brushes[a + 4] - d.brushes[b + 4]);
-      for (const o of order) {
-        const c = wordContents(d.brushes[o + 6]);
-        if (!(c & Contents.VISIBLE)) continue;
-        const h = d.brushes[o + 4] / 100;
-        ctx.fillStyle = COLORS[wordMaterial(d.brushes[o + 6])] ?? '#f0f';
-        ctx.globalAlpha = 0.55 + Math.min(0.45, h / 20);
-        ctx.fillRect(ox + (d.brushes[o] / 100) * PX, oz + (d.brushes[o + 2] / 100) * PX, ((d.brushes[o + 3] - d.brushes[o]) / 100) * PX, ((d.brushes[o + 5] - d.brushes[o + 2]) / 100) * PX);
-      }
-      ctx.globalAlpha = 1;
+      drawChunkTopdown(ctx, d, PX, ox, oz);
       if (showNav) {
         const cell = (CHUNK / NAV_RES) * PX;
         for (let j = 0; j < NAV_RES; j++) {
@@ -78,13 +53,17 @@ function draw(): void {
       for (let s = 0; s < d.perches.length; s += 3) {
         ctx.fillRect(ox + (d.perches[s] - cx * CHUNK) * PX - 2, oz + (d.perches[s + 2] - cz * CHUNK) * PX - 2, 4, 4);
       }
+      ctx.fillStyle = '#f33';
+      for (let s = 0; s < d.pickups.length; s += 3) {
+        ctx.fillRect(ox + (d.pickups[s] - cx * CHUNK) * PX - 3, oz + (d.pickups[s + 2] - cz * CHUNK) * PX - 3, 6, 6);
+      }
       if (d.hasEncounter) encounters++;
       ctx.fillStyle = d.hasEncounter ? '#ff8a7a' : '#fff';
       ctx.font = '11px monospace';
       ctx.fillText(`${cx},${cz} ${DISTRICT_NAMES[d.district]} L${d.level}${d.hasEncounter ? ' ⚔' : ''}`, ox + 4, oz + 12);
     }
   }
-  $('info').textContent = `avg gen ${(totalMs / (SPAN * SPAN)).toFixed(1)} ms · ${encounters} encounters · yellow = spawn slots, magenta = perches`;
+  $('info').textContent = `avg gen ${(totalMs / (SPAN * SPAN)).toFixed(1)} ms · ${encounters} encounters · yellow = spawn slots, magenta = perches, red = health packs`;
 }
 
 for (const id of ['seed', 'cx', 'cz', 'nav']) $(id).addEventListener('change', draw);

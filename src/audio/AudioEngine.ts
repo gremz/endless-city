@@ -1,4 +1,6 @@
 import type { Vec3 } from '../core/math';
+import { Ambience } from './Ambience';
+import { Music } from './Music';
 import { makeImpulse, renderAll } from './synth';
 
 const MAX_VOICES = 32;
@@ -15,6 +17,8 @@ export interface PlayOptions {
   rate?: number;
   /** Reverb send amount 0..1. */
   reverb?: number;
+  /** 'master' skips the effects bus (not muffled by flashbang deafness). */
+  bus?: 'sfx' | 'master';
 }
 
 /**
@@ -25,11 +29,19 @@ export interface PlayOptions {
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
+  /** Sound effects bus (own volume, muffled when deafened by a flashbang). */
+  private sfx!: GainNode;
+  private sfxFilter!: BiquadFilterNode;
+  private sfxVolume = 1;
+  private deafen = 0;
   private reverbIn!: GainNode;
   private bank = new Map<string, AudioBuffer[]>();
   private voices: Voice[] = [];
   private ready = false;
   private volume = 0.7;
+  private music: Music | null = null;
+  private ambience: Ambience | null = null;
+  private musicVolume = 0.35;
 
   /** Create/resume the context (call from a click handler). */
   async unlock(): Promise<void> {
@@ -50,12 +62,23 @@ export class AudioEngine {
       this.master = ctx.createGain();
       this.master.gain.value = this.volume;
       this.master.connect(comp);
+      this.sfxFilter = ctx.createBiquadFilter();
+      this.sfxFilter.type = 'lowpass';
+      this.sfxFilter.frequency.value = 20000;
+      this.sfxFilter.connect(this.master);
+      this.sfx = ctx.createGain();
+      this.sfx.gain.value = this.sfxVolume;
+      this.sfx.connect(this.sfxFilter);
       const conv = ctx.createConvolver();
       conv.buffer = makeImpulse(ctx);
       const wet = ctx.createGain();
       wet.gain.value = 0.35;
       this.reverbIn = ctx.createGain();
       this.reverbIn.connect(conv).connect(wet).connect(this.master);
+      this.music = new Music(ctx, this.master, this.reverbIn);
+      // Ambience sits on the effects bus: it follows the effects volume and flashbang deafness.
+      this.ambience = new Ambience(ctx, this.sfx);
+      this.music.setVolume(this.musicVolume);
       renderAll(ctx.sampleRate)
         .then((bank) => {
           this.bank = bank;
@@ -69,6 +92,52 @@ export class AudioEngine {
   setVolume(v: number): void {
     this.volume = v;
     if (this.ctx) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+  }
+
+  setSfxVolume(v: number): void {
+    this.sfxVolume = v;
+    this.applySfx();
+  }
+
+  /** Flashbang deafness 0..1: sound effects go dull and quiet (the ringing plays on top). */
+  setDeafen(v: number): void {
+    if (Math.abs(v - this.deafen) < 0.005) return;
+    this.deafen = v;
+    this.applySfx();
+  }
+
+  private applySfx(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    this.sfx.gain.setTargetAtTime(this.sfxVolume * (1 - 0.75 * this.deafen), t, 0.03);
+    this.sfxFilter.frequency.setTargetAtTime(20000 * Math.pow(400 / 20000, this.deafen), t, 0.03);
+  }
+
+  setMusicVolume(v: number): void {
+    this.musicVolume = v;
+    this.music?.setVolume(v);
+  }
+
+  /** Combat intensity for the music's pulse layer (0 calm .. 1 fighting). */
+  setMusicIntensity(v: number): void {
+    this.music?.setIntensity(v);
+  }
+
+  setMusicPaused(p: boolean): void {
+    this.music?.setPaused(p);
+    this.ambience?.setPaused(p);
+  }
+
+  /** Rain bed, night wind and crickets. Call every frame. */
+  setAmbience(rain: number, night: number, indoor: boolean): void {
+    this.ambience?.set(rain, night, indoor);
+    this.ambience?.update();
+  }
+
+  /** Schedule upcoming music; call every frame. */
+  updateMusic(): void {
+    this.music?.update();
   }
 
   /** Update the listener from the camera (position + forward/up vectors). */
@@ -138,7 +207,7 @@ export class AudioEngine {
       tail.connect(pan);
       tail = pan;
     }
-    tail.connect(this.master);
+    tail.connect(opts.bus === 'master' ? this.master : this.sfx);
     const rev = opts.reverb ?? 0.25;
     if (rev > 0) {
       const send = ctx.createGain();
@@ -155,6 +224,10 @@ export class AudioEngine {
   }
 
   dispose(): void {
+    this.music?.dispose();
+    this.music = null;
+    this.ambience?.dispose();
+    this.ambience = null;
     void this.ctx?.close();
     this.ctx = null;
   }

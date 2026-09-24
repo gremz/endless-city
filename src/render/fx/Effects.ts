@@ -201,6 +201,10 @@ const IMPACT_COLORS: Record<number, [number, number, number]> = {
   [Material.Metal]: [1, 0.85, 0.5],
   [Material.Dev]: [0.7, 0.68, 0.64],
   [Material.Paint]: [0.3, 0.3, 0.3],
+  [Material.CarPaint]: [1, 0.85, 0.5],
+  [Material.CarGlass]: [0.8, 0.9, 1],
+  [Material.CarWheel]: [0.18, 0.18, 0.18],
+  [Material.CarTrim]: [0.4, 0.4, 0.4],
 };
 
 /** Impact dust, sparks and blood: one Points object with CPU-simulated particles. */
@@ -253,7 +257,7 @@ export class Particles {
 
   impact(pos: Vec3, normal: Vec3, material: number): void {
     const c = IMPACT_COLORS[material] ?? IMPACT_COLORS[Material.Concrete];
-    if (material === Material.Metal) {
+    if (material === Material.Metal || material === Material.CarPaint) {
       this.emit(pos, normal.x, normal.y, normal.z, 7, 5, 1.6, c, 0.25, 12);
     } else {
       this.emit(pos, normal.x, normal.y, normal.z, 9, 2.2, 1.3, c, 0.5, 5);
@@ -262,6 +266,33 @@ export class Particles {
 
   blood(pos: Vec3, dirX: number, dirY: number, dirZ: number, heavy: boolean): void {
     this.emit(pos, dirX, dirY, dirZ, heavy ? 16 : 9, 1.8, 1.4, [0.55, 0.04, 0.03], 0.45, 7);
+  }
+
+  /** HE blast: hot sparks and a ring of dust and grit. */
+  explosion(pos: Vec3): void {
+    this.emit(pos, 0, 0.8, 0, 40, 9, 2.2, [1, 0.72, 0.3], 0.5, 9);
+    this.emit(pos, 0, 0.4, 0, 50, 4, 2.4, [0.45, 0.42, 0.38], 1.1, 6);
+  }
+
+  /** Molotov bottle breaking. */
+  glass(pos: Vec3): void {
+    this.emit(pos, 0, 0.6, 0, 18, 3, 2, [0.75, 0.55, 0.3], 0.5, 9);
+    this.emit(pos, 0, 0.9, 0, 14, 2.5, 1.6, [1, 0.6, 0.2], 0.4, -1);
+  }
+
+  /** Flashbang pop: a burst of white sparks. */
+  flashPop(pos: Vec3): void {
+    this.emit(pos, 0, 0, 0, 24, 6, 2.2, [1, 1, 0.95], 0.25, 2);
+  }
+
+  /** Raindrop hitting the ground. */
+  splash(pos: Vec3): void {
+    this.emit(pos, 0, 1, 0, 3, 1.2, 1.6, [0.72, 0.78, 0.86], 0.18, 9);
+  }
+
+  /** Embers rising from a fire. */
+  embers(pos: Vec3, count: number): void {
+    this.emit(pos, 0, 1, 0, count, 1.2, 1.2, [1, 0.55, 0.15], 0.9, -1.5);
   }
 
   update(dt: number): void {
@@ -302,14 +333,158 @@ export class MuzzleLight {
   private until = 0;
   private clock = 0;
 
-  flash(x: number, y: number, z: number, strength = 1): void {
+  flash(x: number, y: number, z: number, strength = 1, duration = 0.045, range = 9): void {
     this.light.position.set(x, y, z);
-    this.until = this.clock + 0.045;
+    this.until = this.clock + duration;
     this.light.intensity = 14 * strength;
+    this.light.distance = range;
   }
 
   update(dt: number): void {
     this.clock += dt;
     if (this.clock > this.until) this.light.intensity = 0;
   }
+}
+
+// ---------------------------------------------------------------- billboards
+
+const BILLBOARD_VERT = /* glsl */ `
+attribute vec4 aOffset; // xyz position, w size
+attribute vec4 aColor;  // rgb, a alpha
+attribute float aRot;
+varying vec2 vUv;
+varying vec4 vColor;
+#include <fog_pars_vertex>
+void main() {
+  vUv = uv;
+  vColor = aColor;
+  vec4 mvPosition = modelViewMatrix * vec4(aOffset.xyz, 1.0);
+  float c = cos(aRot);
+  float s = sin(aRot);
+  vec2 p = vec2(position.x * c - position.y * s, position.x * s + position.y * c);
+  mvPosition.xy += p * aOffset.w;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}
+`;
+
+const BILLBOARD_FRAG = /* glsl */ `
+uniform sampler2D map;
+varying vec2 vUv;
+varying vec4 vColor;
+#include <fog_pars_fragment>
+void main() {
+  vec4 tex = texture2D(map, vUv);
+  gl_FragColor = vec4(vColor.rgb * tex.rgb, vColor.a * tex.a);
+  if (gl_FragColor.a < 0.004) discard;
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}
+`;
+
+/**
+ * Camera-facing quads drawn in one call (smoke puffs, flames). Fill each frame between begin()
+ * and end(); positions are world space.
+ */
+export class Billboards {
+  readonly mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+  private offset: Float32Array;
+  private color: Float32Array;
+  private rot: Float32Array;
+  private n = 0;
+
+  constructor(
+    private max: number,
+    map: THREE.Texture,
+    additive: boolean,
+  ) {
+    const base = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = base.index;
+    geo.setAttribute('position', base.getAttribute('position'));
+    geo.setAttribute('uv', base.getAttribute('uv'));
+    this.offset = new Float32Array(max * 4);
+    this.color = new Float32Array(max * 4);
+    this.rot = new Float32Array(max);
+    geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(this.offset, 4).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(this.color, 4).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('aRot', new THREE.InstancedBufferAttribute(this.rot, 1).setUsage(THREE.DynamicDrawUsage));
+    geo.instanceCount = 0;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { map: { value: null } }]),
+      vertexShader: BILLBOARD_VERT,
+      fragmentShader: BILLBOARD_FRAG,
+      transparent: true,
+      depthWrite: false,
+      fog: true,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    });
+    mat.uniforms.map.value = map;
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.frustumCulled = false;
+  }
+
+  begin(): void {
+    this.n = 0;
+  }
+
+  push(x: number, y: number, z: number, size: number, r: number, g: number, b: number, a: number, rot = 0): void {
+    if (this.n >= this.max || a <= 0.002) return;
+    const i = this.n++;
+    this.offset[i * 4] = x;
+    this.offset[i * 4 + 1] = y;
+    this.offset[i * 4 + 2] = z;
+    this.offset[i * 4 + 3] = size;
+    this.color[i * 4] = r;
+    this.color[i * 4 + 1] = g;
+    this.color[i * 4 + 2] = b;
+    this.color[i * 4 + 3] = a;
+    this.rot[i] = rot;
+  }
+
+  end(): void {
+    const geo = this.mesh.geometry;
+    geo.instanceCount = this.n;
+    for (const name of ['aOffset', 'aColor', 'aRot']) {
+      const attr = geo.getAttribute(name) as THREE.InstancedBufferAttribute;
+      attr.needsUpdate = true;
+      attr.addUpdateRange(0, this.n * attr.itemSize);
+    }
+    this.mesh.visible = this.n > 0;
+  }
+}
+
+/** Soft cloudy puff for smoke and flames: radial falloff broken up with a little noise. */
+export function makePuffTexture(seed = 1): THREE.CanvasTexture {
+  const size = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  let s = seed * 9301 + 49297;
+  const rnd = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  // A few overlapping blobs make the puff lumpy rather than a perfect disc.
+  const blobs = Array.from({ length: 6 }, () => [0.5 + (rnd() - 0.5) * 0.35, 0.5 + (rnd() - 0.5) * 0.35, 0.22 + rnd() * 0.16]);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = (x + 0.5) / size;
+      const v = (y + 0.5) / size;
+      let a = 0;
+      for (const [bx, by, br] of blobs) {
+        const d = Math.hypot(u - bx, v - by) / br;
+        a = Math.max(a, 1 - d * d);
+      }
+      const edge = Math.max(0, 1 - Math.hypot(u - 0.5, v - 0.5) * 2);
+      a = Math.max(0, Math.min(1, a * edge * 1.9)) * (0.85 + rnd() * 0.15);
+      const shade = 0.82 + 0.18 * (1 - v);
+      const o = (y * size + x) * 4;
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = Math.round(255 * shade);
+      img.data[o + 3] = Math.round(255 * a);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }

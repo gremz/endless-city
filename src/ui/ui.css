@@ -110,6 +110,16 @@ body {
   background: #ffc94d;
 }
 
+.menu-save {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #9dffa0;
+}
+
+.menu-save:empty {
+  display: none;
+}
+
 .menu-status {
   min-height: 20px;
   margin: 12px 0 4px;
@@ -153,7 +163,8 @@ kbd {
 /* ---------- debug ---------- */
 .debug-overlay {
   position: absolute;
-  top: 8px;
+  /* Below the minimap and clock. */
+  top: 244px;
   left: 8px;
   background: rgba(0, 0, 0, 0.55);
   padding: 8px 10px;
@@ -330,6 +341,60 @@ kbd {
   font-size: 16px;
 }
 
+.hud-medkit {
+  position: relative;
+}
+
+/* White case with a red cross, drawn in CSS. */
+.medkit-icon {
+  position: relative;
+  width: 22px;
+  height: 16px;
+  border-radius: 3px;
+  background: #f2f2ee;
+}
+
+.medkit-icon::before,
+.medkit-icon::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: #d8262c;
+  transform: translate(-50%, -50%);
+}
+
+.medkit-icon::before {
+  width: 12px;
+  height: 4px;
+}
+
+.medkit-icon::after {
+  width: 4px;
+  height: 12px;
+}
+
+.hud-kits {
+  font-size: 24px;
+  color: #f4f1e6;
+}
+
+.heal-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 3px;
+  background: #5dff7a;
+  transform: scaleX(0);
+  transform-origin: left;
+  opacity: 0;
+}
+
+.heal-bar.active {
+  opacity: 1;
+}
+
 .hud-money {
   position: relative;
   font-size: 24px;
@@ -466,6 +531,10 @@ kbd {
   color: #ff8a7a;
 }
 
+.center-msg.heal {
+  color: #8dffa6;
+}
+
 .damage-flash {
   position: absolute;
   inset: 0;
@@ -475,6 +544,18 @@ kbd {
 }
 
 .damage-flash.show {
+  opacity: 1;
+}
+
+.heal-flash {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 140px rgba(60, 230, 110, 0.45);
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.heal-flash.show {
   opacity: 1;
 }
 
@@ -524,12 +605,54 @@ kbd {
   white-space: nowrap;
 }
 
+.minimap {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 2px 10px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
 .buy-hint {
   position: absolute;
   left: 24px;
   bottom: 120px;
   font-size: 13px;
   color: #9dffa0;
+}
+
+.heal-hint {
+  position: absolute;
+  left: 24px;
+  bottom: 140px;
+  font-size: 13px;
+  color: #ff8a80;
+}
+
+.use-prompt {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 56px);
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  color: #eee;
+  white-space: nowrap;
+}
+
+.use-prompt kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+  text-align: center;
+  font: 700 12px system-ui, sans-serif;
 }
 
 .death {
@@ -686,4 +809,196 @@ kbd {
   background: #222;
   color: var(--fg);
   border: 1px solid var(--line);
+}
+
+/* ---------- world map ---------- */
+.worldmap {
+  position: absolute;
+  inset: 0;
+  background: #0d1013;
+  pointer-events: auto !important;
+}
+
+.worldmap-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.worldmap-canvas:active {
+  cursor: grabbing;
+}
+
+.worldmap-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 250px;
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.worldmap-title {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.worldmap-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+  color: var(--dim);
+}
+
+.worldmap-row b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.worldmap-hover {
+  min-height: 1.3em;
+  margin: 8px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.worldmap-legend {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.worldmap-legend .swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border-radius: 2px;
+}
+
+.swatch.zone {
+  background: rgba(93, 255, 122, 0.3);
+  border: 1px solid #5dff7a;
+}
+
+.swatch.hostile {
+  background: rgba(255, 196, 106, 0.25);
+  border: 1px solid #ffc46a;
+}
+
+.swatch.stash {
+  background: #7fd4ff;
+  border-radius: 50% !important;
+}
+
+.swatch.ring {
+  border: 1px dashed rgba(255, 120, 90, 0.8);
+  border-radius: 50% !important;
+}
+
+.worldmap-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.worldmap-buttons .btn {
+  flex: 1;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.worldmap-status {
+  margin-top: 8px;
+  color: var(--accent);
+}
+
+.worldmap-help {
+  margin-top: 6px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+/* Flashbang whiteout: opacity driven every frame from the sim. */
+.flash-overlay {
+  position: absolute;
+  inset: 0;
+  background: #fbfbf6;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hud-nades {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-bottom: 4px;
+  min-height: 18px;
+}
+
+.nade-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 5px;
+  border-radius: 9px;
+  color: #1a1a1a;
+  opacity: 0.55;
+  background: #c9ccc4;
+}
+
+.nade-chip.nade-hegrenade {
+  background: #8fa35e;
+}
+
+.nade-chip.nade-flashbang {
+  background: #e8e2b0;
+}
+
+.nade-chip.nade-smokegrenade {
+  background: #b9bfc6;
+}
+
+.nade-chip.nade-molotov {
+  background: #e79a4c;
+}
+
+.nade-chip.selected {
+  opacity: 0.85;
+}
+
+.nade-chip.active {
+  opacity: 1;
+  box-shadow: 0 0 0 1px #f4f1e6;
+}
+
+/* Clock under the radar. */
+.hud-clock {
+  position: absolute;
+  top: 218px;
+  left: 12px;
+  width: 200px;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: #dfe5ea;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
 }

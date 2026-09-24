@@ -56,6 +56,40 @@ function tube(r: number, len: number, x: number, y: number, z: number, color: st
   return colorize(g, color);
 }
 
+/** Upright cylinder (along Y), optionally tapered. */
+function cyl(rTop: number, rBottom: number, h: number, x: number, y: number, z: number, color: string, seg = 12): Part {
+  const g = new THREE.CylinderGeometry(rTop, rBottom, h, seg);
+  g.translate(x, y, z);
+  return colorize(g, color);
+}
+
+function ball(r: number, x: number, y: number, z: number, color: string, sy = 1): Part {
+  const g = new THREE.SphereGeometry(r, 12, 9);
+  g.scale(1, sy, 1);
+  g.translate(x, y, z);
+  return colorize(g, color);
+}
+
+/** Spoon, pin and ring shared by the pin grenades (sitting on top of a body of height h). */
+function fuzeParts(top: number): Part[] {
+  return [
+    cyl(0.011, 0.013, 0.02, 0, top + 0.01, 0, METAL_LIGHT),
+    box(0.012, 0.075, 0.006, 0.014, top - 0.02, 0, '#8c8f94', 0, 0, -0.12),
+    box(0.02, 0.004, 0.004, -0.012, top + 0.012, 0, '#b9bec4'),
+    tube(0.009, 0.003, -0.027, top + 0.012, 0, '#c9ced4', 8),
+  ];
+}
+
+/** Hand-held grenade model: held in the palm, no second hand. */
+function grenadeModel(parts: Part[]): GunModel {
+  return {
+    geometry: build(parts),
+    muzzle: new THREE.Vector3(0, 0.05, -0.05),
+    offset: new THREE.Vector3(0.14, -0.1, -0.34),
+    leftHand: null,
+  };
+}
+
 function build(parts: Part[]): THREE.BufferGeometry {
   const g = mergeGeometries(parts, false)!;
   for (const p of parts) p.dispose();
@@ -186,6 +220,18 @@ const MODELS: Record<WeaponId, () => GunModel> = {
     offset: new THREE.Vector3(0.13, -0.15, -0.32),
     leftHand: new THREE.Vector3(0, -0.01, -0.3),
   }),
+  hegrenade: () => grenadeModel([ball(0.03, 0, 0.03, 0, '#4d5a33', 1.15), ...fuzeParts(0.064)]),
+  flashbang: () => grenadeModel([cyl(0.024, 0.024, 0.085, 0, 0.042, 0, '#8a9097'), cyl(0.025, 0.025, 0.012, 0, 0.02, 0, '#d9c24a'), ...fuzeParts(0.085)]),
+  smokegrenade: () =>
+    grenadeModel([cyl(0.026, 0.026, 0.1, 0, 0.05, 0, '#4a4f4a'), cyl(0.027, 0.027, 0.014, 0, 0.07, 0, '#b8bdb0'), ...fuzeParts(0.1)]),
+  molotov: () =>
+    grenadeModel([
+      cyl(0.032, 0.03, 0.1, 0, 0.05, 0, '#6b3d12'),
+      cyl(0.012, 0.03, 0.035, 0, 0.117, 0, '#6b3d12'),
+      cyl(0.011, 0.011, 0.03, 0, 0.149, 0, '#6b3d12'),
+      box(0.02, 0.045, 0.02, 0.004, 0.18, 0, '#d8cfb0', 0, 0, 0.25),
+      cyl(0.033, 0.031, 0.03, 0, 0.04, 0, '#e6dcc0'),
+    ]),
 };
 
 const cache = new Map<WeaponId, GunModel>();

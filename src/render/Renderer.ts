@@ -6,12 +6,28 @@ const SKY_HORIZON = new THREE.Color('#c9d6df');
 const SUN_DIR = new THREE.Vector3(0.45, 0.8, 0.35).normalize();
 const SHADOW_EXTENT = 55;
 
+/** Sky shader inputs the atmosphere animates (day/night, weather). */
+export interface SkyUniforms {
+  top: { value: THREE.Color };
+  horizon: { value: THREE.Color };
+  sunDir: { value: THREE.Vector3 };
+  /** Sun disc and glow strength (0 at night or under cloud). */
+  sunGlow: { value: number };
+  moonDir: { value: THREE.Vector3 };
+  /** Moon and stars visibility. */
+  night: { value: number };
+}
+
 /** Owns the WebGL renderer, the world scene, lighting, fog and sky. */
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly sun: THREE.DirectionalLight;
+  readonly hemi: THREE.HemisphereLight;
+  /** Direction towards the sun (or the moon at night): drives the shadow light. */
+  readonly sunDir = SUN_DIR.clone();
+  readonly skyUniforms: SkyUniforms;
   private sky: THREE.Mesh;
   private renderScale = 1;
   private shadowSize = 0;
@@ -33,8 +49,8 @@ export class Renderer {
     this.scene.fog = new THREE.Fog(SKY_HORIZON.clone(), FOG_NEAR, FOG_FAR);
     this.scene.background = SKY_HORIZON.clone();
 
-    const hemi = new THREE.HemisphereLight('#cfe3ff', '#6b5a48', 1.35);
-    this.scene.add(hemi);
+    this.hemi = new THREE.HemisphereLight('#cfe3ff', '#6b5a48', 1.35);
+    this.scene.add(this.hemi);
 
     this.sun = new THREE.DirectionalLight('#fff1d8', 2.6);
     this.sun.shadow.camera.left = -SHADOW_EXTENT;
@@ -48,6 +64,14 @@ export class Renderer {
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
+    this.skyUniforms = {
+      top: { value: SKY_TOP.clone() },
+      horizon: { value: SKY_HORIZON.clone() },
+      sunDir: { value: this.sunDir },
+      sunGlow: { value: 1 },
+      moonDir: { value: this.sunDir.clone().negate() },
+      night: { value: 0 },
+    };
     this.sky = this.makeSky();
     this.scene.add(this.sky);
 
@@ -64,11 +88,7 @@ export class Renderer {
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
-      uniforms: {
-        top: { value: SKY_TOP },
-        horizon: { value: SKY_HORIZON },
-        sunDir: { value: SUN_DIR },
-      },
+      uniforms: this.skyUniforms as unknown as Record<string, THREE.IUniform>,
       vertexShader: /* glsl */ `
         varying vec3 vDir;
         void main() {
@@ -80,12 +100,32 @@ export class Renderer {
         uniform vec3 top;
         uniform vec3 horizon;
         uniform vec3 sunDir;
+        uniform float sunGlow;
+        uniform vec3 moonDir;
+        uniform float night;
         varying vec3 vDir;
+        float hash(vec3 p) {
+          p = fract(p * 0.3183099 + 0.1);
+          p *= 17.0;
+          return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+        }
         void main() {
-          float h = clamp(vDir.y, 0.0, 1.0);
+          vec3 d = normalize(vDir);
+          float h = clamp(d.y, 0.0, 1.0);
           vec3 col = mix(horizon, top, pow(h, 0.55));
-          float s = max(dot(normalize(vDir), sunDir), 0.0);
-          col += vec3(1.0, 0.9, 0.7) * (pow(s, 600.0) * 2.5 + pow(s, 12.0) * 0.12);
+          float s = max(dot(d, sunDir), 0.0);
+          col += vec3(1.0, 0.9, 0.7) * (pow(s, 600.0) * 2.5 + pow(s, 12.0) * 0.12) * sunGlow;
+          if (night > 0.0) {
+            // Stars: sparse hashed points on a direction grid, twinkle-free, fading at the horizon.
+            vec3 cell = floor(d * 180.0);
+            float star = step(0.9965, hash(cell));
+            vec3 f = fract(d * 180.0) - 0.5;
+            star *= smoothstep(0.35, 0.0, length(f));
+            col += vec3(0.9, 0.93, 1.0) * star * night * smoothstep(0.02, 0.25, d.y) * (0.5 + hash(cell + 7.0));
+            // Moon: a pale disc with a soft halo.
+            float m = max(dot(d, moonDir), 0.0);
+            col += vec3(0.85, 0.9, 1.0) * (smoothstep(0.99975, 0.99988, m) * 1.4 + pow(m, 40.0) * 0.08) * night;
+          }
           gl_FragColor = vec4(col, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
@@ -149,7 +189,8 @@ export class Renderer {
     const fx = Math.round(focus.x / texel) * texel;
     const fz = Math.round(focus.z / texel) * texel;
     this.sun.target.position.set(fx, 0, fz);
-    this.sun.position.set(fx + SUN_DIR.x * 120, SUN_DIR.y * 120, fz + SUN_DIR.z * 120);
+    const d = this.sunDir;
+    this.sun.position.set(fx + d.x * 120, d.y * 120, fz + d.z * 120);
     this.sun.target.updateMatrixWorld();
   }
 

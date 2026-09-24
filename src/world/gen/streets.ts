@@ -3,6 +3,7 @@ import { hash3, Salt, sfc32, type Rand } from '../../core/rng';
 import { Contents, Ramp, SOLID } from '../../physics/brush';
 import { BrushWriter } from './BrushWriter';
 import { Material } from './ChunkData';
+import { CAR_PAINT_PALETTE, CarTrim } from './meshBake';
 import { Occ, rect, subtractRects, type GenContext, type Rect } from './genContext';
 
 /** Road half-width inside this chunk and sidewalk width. The lot is the inner region. */
@@ -13,6 +14,33 @@ export const LOT1 = CHUNK - LOT0;
 export const CURB = 0.15;
 
 const FLOOR = SOLID | Contents.FLOOR;
+
+/** Street lamp spots (chunk-local x, z): the same in every chunk, so the sim can find them too. */
+export const LAMPS: readonly (readonly [number, number])[] = [
+  [LOT0 - 1, LOT0 - 1],
+  [LOT1 + 1, LOT0 - 1],
+  [LOT0 - 1, LOT1 + 1],
+  [LOT1 + 1, LOT1 + 1],
+  [CHUNK / 2, LOT0 - 1],
+  [CHUNK / 2, LOT1 + 1],
+];
+/** Height of the lamp head (the light comes from just below it). */
+export const LAMP_Y = 5;
+
+/** Distance (m, horizontal) from a world point to the nearest street lamp. */
+export function nearestLampDist(x: number, z: number): number {
+  const cx = Math.floor(x / CHUNK);
+  const cz = Math.floor(z / CHUNK);
+  let best = Infinity;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const ox = (cx + dx) * CHUNK;
+      const oz = (cz + dz) * CHUNK;
+      for (const [lx, lz] of LAMPS) best = Math.min(best, Math.hypot(ox + lx - x, oz + lz - z));
+    }
+  }
+  return best;
+}
 const PAINT = Contents.VISIBLE;
 
 /** Asphalt, sidewalks, curbs, road markings, street lamps. */
@@ -45,17 +73,11 @@ export function buildStreets(ctx: GenContext): void {
     w.box(0, 0, a, lw, 0.01, a + 1.5, Material.Paint, PAINT, 200);
     w.box(C - lw, 0, a, C, 0.01, a + 1.5, Material.Paint, PAINT, 200);
   }
-  // Street lamps on the sidewalk corners.
-  for (const [x, z] of [
-    [LOT0 - 1, LOT0 - 1],
-    [LOT1 + 1, LOT0 - 1],
-    [LOT0 - 1, LOT1 + 1],
-    [LOT1 + 1, LOT1 + 1],
-    [C / 2, LOT0 - 1],
-    [C / 2, LOT1 + 1],
-  ]) {
-    w.box(x - 0.09, CURB, z - 0.09, x + 0.09, 5, z + 0.09, Material.Metal, SOLID, 4);
-    w.box(x - 0.25, 5, z - 0.25, x + 0.25, 5.15, z + 0.25, Material.Metal, SOLID, 4);
+  // Street lamps on the sidewalk corners, glass underneath the head.
+  for (const [x, z] of LAMPS) {
+    w.box(x - 0.09, CURB, z - 0.09, x + 0.09, LAMP_Y, z + 0.09, Material.Metal, SOLID, 4);
+    w.box(x - 0.25, LAMP_Y, z - 0.25, x + 0.25, LAMP_Y + 0.15, z + 0.25, Material.Metal, SOLID, 4);
+    w.box(x - 0.2, LAMP_Y - 0.04, z - 0.2, x + 0.2, LAMP_Y, z + 0.2, Material.LampGlow, Contents.VISIBLE, 0);
   }
 
   buildEdges(ctx);
@@ -113,18 +135,89 @@ function barrierLine(w: BrushWriter, alongX: boolean, s0: number, s1: number, at
   else w.box(a0, 0, at, a1, h, at + 0.6, Material.Concrete, SOLID, 210);
 }
 
-/** A parked car: body plus cabin, ~1.5 m tall (half cover). `lane` is the car's near side. */
+const CAR_L = 4.3;
+const CAR_W = 1.8;
+const DETAIL = Contents.VISIBLE;
+
+/**
+ * A parked car in a 4.3 x 1.8 m footprint, at most 1.5 m tall (half cover). `lane` is the car's
+ * near side. Solid parts (tires, body, bumpers, cabin, sloped glass) block movement and shots;
+ * rims, lights, side glass, seams and mirrors are render-only details 1-2 cm proud of the body.
+ * Consumes exactly one value from `r` so the rest of the chunk layout doesn't depend on car looks.
+ */
 export function car(w: BrushWriter, r: Rand, alongX: boolean, lane: number, at: number, y = 0): void {
-  const tint = Math.floor(r() * 6);
-  if (alongX) {
-    w.box(at, y + 0.3, lane, at + 4.3, y + 1.05, lane + 1.8, Material.Metal, SOLID, tint);
-    w.box(at + 1.1, y + 1.05, lane + 0.15, at + 3.3, y + 1.5, lane + 1.65, Material.Metal, SOLID, tint);
-    w.box(at + 0.4, y, lane + 0.1, at + 3.9, y + 0.3, lane + 1.7, Material.Metal, SOLID, 4);
-  } else {
-    w.box(lane, y + 0.3, at, lane + 1.8, y + 1.05, at + 4.3, Material.Metal, SOLID, tint);
-    w.box(lane + 0.15, y + 1.05, at + 1.1, lane + 1.65, y + 1.5, at + 3.3, Material.Metal, SOLID, tint);
-    w.box(lane + 0.1, y, at + 0.4, lane + 1.7, y + 0.3, at + 3.9, Material.Metal, SOLID, 4);
+  const cr = sfc32((r() * 0x100000000) >>> 0);
+  const paint = Math.floor(cr() * CAR_PAINT_PALETTE.length);
+  const flip = cr() < 0.5;
+  const hatch = cr() < 0.4;
+
+  /** Box in car space: s along the length (front at 0), t across, y up. `rise` = ramp towards ±s. */
+  const part = (
+    s0: number,
+    y0: number,
+    t0: number,
+    s1: number,
+    y1: number,
+    t1: number,
+    mat: number,
+    contents: number,
+    tint: number,
+    rise = 0,
+  ) => {
+    if (flip) {
+      [s0, s1] = [CAR_L - s1, CAR_L - s0];
+      rise = -rise;
+    }
+    const dir = rise === 0 ? Ramp.None : alongX ? (rise > 0 ? Ramp.PosX : Ramp.NegX) : rise > 0 ? Ramp.PosZ : Ramp.NegZ;
+    if (alongX) w.box(at + s0, y + y0, lane + t0, at + s1, y + y1, lane + t1, mat, contents, tint, dir);
+    else w.box(lane + t0, y + y0, at + s0, lane + t1, y + y1, at + s1, mat, contents, tint, dir);
+  };
+  /** The same part on both sides of the car (t measured from the near side). */
+  const pair = (s0: number, y0: number, t0: number, s1: number, y1: number, t1: number, mat: number, contents: number, tint: number) => {
+    part(s0, y0, t0, s1, y1, t1, mat, contents, tint);
+    part(s0, y0, CAR_W - t1, s1, y1, CAR_W - t0, mat, contents, tint);
+  };
+
+  const { CarPaint, CarGlass, CarWheel, CarTrim: Trim } = Material;
+  const roof = hatch ? 1.5 : 1.45;
+  const belt = 0.95;
+  // Cabin span: windshield base, roof start, roof end, rear window base.
+  const ws = 1.25;
+  const r0 = 1.85;
+  const r1 = hatch ? 3.55 : 3.1;
+  const rw = hatch ? 3.8 : 3.6;
+
+  // Solid shell.
+  // Wheels: a solid black tire block with the rim texture only on a thin outer face.
+  for (const s of [0.55, 3.1]) {
+    pair(s, 0, 0.06, s + 0.64, 0.64, 0.3, Trim, SOLID, CarTrim.Plastic);
+    pair(s, 0, 0.05, s + 0.64, 0.64, 0.06, CarWheel, DETAIL, 0);
   }
+  part(0.3, 0.14, 0.2, 4.0, 0.34, 1.6, Trim, SOLID, CarTrim.Plastic);
+  part(0.1, 0.34, 0.07, 4.2, belt, 1.73, CarPaint, SOLID, paint);
+  part(0.01, 0.3, 0.05, 0.1, 0.55, 1.75, Trim, SOLID, CarTrim.Plastic);
+  part(4.2, 0.3, 0.05, 4.29, 0.55, 1.75, Trim, SOLID, CarTrim.Plastic);
+  part(ws, belt, 0.17, r0, roof, 1.63, CarGlass, SOLID, 0, 1);
+  part(r0, belt, 0.15, r1, roof, 1.65, CarPaint, SOLID, paint);
+  part(r1, belt, 0.17, rw, roof, 1.63, CarGlass, SOLID, 0, -1);
+
+  // Side glass (front and rear door windows) with a B-pillar between.
+  const top = roof - 0.06;
+  pair(r0 + 0.03, 1.0, 0.14, 2.45, top, 0.15, CarGlass, DETAIL, 0);
+  pair(2.53, 1.0, 0.14, r1 - 0.03, top, 0.15, CarGlass, DETAIL, 0);
+  // Door seams and handles.
+  for (const s of [ws, 2.45, 3.05]) pair(s, 0.4, 0.06, s + 0.02, belt - 0.02, 0.07, Trim, DETAIL, CarTrim.Plastic);
+  for (const s of [2.15, 2.8]) pair(s, 0.8, 0.05, s + 0.15, 0.84, 0.07, Trim, DETAIL, CarTrim.Chrome);
+  // Mirrors.
+  pair(ws + 0.05, belt, 0, ws + 0.17, belt + 0.12, 0.07, Trim, DETAIL, CarTrim.Plastic);
+  // Front: headlights, grille, plate.
+  pair(0.09, 0.68, 0.15, 0.1, 0.82, 0.5, Trim, DETAIL, CarTrim.Headlight);
+  pair(0.09, 0.6, 0.5, 0.1, 0.68, 0.6, Trim, DETAIL, CarTrim.Amber);
+  part(0.09, 0.6, 0.62, 0.1, 0.82, 1.18, Trim, DETAIL, CarTrim.Plastic);
+  part(0, 0.36, 0.64, 0.01, 0.48, 1.16, Trim, DETAIL, CarTrim.Plate);
+  // Rear: taillights, plate.
+  pair(4.2, 0.7, 0.12, 4.21, 0.84, 0.45, Trim, DETAIL, CarTrim.Taillight);
+  part(4.29, 0.36, 0.64, 4.3, 0.48, 1.16, Trim, DETAIL, CarTrim.Plate);
 }
 
 /**

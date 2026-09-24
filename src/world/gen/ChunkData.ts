@@ -17,9 +17,15 @@ export const Material = {
   Dev: 7,
   Wood: 8,
   Paint: 9,
+  CarPaint: 10,
+  CarGlass: 11,
+  CarWheel: 12,
+  CarTrim: 13,
+  /** Street lamp glass: glows at night. */
+  LampGlow: 14,
 } as const;
 export type MaterialId = (typeof Material)[keyof typeof Material];
-export const MATERIAL_COUNT = 10;
+export const MATERIAL_COUNT = 15;
 
 /** Packed word layout: bits 0-2 ramp, 3-7 material, 8-15 contents. */
 export const packBrushWord = (ramp: number, material: number, contents: number) =>
@@ -73,6 +79,8 @@ export interface ChunkData {
   spawns: Float32Array;
   perches: Float32Array;
   patrol: Float32Array;
+  /** Health pack spots: x, y, z triples in world meters. */
+  pickups: Float32Array;
   hasEncounter: boolean;
   genMs: number;
 }
@@ -86,6 +94,7 @@ export function transferList(d: ChunkData): ArrayBuffer[] {
     d.spawns.buffer as ArrayBuffer,
     d.perches.buffer as ArrayBuffer,
     d.patrol.buffer as ArrayBuffer,
+    d.pickups.buffer as ArrayBuffer,
   ];
   for (const m of d.meshes) {
     out.push(

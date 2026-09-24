@@ -39,13 +39,21 @@ export class Viewmodel {
   private armL: THREE.Mesh;
   private flash: THREE.Sprite;
   private material = new THREE.MeshLambertMaterial({ vertexColors: true });
+  private hemi: THREE.HemisphereLight;
+  private key: THREE.DirectionalLight;
   private weapon: WeaponId | null = null;
   private flashUntil = 0;
   private kick = 0;
   private kickRot = 0;
   private swing = 0;
   private swingDir = 1;
+  /** 0..1: arm drawn back with the pin pulled. */
+  private pinBack = 0;
+  /** Throw follow-through, decays from 1. */
+  private throwAnim = 0;
   private landDip = 0;
+  /** 0..1: gun lowered out of the way while a medkit is applied. */
+  private healLower = 0;
   private bobPhase = 0;
   private swayX = 0;
   private swayY = 0;
@@ -56,10 +64,11 @@ export class Viewmodel {
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(60, aspect, 0.01, 10);
-    this.scene.add(new THREE.HemisphereLight('#e6eeff', '#6a5c4c', 2.2));
-    const key = new THREE.DirectionalLight('#fff3e0', 2.6);
-    key.position.set(0.6, 1, 0.4);
-    this.scene.add(key);
+    this.hemi = new THREE.HemisphereLight('#e6eeff', '#6a5c4c', 2.2);
+    this.scene.add(this.hemi);
+    this.key = new THREE.DirectionalLight('#fff3e0', 2.6);
+    this.key.position.set(0.6, 1, 0.4);
+    this.scene.add(this.key);
 
     this.gun = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
     const armGeo = makeArmGeometry();
@@ -114,6 +123,17 @@ export class Viewmodel {
     this.flash.scale.setScalar(0.1 + Math.random() * 0.06);
   }
 
+  /** Scale the gun's lighting with the world's (dim at night). */
+  setLightScale(k: number): void {
+    this.hemi.intensity = 2.2 * k;
+    this.key.intensity = 2.6 * k;
+  }
+
+  onThrow(): void {
+    this.throwAnim = 1;
+    this.pinBack = 0;
+  }
+
   onLand(speed: number): void {
     this.landDip = Math.min(0.06, this.landDip + speed * 0.006);
   }
@@ -161,6 +181,8 @@ export class Viewmodel {
     this.kickRot *= Math.exp(-frameDt * 12);
     this.landDip *= Math.exp(-frameDt * 8);
     this.swing *= Math.exp(-frameDt * 9);
+    this.throwAnim *= Math.exp(-frameDt * 7);
+    this.pinBack += ((w.pinPulled ? 1 : 0) - this.pinBack) * (1 - Math.exp(-frameDt * 14));
 
     let px = model.offset.x + bobX + this.swayX * 0.3;
     let py = model.offset.y + bobY - this.landDip - this.swayY * 0.3;
@@ -193,12 +215,35 @@ export class Viewmodel {
       rz += d * 0.45;
       px -= d * 0.05;
     }
+    // Medkit: lower the gun and tilt it away.
+    this.healLower += ((a.healEnd >= 0 ? 1 : 0) - this.healLower) * (1 - Math.exp(-frameDt * 12));
+    if (this.healLower > 0.001) {
+      py -= this.healLower * 0.2;
+      rx -= this.healLower * 0.6;
+      rz += this.healLower * 0.3;
+    }
     // Knife swing.
     if (this.swing > 0.01) {
       ry += this.swing * 0.9 * this.swingDir;
       rx -= this.swing * 0.4;
       pz -= this.swing * 0.08;
     }
+
+    // Grenade: wind up with the pin out, then follow through after the throw.
+    if (this.pinBack > 0.001) {
+      px += this.pinBack * 0.03;
+      py += this.pinBack * 0.05;
+      pz += this.pinBack * 0.09;
+      rx += this.pinBack * 0.6;
+      rz -= this.pinBack * 0.25;
+    }
+    if (this.throwAnim > 0.01) {
+      py -= this.throwAnim * 0.12;
+      pz -= this.throwAnim * 0.1;
+      rx -= this.throwAnim * 0.9;
+    }
+    // The hand is empty between a throw and drawing the next grenade.
+    this.gun.visible = !(def.category === 'grenade' && w.thrownAt >= 0);
 
     this.pivot.position.set(px, py, pz);
     // Slight toe-in so the barrel points towards the crosshair.

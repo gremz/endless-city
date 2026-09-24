@@ -66,6 +66,36 @@ describe('generateChunk', () => {
     expect(bOpen).toBeGreaterThan(40);
   });
 
+  it('places health packs deterministically, inside the chunk, spaced apart', () => {
+    let total = 0;
+    for (let k = 0; k < 40; k++) {
+      const cx = (k % 8) - 4;
+      const cz = Math.floor(k / 8) - 2;
+      const a = generateChunk(31, cx, cz);
+      expect(a.pickups).toEqual(generateChunk(31, cx, cz).pickups);
+      for (let s = 0; s < a.pickups.length; s += 3) {
+        expect(a.pickups[s]).toBeGreaterThanOrEqual(cx * CHUNK);
+        expect(a.pickups[s]).toBeLessThan((cx + 1) * CHUNK);
+        expect(a.pickups[s + 2]).toBeGreaterThanOrEqual(cz * CHUNK);
+        expect(a.pickups[s + 2]).toBeLessThan((cz + 1) * CHUNK);
+        for (let t = s + 3; t < a.pickups.length; t += 3) {
+          expect(Math.hypot(a.pickups[s] - a.pickups[t], a.pickups[s + 2] - a.pickups[t + 2])).toBeGreaterThanOrEqual(11.9);
+        }
+      }
+      expect(a.pickups.length / 3).toBeLessThanOrEqual(2);
+      total += a.pickups.length / 3;
+    }
+    expect(total).toBeGreaterThan(15);
+  });
+
+  it('the spawn plaza always has a health pack near the drop-in point', () => {
+    for (const seed of [1, 1337, 2024]) {
+      const d = generateChunk(seed, 0, 0);
+      expect(d.pickups.length).toBe(3);
+      expect(Math.hypot(d.pickups[0] - 32, d.pickups[2] - 22)).toBeLessThan(15);
+    }
+  });
+
   it('every spawn slot and patrol point is on a reachable walkable cell (200 chunks)', () => {
     let totalSpawns = 0;
     let encounters = 0;
@@ -84,6 +114,7 @@ describe('generateChunk', () => {
       };
       check(d.spawns);
       check(d.patrol);
+      check(d.pickups);
       totalSpawns += d.spawns.length / 3;
       if (d.hasEncounter) encounters++;
       // A good share of the lot should be reachable from the street.

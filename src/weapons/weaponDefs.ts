@@ -1,9 +1,17 @@
 import { HU } from '../core/config';
 
-export type WeaponId = 'knife' | 'glock' | 'deagle' | 'mp9' | 'ump45' | 'ak47' | 'm4a4' | 'awp';
-export type WeaponSlot = 'primary' | 'secondary' | 'knife';
-export type WeaponCategory = 'knife' | 'pistol' | 'smg' | 'rifle' | 'sniper';
-export type SoundKind = 'knife' | 'pistol' | 'deagle' | 'smg' | 'rifle_heavy' | 'rifle_light' | 'awp';
+export type GrenadeId = 'hegrenade' | 'flashbang' | 'smokegrenade' | 'molotov';
+export type WeaponId = 'knife' | 'glock' | 'deagle' | 'mp9' | 'ump45' | 'ak47' | 'm4a4' | 'awp' | GrenadeId;
+export type WeaponSlot = 'primary' | 'secondary' | 'knife' | 'grenade';
+export type WeaponCategory = 'knife' | 'pistol' | 'smg' | 'rifle' | 'sniper' | 'grenade';
+export type SoundKind = 'knife' | 'pistol' | 'deagle' | 'smg' | 'rifle_heavy' | 'rifle_light' | 'awp' | 'grenade';
+
+export const GRENADE_IDS: readonly GrenadeId[] = ['hegrenade', 'flashbang', 'smokegrenade', 'molotov'];
+export const isGrenadeId = (id: string): id is GrenadeId => (GRENADE_IDS as readonly string[]).includes(id);
+
+/** How many of each grenade you can carry, and the total cap (CS rules: two flashes, four in all). */
+export const GRENADE_CAP: Record<GrenadeId, number> = { hegrenade: 1, flashbang: 2, smokegrenade: 1, molotov: 1 };
+export const GRENADE_TOTAL_CAP = 4;
 
 /**
  * Weapon data, roughly CS:GO values. Inaccuracy and spread are in milliradians (as in CS:GO
@@ -15,6 +23,8 @@ export interface WeaponDef {
   slot: WeaponSlot;
   category: WeaponCategory;
   price: number;
+  /** Price of one magazine of reserve ammo. */
+  ammoPrice: number;
   killReward: number;
   damage: number;
   /** Fraction of damage that goes to health when the hit is armored (CS armor ratio * 0.5). */
@@ -60,6 +70,48 @@ export interface WeaponDef {
   altDamage?: number;
   altCycleTime?: number;
   altRange?: number;
+  /** Grenades: seconds from the throw to detonation (smokes and molotovs can go off sooner). */
+  fuse?: number;
+  /** Grenades: throw speed at full strength (m/s). */
+  throwSpeed?: number;
+}
+
+/** Grenade defs share most gun fields with the knife: no magazine, no spray, no tracers. */
+function grenade(id: GrenadeId, name: string, price: number, damage: number, fuse: number): WeaponDef {
+  return {
+    id,
+    name,
+    slot: 'grenade',
+    category: 'grenade',
+    price,
+    ammoPrice: 0,
+    killReward: 300,
+    damage,
+    armorPen: 0.5,
+    rangeMod: 1,
+    range: 0,
+    penetration: 0,
+    cycleTime: 0.35,
+    automatic: false,
+    magSize: 0,
+    reserve: 0,
+    reloadTime: 0,
+    deployTime: 0.6,
+    maxSpeed: 245 * HU,
+    spread: 0,
+    inaccStand: 0,
+    inaccCrouch: 0,
+    inaccMove: 0,
+    inaccAir: 0,
+    inaccFire: 0,
+    recoveryTime: 0.1,
+    pattern: 'none',
+    viewFollow: 0,
+    tracerEvery: 0,
+    sound: 'grenade',
+    fuse,
+    throwSpeed: 750 * HU * 0.9,
+  };
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
@@ -69,6 +121,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'knife',
     category: 'knife',
     price: 0,
+    ammoPrice: 0,
     killReward: 1500,
     damage: 40,
     armorPen: 0.85,
@@ -104,6 +157,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'secondary',
     category: 'pistol',
     price: 200,
+    ammoPrice: 20,
     killReward: 300,
     damage: 30,
     armorPen: 0.47,
@@ -135,6 +189,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'secondary',
     category: 'pistol',
     price: 700,
+    ammoPrice: 40,
     killReward: 300,
     damage: 63,
     armorPen: 0.932,
@@ -166,6 +221,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'primary',
     category: 'smg',
     price: 1250,
+    ammoPrice: 20,
     killReward: 600,
     damage: 26,
     armorPen: 0.6,
@@ -197,6 +253,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'primary',
     category: 'smg',
     price: 1200,
+    ammoPrice: 25,
     killReward: 600,
     damage: 35,
     armorPen: 0.65,
@@ -228,6 +285,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'primary',
     category: 'rifle',
     price: 2700,
+    ammoPrice: 80,
     killReward: 300,
     damage: 36,
     armorPen: 0.775,
@@ -259,6 +317,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'primary',
     category: 'rifle',
     price: 3100,
+    ammoPrice: 60,
     killReward: 300,
     damage: 33,
     armorPen: 0.7,
@@ -290,6 +349,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     slot: 'primary',
     category: 'sniper',
     price: 4750,
+    ammoPrice: 125,
     killReward: 100,
     damage: 115,
     armorPen: 0.975,
@@ -319,13 +379,21 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     tracerEvery: 1,
     sound: 'awp',
   },
+  hegrenade: grenade('hegrenade', 'HE Grenade', 300, 98, 1.6),
+  flashbang: grenade('flashbang', 'Flashbang', 200, 0, 1.6),
+  smokegrenade: grenade('smokegrenade', 'Smoke Grenade', 300, 0, 3),
+  molotov: { ...grenade('molotov', 'Molotov', 400, 8, 2), armorPen: 1 },
 };
 
-export const BUY_MENU: { title: string; items: (WeaponId | 'kevlar' | 'helmet')[] }[] = [
+export type BuyItem = WeaponId | 'kevlar' | 'helmet' | 'ammo_primary' | 'ammo_secondary';
+
+export const BUY_MENU: { title: string; items: BuyItem[] }[] = [
   { title: 'Pistols', items: ['glock', 'deagle'] },
   { title: 'SMGs', items: ['mp9', 'ump45'] },
   { title: 'Rifles', items: ['m4a4', 'ak47', 'awp'] },
   { title: 'Gear', items: ['kevlar', 'helmet'] },
+  { title: 'Grenades', items: ['flashbang', 'smokegrenade', 'hegrenade', 'molotov'] },
+  { title: 'Ammo', items: ['ammo_primary', 'ammo_secondary'] },
 ];
 
 export const GEAR_PRICES = { kevlar: 650, helmet: 1000 } as const;

@@ -1,20 +1,24 @@
 import { HU } from '../core/config';
 import { clamp, DEG, vec3, wrapAngle, type Vec3 } from '../core/math';
 import { hash3, Salt, sfc32, type Rand } from '../core/rng';
-import { Buttons, makeCmd, type UserCmd } from '../input/UserCmd';
+import { Buttons, makeCmd, SELECT_LAST, type UserCmd } from '../input/UserCmd';
 import { MASK_SHOT } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
 import { eyeHeight, playerMove } from '../player/pmove';
 import type { Actor } from '../sim/Actor';
+import { flashAmount, simulateThrow, throwOrigin, throwVelocity } from '../sim/Grenades';
 import type { Simulation } from '../sim/Simulation';
-import { activeItem } from '../weapons/Inventory';
+import { activeItem, grenadeTotal, syncGrenade } from '../weapons/Inventory';
+import type { GrenadeId } from '../weapons/weaponDefs';
+import { nearestLampDist } from '../world/gen/streets';
+import { visibilityAt } from '../sim/Environment';
 import { getPattern, patternAt } from '../weapons/sprayPatterns';
 import { updateWeapon } from '../weapons/WeaponSystem';
 import type { BotSkill } from './difficulty';
 import { bodyScale } from './hitboxes';
 import type { AStar, PathPoint } from './nav/astar';
 import { findCover, type CoverSpot } from './nav/cover';
-import { toCell } from './nav/NavGrid';
+import { cellCenter, toCell } from './nav/NavGrid';
 
 export type BotState = 'idle' | 'patrol' | 'alert' | 'engage' | 'cover' | 'flank' | 'retreat' | 'overwatch';
 export type BotRole = 'anchor' | 'patroller' | 'flanker' | 'overwatch';
@@ -31,7 +35,27 @@ export interface Squad {
   calloutAt: number;
   /** Last time any member saw the player. */
   lastSeen: number;
+  /** Earliest time the squad throws its next grenade (one at a time, spaced out). */
+  nextNadeAt?: number;
 }
+
+/** A grenade throw being carried out: switch to it, aim, pull the pin, release. */
+interface ThrowPlan {
+  kind: GrenadeId;
+  yaw: number;
+  pitch: number;
+  /** 1 full throw (attack), 0.4 lob (attack2). */
+  strength: number;
+  start: number;
+  /** When the pin was pulled, or -1. */
+  pinAt: number;
+  /** When it left the hand, or -1. */
+  thrownAt: number;
+  count: number;
+}
+
+/** Bots are blinded (no vision, no shooting) above this flash whiteness. */
+const BLIND = 0.35;
 
 /** Player position history (per tick) used for the bots' tracking delay. */
 export class TargetHistory {
@@ -78,6 +102,9 @@ const tgt = vec3();
 const recoil = { pitch: 0, yaw: 0 };
 const moveDir = { x: 0, z: 0 };
 const lookHeights = [0, 0, 0];
+const eyeTmp = vec3();
+const startTmp = vec3();
+const velTmp = vec3();
 
 /**
  * A bot: an Actor driven by a brain that produces a UserCmd every tick, then runs the same
@@ -127,6 +154,16 @@ export class Bot {
   lookYaw: number;
   private thinkPhase: number;
 
+  // Grenades.
+  throwPlan: ThrowPlan | null = null;
+  private nextThrowCheck = 0;
+  private lookAwayUntil = 0;
+  private lookAwayYaw = 0;
+  private fireSeen = 0;
+  /** Where the player has been holding (for molotovs), and since when. */
+  private campAnchor: Vec3 | null = null;
+  private campSince = 0;
+
   constructor(
     readonly actor: Actor,
     readonly skill: BotSkill,
@@ -154,6 +191,7 @@ export class Bot {
 
   /** Forget the player (after they die): go back to posting/patrolling. */
   reset(now: number): void {
+    if (this.throwPlan) this.cancelThrow();
     this.awareness = 0;
     this.lastKnown = null;
     this.visible = false;
@@ -170,10 +208,19 @@ export class Bot {
     if (this.state === 'idle' || this.state === 'patrol') this.setState('alert', now);
   }
 
-  hear(pos: Vec3, radius: number, now: number): void {
+  /**
+   * A sound the player made. `reveal` is false for sounds that don't give away where the
+   * player is (a grenade going off somewhere): they only put the bot on edge.
+   */
+  hear(pos: Vec3, radius: number, now: number, reveal = true): void {
     const a = this.actor.move.pos;
     const d = Math.hypot(pos.x - a.x, pos.z - a.z);
     if (d > radius) return;
+    if (!reveal) {
+      this.awareness = Math.max(this.awareness, 0.35);
+      this.heardAt = now;
+      return;
+    }
     const jitter = d * 0.15;
     const guess = vec3(pos.x + (this.r() - 0.5) * jitter, pos.y, pos.z + (this.r() - 0.5) * jitter);
     this.awareness = Math.max(this.awareness, radius > 30 ? 0.6 : 0.4);
@@ -197,13 +244,18 @@ export class Bot {
       this.awareness = Math.max(0, this.awareness - dt * 0.2);
       return;
     }
+    if (flashAmount(a, sim.time) > BLIND) return;
     const ex = a.move.pos.x;
     const ey = a.move.pos.y + eyeHeight(a.move);
     const ez = a.move.pos.z;
     const dx = p.move.pos.x - ex;
     const dz = p.move.pos.z - ez;
     const dist = Math.hypot(dx, dz);
-    if (dist <= this.skill.visionRange) {
+    // Darkness and fog shorten how far the bot can make you out; a flashlight gives you away.
+    const env = sim.env;
+    const dark = env.darkness > 0.05 || env.fog > 0.05;
+    const vis = dark ? visibilityAt(env, nearestLampDist(p.move.pos.x, p.move.pos.z), p.flashlight) : 1;
+    if (dist <= this.skill.visionRange * vis) {
       // Field of view against the current view direction (very close = always noticed).
       const ang = Math.atan2(-dx, -dz);
       const off = Math.abs(wrapAngle(ang - this.aimYaw));
@@ -220,7 +272,7 @@ export class Bot {
           vb.y = p.move.pos.y + h;
           vb.z = p.move.pos.z;
           sim.world.traceRay(tr, va, vb, MASK_SHOT);
-          if (tr.fraction >= 0.999) {
+          if (tr.fraction >= 0.999 && !sim.grenades.blocksSight(va, vb)) {
             this.visible = true;
             break;
           }
@@ -231,7 +283,9 @@ export class Bot {
       const speed = Math.hypot(p.move.vel.x, p.move.vel.z);
       const moving = speed > 150 * HU ? 1.3 : 1;
       const close = clamp(18 / Math.max(1, dist), 0.35, 3);
-      this.awareness = Math.min(1.5, this.awareness + dt * this.skill.awareness * close * moving);
+      // Harder to pick out in the dark, much easier with a torch in your hand.
+      const light = p.flashlight && env.darkness > 0.3 ? 1.5 : 1 - 0.4 * env.darkness;
+      this.awareness = Math.min(1.5, this.awareness + dt * this.skill.awareness * close * moving * light);
       this.lastSeen = sim.time;
       this.lastKnown = vec3(p.move.pos.x, p.move.pos.y, p.move.pos.z);
       if (this.awareness >= 0.3) {
@@ -258,6 +312,9 @@ export class Bot {
       if (!this.lastKnown || this.squad.lastKnownTime > this.lastSeen) this.lastKnown = this.squad.lastKnown;
       this.awareness = Math.max(this.awareness, 0.45);
     }
+
+    this.trackCamping(now);
+    if (!this.throwPlan && now >= this.nextThrowCheck && this.wantsToThrow(now)) this.planThrow(ctx, now);
 
     const item = activeItem(a.inv);
     const lowAmmo = item.def.magSize > 0 && item.clip <= Math.max(2, item.def.magSize * 0.25);
@@ -314,7 +371,10 @@ export class Bot {
     if (ctx.pathBudget <= 0) return false;
     ctx.pathBudget--;
     const m = this.actor.move.pos;
-    const res = ctx.astar.find(m.x, m.z, gx, gz, this.squad.homeCx, this.squad.homeCz, { extraCost: extra });
+    const g = ctx.sim.grenades;
+    const y = m.y;
+    const hazard = g.fires.length ? (cx: number, cz: number) => g.inFire(cellCenter(cx), y, cellCenter(cz), 0.3) : undefined;
+    const res = ctx.astar.find(m.x, m.z, gx, gz, this.squad.homeCx, this.squad.homeCz, { extraCost: extra, hazard });
     this.pathIdx = 0;
     this.path = res ? res.points : [];
     this.repathAt = ctx.sim.time + 4;
@@ -451,11 +511,12 @@ export class Bot {
     vb.x = p.move.pos.x;
     vb.y = p.move.pos.y + 1.2 * bodyScale(p.move);
     vb.z = p.move.pos.z;
+    const smoke = ctx.sim.grenades;
     ctx.sim.world.traceRay(tr, va, vb, MASK_SHOT);
-    if (tr.fraction >= 0.999) return true;
+    if (tr.fraction >= 0.999 && !smoke.blocksSight(va, vb)) return true;
     vb.y = p.move.pos.y + eyeHeight(p.move) + 0.05;
     ctx.sim.world.traceRay(tr, va, vb, MASK_SHOT);
-    return tr.fraction >= 0.999;
+    return tr.fraction >= 0.999 && !smoke.blocksSight(va, vb);
   }
 
   // -------------------------------------------------------------- tick
@@ -475,6 +536,23 @@ export class Bot {
     cmd.weaponSelect = -1;
 
     if ((sim.tick & 3) === this.thinkPhase) this.think(ctx, dt * 4);
+
+    const g = sim.grenades;
+    if (g.fireVersion !== this.fireSeen) {
+      // A fire started or went out: routes may be different now.
+      this.fireSeen = g.fireVersion;
+      if (this.path.length) this.repathAt = now;
+      if (this.cover && g.inFire(this.cover.x, this.cover.y, this.cover.z, 0.5)) this.cover = null;
+    }
+    const blind = flashAmount(a, now) > BLIND;
+    if (this.throwPlan && !(blind && this.throwPlan.pinAt < 0)) {
+      if (this.executeThrow(ctx, now, dt)) {
+        this.finishTick(ctx);
+        return;
+      }
+    } else if (this.throwPlan) {
+      this.cancelThrow();
+    }
 
     // Acquisition: first sighting starts the reaction timer and picks the aim point/error.
     const engaged = (this.state === 'engage' || this.state === 'overwatch' || this.state === 'cover') && this.visible && this.awareness >= 1;
@@ -497,6 +575,9 @@ export class Bot {
       const aim = this.aimAt(ctx, dt);
       dist = aim.dist;
       wantFire = aim.onTarget && now >= this.reactionEnd;
+    } else if (now < this.lookAwayUntil) {
+      // Own flash in the air: look away until it pops.
+      this.turnTowards(this.lookAwayYaw, -0.3, dt, true);
     } else {
       // Look where we're going, or towards the last known position.
       let lookYaw = this.lookYaw;
@@ -544,7 +625,12 @@ export class Bot {
       case 'cover': {
         if (!this.cover && this.lastKnown && ctx.pathBudget > 0) {
           const threat = vec3(this.lastKnown.x, this.lastKnown.y + 1.6, this.lastKnown.z);
-          this.cover = findCover(sim.nav, sim.world, a.move.pos.x, a.move.pos.z, threat, 15);
+          const g = sim.grenades;
+          const y = a.move.pos.y;
+          this.cover = findCover(sim.nav, sim.world, a.move.pos.x, a.move.pos.z, threat, 15, undefined, {
+            reject: g.fires.length ? (x, z) => g.inFire(x, y, z, 0.5) : undefined,
+            blocksSight: g.smokes.length ? (p, q) => g.blocksSight(p, q) : undefined,
+          });
           ctx.pathBudget--;
           if (!this.cover) {
             this.coverUntil = now + 1;
@@ -606,6 +692,27 @@ export class Bot {
         break;
     }
 
+    // Hazards override the plan: back off blind, get out of fire, dodge live grenades.
+    if (blind) {
+      move.x = Math.sin(this.aimYaw);
+      move.z = Math.cos(this.aimYaw);
+      walk = false;
+      crouch = false;
+      wantFire = false;
+    }
+    const m = a.move.pos;
+    const fire = g.fires.length ? g.fires.find((f) => g.inFire(m.x, m.y, m.z, 0.4) && Math.hypot(m.x - f.pos.x, m.z - f.pos.z) < f.radius + 0.4) : undefined;
+    const danger = fire ?? (this.skill.level >= 5 ? g.dangerNear(m.x, m.z, 4) : null);
+    if (danger && (fire || (danger as { owner?: Actor }).owner?.team !== a.team)) {
+      const dx = m.x - danger.pos.x;
+      const dz = m.z - danger.pos.z;
+      const d = Math.hypot(dx, dz) || 1;
+      move.x = dx / d;
+      move.z = dz / d;
+      walk = false;
+      crouch = false;
+    }
+
     // Unstick: slide sideways relative to the intended direction.
     if (now < this.unstickUntil && (move.x || move.z)) {
       const px = -move.z * this.unstickDir;
@@ -661,17 +768,156 @@ export class Bot {
     }
     if (walk) cmd.buttons |= Buttons.WALK;
     if (crouch) cmd.buttons |= Buttons.DUCK;
-    cmd.yaw = cmd.attackYaw = this.aimYaw;
-    cmd.pitch = cmd.attackPitch = this.aimPitch;
 
     this.checkStuck(ctx, ml > 1e-4 && !wantFire);
+    this.finishTick(ctx);
+  }
 
+  /** Send this tick's command through the same movement and weapon code as the player. */
+  private finishTick(ctx: BotContext): void {
+    const a = this.actor;
+    const sim = ctx.sim;
+    const cmd = this.cmd;
+    cmd.yaw = cmd.attackYaw = this.aimYaw;
+    cmd.pitch = cmd.attackPitch = this.aimPitch;
     a.yaw = this.aimYaw;
     a.pitch = this.aimPitch;
-    playerMove(a.move, cmd, sim.world, dt);
+    playerMove(a.move, cmd, sim.world, sim.dt);
     updateWeapon(a, cmd, sim);
     sim.footsteps(a);
     cmd.pressed = 0;
+  }
+
+  // -------------------------------------------------------------- grenades
+
+  /** Remember how long the player has been holding the same spot (molotov bait). */
+  private trackCamping(now: number): void {
+    const lk = this.squad.lastKnown;
+    if (!lk) return;
+    if (!this.campAnchor || Math.hypot(lk.x - this.campAnchor.x, lk.z - this.campAnchor.z) > 1.5) {
+      this.campAnchor = vec3(lk.x, lk.y, lk.z);
+      this.campSince = now;
+    }
+  }
+
+  /** The player just broke line of sight nearby and the squad's grenade is ready. */
+  private wantsToThrow(now: number): boolean {
+    const a = this.actor;
+    if (this.visible || !this.lastKnown || this.awareness < 0.6 || grenadeTotal(a.inv) <= 0) return false;
+    if (this.state !== 'engage' && this.state !== 'alert' && this.state !== 'cover') return false;
+    if (now < (this.squad.nextNadeAt ?? 0) || flashAmount(a, now) > 0) return false;
+    const since = now - Math.max(this.lastSeen, this.squad.lastSeen);
+    if (since < 1.5 || since > 10) return false;
+    const d = Math.hypot(this.lastKnown.x - a.move.pos.x, this.lastKnown.z - a.move.pos.z);
+    return d > 6 && d < 24;
+  }
+
+  /** Pick a grenade and find an arc that lands it on the player's last known spot. */
+  private planThrow(ctx: BotContext, now: number): void {
+    const sim = ctx.sim;
+    const a = this.actor;
+    const inv = a.inv;
+    const lk = this.lastKnown!;
+    this.nextThrowCheck = now + 2;
+    if (ctx.pathBudget <= 0) return;
+    ctx.pathBudget--;
+    const has = (k: GrenadeId) => inv.nades[k] > 0;
+    const d = Math.hypot(lk.x - a.move.pos.x, lk.z - a.move.pos.z);
+    const camping = now - this.campSince > 4 && now - this.squad.lastKnownTime < 3;
+    let kind: GrenadeId | null = null;
+    if (has('molotov') && camping) kind = 'molotov';
+    else if (has('flashbang') && (this.state === 'alert' || this.role === 'flanker') && d < 18) kind = 'flashbang';
+    else if (has('hegrenade')) kind = 'hegrenade';
+    else if (has('flashbang')) kind = 'flashbang';
+    else if (has('molotov')) kind = 'molotov';
+    if (!kind) return;
+
+    const eye = eyeTmp;
+    eye.x = a.move.pos.x;
+    eye.y = a.move.pos.y + eyeHeight(a.move);
+    eye.z = a.move.pos.z;
+    const yaw = Math.atan2(-(lk.x - eye.x), -(lk.z - eye.z));
+    // Flashes should pop above the target, the rest land on it.
+    const ty = lk.y + (kind === 'flashbang' ? 1.8 : 0);
+    let best = Infinity;
+    let bestPitch = 0;
+    let bestStrength = 1;
+    for (const strength of [1, 0.4]) {
+      for (let deg = -5; deg <= 50; deg += 5) {
+        const pitch = deg * DEG;
+        throwOrigin(sim.world, eye, yaw, pitch, startTmp);
+        throwVelocity(yaw, pitch, strength, null, velTmp);
+        const hit = simulateThrow(sim.world, kind, startTmp, velTmp, sim.dt, 3);
+        const miss = Math.hypot(hit.pos.x - lk.x, hit.pos.z - lk.z) + Math.abs(hit.pos.y - ty) * 0.5;
+        // Never at our own feet.
+        if (Math.hypot(hit.pos.x - eye.x, hit.pos.z - eye.z) < 5) continue;
+        if (miss < best) {
+          best = miss;
+          bestPitch = pitch;
+          bestStrength = strength;
+        }
+      }
+    }
+    if (best > (kind === 'molotov' ? 2.5 : 4)) return;
+    this.throwPlan = { kind, yaw, pitch: bestPitch, strength: bestStrength, start: now, pinAt: -1, thrownAt: -1, count: inv.nades[kind] };
+    this.squad.nextNadeAt = now + 8 + this.r() * 4;
+  }
+
+  private cancelThrow(): void {
+    if (this.actor.inv.active === 'grenade') this.cmd.weaponSelect = SELECT_LAST;
+    this.throwPlan = null;
+  }
+
+  /**
+   * Carry out the throw plan through ordinary commands. Returns false once the plan is over
+   * (the normal brain takes this tick).
+   */
+  private executeThrow(ctx: BotContext, now: number, dt: number): boolean {
+    const plan = this.throwPlan!;
+    const a = this.actor;
+    const inv = a.inv;
+    const w = a.wpn;
+    const cmd = this.cmd;
+    if (plan.thrownAt < 0 && inv.nades[plan.kind] < plan.count) {
+      plan.thrownAt = now;
+      if (plan.kind === 'flashbang') {
+        this.lookAwayUntil = now + 1.9;
+        this.lookAwayYaw = plan.yaw + Math.PI;
+      }
+    }
+    if (plan.thrownAt >= 0) {
+      // Thrown: put the gun back up.
+      if (now - plan.thrownAt > 0.3) {
+        this.cancelThrow();
+        return false;
+      }
+      return true;
+    }
+    const spotted = this.visible && this.awareness >= 1;
+    if ((spotted && plan.pinAt < 0) || now - plan.start > 3 || inv.nades[plan.kind] <= 0) {
+      this.cancelThrow();
+      return false;
+    }
+    if (inv.nadeSel !== plan.kind) {
+      inv.nadeSel = plan.kind;
+      syncGrenade(inv);
+    }
+    if (inv.active !== 'grenade') {
+      cmd.weaponSelect = 4;
+      this.turnTowards(plan.yaw, plan.pitch, dt, true);
+      return true;
+    }
+    this.turnTowards(plan.yaw, plan.pitch, dt, true);
+    const aimed = Math.abs(wrapAngle(plan.yaw - this.aimYaw)) < 0.6 * DEG && Math.abs(plan.pitch - this.aimPitch) < 0.6 * DEG;
+    const button = plan.strength >= 1 ? Buttons.ATTACK : Buttons.ATTACK2;
+    if (w.pinPulled && plan.pinAt < 0) plan.pinAt = now;
+    const holdLongEnough = plan.pinAt >= 0 && now - plan.pinAt >= 0.25;
+    if (!(holdLongEnough && aimed)) {
+      // Keep holding: pin out, winding up.
+      cmd.buttons |= button;
+      if (!w.pinPulled) cmd.pressed |= button;
+    }
+    return true;
   }
 
   private engageMove(ctx: BotContext, move: { x: number; z: number }, wantFire: boolean, dist: number): void {

@@ -15,8 +15,14 @@ export interface PathPoint {
 export interface PathOptions {
   /** Extra cost for entering a cell (e.g. flank routes avoiding the enemy's view). */
   extraCost?: (gx: number, gz: number) => number;
+  /** Cells to keep out of (fires): expensive to enter, and never cut through when smoothing. */
+  hazard?: (gx: number, gz: number) => boolean;
   maxExpansions?: number;
 }
+
+/** Cost of stepping into a hazard cell: high enough to go around, low enough to walk out of one. */
+const HAZARD_COST = 40;
+type CellTest = ((gx: number, gz: number) => boolean) | undefined;
 
 export interface PathResult {
   points: PathPoint[];
@@ -159,6 +165,7 @@ export class AStar {
         let cost = COST[d];
         if (nav.flags(nx, nz) & NavFlag.NearWall) cost += 0.4;
         if (opts.extraCost) cost += opts.extraCost(nx, nz);
+        if (opts.hazard?.(nx, nz)) cost += HAZARD_COST;
         const ng = g[cur] + cost;
         if (stamp[ni] === stampV && ng >= g[ni]) continue;
         stamp[ni] = stampV;
@@ -173,7 +180,7 @@ export class AStar {
     for (let c = end; c !== -1; c = parent[c]) cells.push(c);
     cells.reverse();
     const toG = (c: number): [number, number] => [(c % W) + ox, Math.floor(c / W) + oz];
-    const smoothed = smooth(nav, cells.map(toG));
+    const smoothed = smooth(nav, cells.map(toG), 64, opts.hazard);
     return {
       points: smoothed.map(([gx, gz]) => ({ x: cellCenter(gx), y: nav.floor(gx, gz), z: cellCenter(gz) })),
       complete: found >= 0,
@@ -186,7 +193,7 @@ export class AStar {
  * True if a bot can walk in a straight line between two cells: every cell the line passes
  * through (supercover) is walkable and consecutive floors differ by at most a step.
  */
-export function walkableLine(nav: NavGrid, ax: number, az: number, bx: number, bz: number): boolean {
+export function walkableLine(nav: NavGrid, ax: number, az: number, bx: number, bz: number, hazard?: CellTest): boolean {
   let x = ax;
   let z = az;
   const dx = Math.abs(bx - ax);
@@ -216,6 +223,7 @@ export function walkableLine(nav: NavGrid, ax: number, az: number, bx: number, b
     }
     const f = nav.floor(x, z);
     if (Number.isNaN(f) || Math.abs(f - prev) > STEP) return false;
+    if (hazard?.(x, z)) return false;
     // Near walls, require clearance on the line (keeps bots from grinding corners).
     prev = f;
   }
@@ -227,8 +235,8 @@ export function walkableLine(nav: NavGrid, ax: number, az: number, bx: number, b
  * cell (0.5 m) to each side, unless that side is a wall only for part of the way. This keeps
  * smoothed shortcuts from clipping door jambs and corners.
  */
-export function clearLine(nav: NavGrid, ax: number, az: number, bx: number, bz: number): boolean {
-  if (!walkableLine(nav, ax, az, bx, bz)) return false;
+export function clearLine(nav: NavGrid, ax: number, az: number, bx: number, bz: number, hazard?: CellTest): boolean {
+  if (!walkableLine(nav, ax, az, bx, bz, hazard)) return false;
   const dx = bx - ax;
   const dz = bz - az;
   const l = Math.hypot(dx, dz);
@@ -246,14 +254,14 @@ export function clearLine(nav: NavGrid, ax: number, az: number, bx: number, bz: 
  * Greedy string pulling: from each kept waypoint, scan forward while the straight line stays
  * walkable and keep the last visible cell (bounded lookahead keeps it linear-ish).
  */
-export function smooth(nav: NavGrid, cells: [number, number][], lookahead = 64): [number, number][] {
+export function smooth(nav: NavGrid, cells: [number, number][], lookahead = 64, hazard?: CellTest): [number, number][] {
   if (cells.length <= 2) return cells;
   const out: [number, number][] = [cells[0]];
   let i = 0;
   while (i < cells.length - 1) {
     let j = i + 1;
     const limit = Math.min(cells.length - 1, i + lookahead);
-    while (j < limit && clearLine(nav, cells[i][0], cells[i][1], cells[j + 1][0], cells[j + 1][1])) j++;
+    while (j < limit && clearLine(nav, cells[i][0], cells[i][1], cells[j + 1][0], cells[j + 1][1], hazard)) j++;
     out.push(cells[j]);
     i = j;
   }

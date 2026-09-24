@@ -4,7 +4,7 @@ import { EventQueue } from '../core/events';
 import { vec3 } from '../core/math';
 import type { GameParams } from '../core/urlParams';
 import type { UserCmd } from '../input/UserCmd';
-import { makeCmd } from '../input/UserCmd';
+import { Buttons, makeCmd } from '../input/UserCmd';
 import { CollisionWorld } from '../physics/CollisionWorld';
 import { MASK_PLAYER } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
@@ -13,9 +13,13 @@ import { STAND_MAXS, STAND_MINS } from '../player/movementConfig';
 import { hullMaxs, hullMins, playerMove } from '../player/pmove';
 import { makeInventory, makeWeaponState } from '../weapons/Inventory';
 import { updateWeapon, type HitInfo, type WeaponContext } from '../weapons/WeaponSystem';
+import type { GrenadeId } from '../weapons/weaponDefs';
 import { makeActor, storePrev, Team, teleport, type Actor } from './Actor';
 import { applyDamage, bulletDamage } from './damage';
 import { Economy } from './Economy';
+import { envAt, type Env, type EnvOverride } from './Environment';
+import { GrenadeSystem } from './Grenades';
+import { updateHeal } from './medkit';
 
 export interface SimOptions {
   autoBhop: boolean;
@@ -41,8 +45,15 @@ export class Simulation implements WeaponContext {
   readonly player: Actor;
   readonly actors: Actor[] = [];
   readonly systems: SimSystem[] = [];
+  readonly grenades = new GrenadeSystem(this);
+  /** Time of day and weather, recomputed every tick from the clock. */
+  readonly env: Env;
+  /** Fixed time of day / weather (URL parameters, settings). */
+  envOverride: EnvOverride = {};
   tick = 0;
   time = 0;
+  /** The player's command for the current tick (systems read edge-triggered buttons like USE). */
+  cmd: UserCmd = idleCmd;
   private nextActorId = 1;
   private dummyGear = new Map<number, [number, boolean]>();
 
@@ -53,6 +64,13 @@ export class Simulation implements WeaponContext {
   ) {
     this.player = makeActor(this.nextActorId++, 'You', Team.Player, 0, 0, 0);
     this.actors.push(this.player);
+    this.envOverride = { hour: params.hour ?? undefined, weather: params.weather ?? undefined };
+    this.env = envAt(params.seed, 0, this.envOverride);
+  }
+
+  /** Recompute the environment now (after the clock or overrides changed outside a tick). */
+  updateEnv(): void {
+    envAt(this.params.seed, this.time, this.envOverride, this.env);
   }
 
   newActorId(): number {
@@ -93,9 +111,11 @@ export class Simulation implements WeaponContext {
   }
 
   step(cmd: UserCmd): void {
+    this.cmd = cmd;
     this.tick++;
     this.time += this.dt;
     this.events.beginTick();
+    this.updateEnv();
     for (const a of this.actors) storePrev(a);
 
     const p = this.player;
@@ -106,11 +126,17 @@ export class Simulation implements WeaponContext {
       playerMove(p.move, cmd, this.world, this.dt, { autoBhop: this.opts.autoBhop });
       if (p.move.jumped) this.events.push({ type: 'jump', actorId: p.id });
       if (p.move.landed && !wasGround) this.events.push({ type: 'land', actorId: p.id, speed: p.move.landSpeed });
+      if (cmd.pressed & Buttons.FLASHLIGHT) {
+        p.flashlight = !p.flashlight;
+        this.events.push({ type: 'flashlight', actorId: p.id, on: p.flashlight });
+      }
+      updateHeal(p, cmd, this);
       updateWeapon(p, cmd, this);
       this.footsteps(p);
     }
 
     for (const s of this.systems) s.update(this);
+    this.grenades.update();
     this.separateActors();
 
     // Dummies: stand still, respawn a moment after dying.
@@ -190,6 +216,10 @@ export class Simulation implements WeaponContext {
     return attacker.team !== victim.team;
   }
 
+  throwGrenade(a: Actor, id: GrenadeId, strength: number, yaw: number, pitch: number): void {
+    this.grenades.throw(a, id, strength, yaw, pitch);
+  }
+
   onHit(info: HitInfo): void {
     const { attacker, victim, def } = info;
     const res = bulletDamage(
@@ -249,5 +279,9 @@ export class Simulation implements WeaponContext {
     a.wpn = makeWeaponState();
     a.armor = 0;
     a.helmet = false;
+    a.medkits = 0;
+    a.healEnd = -1;
+    a.flashUntil = -10;
+    a.flashlight = false;
   }
 }

@@ -188,9 +188,132 @@ export const RECIPES: Record<string, Recipe> = {
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(ctx, out, { at: i * 0.11, f0: f, gain: 0.22, decay: 0.25, dur: 1.2, type: 'triangle' }));
     },
   },
+  pickup: {
+    duration: 0.5,
+    build: (ctx, out) => {
+      tone(ctx, out, { f0: 660, gain: 0.22, decay: 0.05, dur: 0.2, type: 'triangle' });
+      tone(ctx, out, { at: 0.07, f0: 990, gain: 0.22, decay: 0.12, dur: 0.4, type: 'triangle' });
+    },
+  },
+  heal: {
+    duration: 1.2,
+    build: (ctx, out, s) => {
+      // Bandage rustle, then a soft rising chime.
+      noise(ctx, out, s, { dur: 0.35, gain: 0.18, type: 'bandpass', freq: 3000, q: 0.8, attack: 0.08, decay: 0.12, freqEnd: 1800 });
+      tone(ctx, out, { at: 0.05, f0: 440, f1: 880, sweep: 0.5, gain: 0.14, decay: 0.3, dur: 1.1 });
+      tone(ctx, out, { at: 0.2, f0: 1320, gain: 0.08, decay: 0.3, dur: 1 });
+    },
+  },
   kill: {
     duration: 0.3,
     build: (ctx, out) => tone(ctx, out, { f0: 1200, f1: 700, sweep: 0.12, gain: 0.18, decay: 0.06, dur: 0.25, type: 'triangle' }),
+  },
+  pin_pull: {
+    duration: 0.3,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.03, gain: 0.4, type: 'bandpass', freq: 3800, q: 5, decay: 0.01 });
+      tone(ctx, out, { at: 0.06, f0: 5200, gain: 0.08, decay: 0.05, dur: 0.2, type: 'triangle' });
+      noise(ctx, out, s + 1, { at: 0.12, dur: 0.02, gain: 0.3, type: 'bandpass', freq: 2600, q: 4, decay: 0.008 });
+    },
+  },
+  nade_throw: {
+    duration: 0.4,
+    build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.25, gain: 0.3, type: 'bandpass', freq: 700, q: 0.9, attack: 0.08, decay: 0.07, freqEnd: 1600 }),
+  },
+  nade_bounce: {
+    duration: 0.3,
+    variants: 3,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.03, gain: 0.5, type: 'bandpass', freq: 1300 + (s % 3) * 300, q: 3, decay: 0.012 });
+      tone(ctx, out, { f0: 520 + (s % 3) * 80, gain: 0.15, decay: 0.03, dur: 0.12, type: 'triangle' });
+    },
+  },
+  he_explode: {
+    duration: 3,
+    variants: 2,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.02, gain: 1, type: 'highpass', freq: 1500, decay: 0.006 });
+      noise(ctx, out, s + 1, { dur: 0.6, gain: 1.2, type: 'lowpass', freq: 2400, decay: 0.12, freqEnd: 300 });
+      tone(ctx, out, { f0: 110, f1: 32, sweep: 0.35, gain: 1.3, decay: 0.28, dur: 1.2 });
+      noise(ctx, out, s + 2, { at: 0.05, dur: 2.6, gain: 0.45, type: 'lowpass', freq: 700, decay: 0.7, freqEnd: 120 });
+      // Debris settling.
+      for (let i = 0; i < 6; i++) {
+        noise(ctx, out, s + 10 + i, { at: 0.35 + i * 0.13 + (s % 5) * 0.02, dur: 0.02, gain: 0.12, type: 'bandpass', freq: 2500 + i * 300, q: 3, decay: 0.01 });
+      }
+    },
+  },
+  flash_bang: {
+    duration: 1.6,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.015, gain: 1, type: 'highpass', freq: 2500, decay: 0.004 });
+      noise(ctx, out, s + 1, { dur: 0.3, gain: 1, type: 'bandpass', freq: 1800, q: 0.6, decay: 0.06, freqEnd: 600 });
+      tone(ctx, out, { f0: 160, f1: 60, sweep: 0.12, gain: 0.8, decay: 0.1, dur: 0.5 });
+      noise(ctx, out, s + 2, { at: 0.02, dur: 1.3, gain: 0.25, type: 'lowpass', freq: 1200, decay: 0.35, freqEnd: 200 });
+    },
+  },
+  flash_ring: {
+    duration: 4,
+    build: (ctx, out) => {
+      tone(ctx, out, { f0: 3520, gain: 0.25, decay: 1.4, dur: 4 });
+      tone(ctx, out, { f0: 3544, gain: 0.12, decay: 1.2, dur: 4 });
+    },
+  },
+  smoke_pop: {
+    duration: 3,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.03, gain: 0.5, type: 'bandpass', freq: 1200, q: 2, decay: 0.01 });
+      noise(ctx, out, s + 1, { at: 0.03, dur: 2.8, gain: 0.35, type: 'highpass', freq: 2600, attack: 0.15, decay: 0.9, freqEnd: 1500 });
+      noise(ctx, out, s + 2, { at: 0.03, dur: 2.2, gain: 0.25, type: 'bandpass', freq: 600, q: 0.7, attack: 0.1, decay: 0.6 });
+    },
+  },
+  molotov_break: {
+    duration: 1.4,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.08, gain: 0.7, type: 'highpass', freq: 3500, decay: 0.03 });
+      for (let i = 0; i < 5; i++) {
+        tone(ctx, out, { at: 0.01 + i * 0.03, f0: 2800 + ((s + i * 7) % 9) * 350, gain: 0.08, decay: 0.05, dur: 0.2, type: 'triangle' });
+      }
+      noise(ctx, out, s + 1, { at: 0.05, dur: 1.2, gain: 0.6, type: 'lowpass', freq: 500, attack: 0.1, decay: 0.35, freqEnd: 1400 });
+    },
+  },
+  fire: {
+    duration: 1.2,
+    variants: 3,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 1.1, gain: 0.35, type: 'lowpass', freq: 600, attack: 0.25, decay: 0.5 });
+      for (let i = 0; i < 7; i++) {
+        noise(ctx, out, s * 13 + i, { at: ((s * 7 + i * 37) % 100) / 100, dur: 0.02, gain: 0.25, type: 'bandpass', freq: 1800 + ((i * 53) % 7) * 250, q: 4, decay: 0.006 });
+      }
+    },
+  },
+  thunder: {
+    duration: 5,
+    variants: 3,
+    build: (ctx, out, s) => {
+      // A sharp crack for close strikes, then a long rolling rumble.
+      noise(ctx, out, s, { dur: 0.25, gain: 0.5 + (s % 3) * 0.2, type: 'bandpass', freq: 1400, q: 0.6, decay: 0.08, freqEnd: 300 });
+      for (let i = 0; i < 4; i++) {
+        noise(ctx, out, s * 7 + i, { at: 0.1 + i * 0.5 + (s % 2) * 0.2, dur: 2.2, gain: 0.7 - i * 0.12, type: 'lowpass', freq: 260, attack: 0.25, decay: 0.6, freqEnd: 80 });
+      }
+      tone(ctx, out, { at: 0.05, f0: 60, f1: 30, sweep: 1.5, gain: 0.5, decay: 0.9, dur: 3.5 });
+    },
+  },
+  step_wet: {
+    duration: 0.3,
+    variants: 4,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.1, gain: 0.45, type: 'bandpass', freq: 900 + (s % 4) * 110, q: 1, decay: 0.03 });
+      noise(ctx, out, s + 5, { at: 0.01, dur: 0.12, gain: 0.3, type: 'highpass', freq: 3500, attack: 0.01, decay: 0.04 });
+      tone(ctx, out, { f0: 100 + (s % 3) * 10, f1: 55, sweep: 0.05, gain: 0.25, decay: 0.03, dur: 0.15 });
+    },
+  },
+  flashlight: {
+    duration: 0.15,
+    build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.02, gain: 0.35, type: 'bandpass', freq: 2800, q: 5, decay: 0.006 }),
+  },
+  fire_out: {
+    duration: 1,
+    build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.9, gain: 0.4, type: 'highpass', freq: 2000, attack: 0.02, decay: 0.3, freqEnd: 900 }),
   },
 };
 
