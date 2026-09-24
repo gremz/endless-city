@@ -63,6 +63,20 @@ export interface DoorInfo {
   nz: number;
 }
 
+/** A building's roof, for fire escapes, ladders and rooftop routes. */
+export interface BuildingInfo {
+  kind: 'block' | 'house' | 'warehouse';
+  fp: Rect;
+  floors: number;
+  /** Walkable roof top (the parapet cap), and the brush index of that cap. */
+  roofY: number;
+  capBrush: number;
+  /** The cap's footprint (it overhangs the walls a little). */
+  cap: Rect;
+  /** Wall sides with doors (0 = -Z, 1 = +Z, 2 = -X, 3 = +X). */
+  doorSides: number[];
+}
+
 export interface GenContext {
   seed: number;
   cx: number;
@@ -86,6 +100,9 @@ export interface GenContext {
   perches: number[];
   /** Driveable cars (chunk-local layout, as passed to carBrushes). */
   vehicles: VehicleSpot[];
+  buildings: BuildingInfo[];
+  /** Ladder nav links: bottom x, y, z, top x, y, z (local meters), then the ladder's outward normal nx, nz. */
+  ladders: number[];
 }
 
 export interface VehicleSpot {

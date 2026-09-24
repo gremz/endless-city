@@ -21,13 +21,13 @@ import { AStar, smooth } from './nav/astar';
 import { NavGrid, toCell } from './nav/NavGrid';
 
 /** A flat 64 m chunk at (0, 0) with optional extra boxes, loaded into a sim (collision + nav). */
-function flatWorld(boxes: [number, number, number, number, number, number][] = [], build?: (w: BrushWriter) => void) {
+function flatWorld(boxes: [number, number, number, number, number, number][] = [], build?: (w: BrushWriter) => void, ladders: number[] = []) {
   const w = new BrushWriter();
   w.box(0, -1, 0, 64, 0, 64, Material.Concrete, SOLID | Contents.FLOOR);
   for (const b of boxes) w.box(b[0], b[1], b[2], b[3], b[4], b[5], Material.Concrete, SOLID);
   build?.(w);
   const brushes = w.finish();
-  const nav = bakeNav(brushes);
+  const nav = bakeNav(brushes, ladders);
   const data = {
     cx: 0,
     cz: 0,
@@ -41,6 +41,7 @@ function flatWorld(boxes: [number, number, number, number, number, number][] = [
     navFloor: nav.floor,
     navFlags: nav.flags,
     navCover: nav.cover,
+    navLinks: nav.links,
     spawns: new Float32Array(0),
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
@@ -244,6 +245,64 @@ describe('bots on several floors', () => {
     // Right under the slab edge a bot has room (3.25 m ceiling); on the slab too.
     const c = toCell(30) * NAV_RES + toCell(30);
     expect(data.navCol[c + 1] - data.navCol[c]).toBe(2);
+  });
+});
+
+/** A 6 m block (x 30..40, z 20..44) with a ladder up its -X wall at z = 32. */
+function ladderBlock(w: BrushWriter): void {
+  w.box(30, 0, 20, 40, 6, 44, Material.Concrete, SOLID | Contents.FLOOR);
+  w.ladder(2, 30, 32, 0, 6);
+}
+const LADDER_LINK = [28.9, 0, 32, 31.1, 6, 32, -1, 0];
+
+describe('bots and ladders', () => {
+  it('path over a ladder link', () => {
+    const { sim } = flatWorld([], ladderBlock, LADDER_LINK);
+    const res = new AStar(sim.nav).find(10, 0, 32, 36, 6, 32, 0, 0, { maxExpansions: 30000 })!;
+    expect(res.complete).toBe(true);
+    const top = res.points.find((p) => p.ladder);
+    expect(top).toBeDefined();
+    expect(top!.y).toBeCloseTo(6, 1);
+  });
+
+  it('climb a ladder to investigate a noise on the roof', () => {
+    const { sim } = flatWorld([[0, 0, 50, 64, 5, 51]], ladderBlock, LADDER_LINK);
+    teleport(sim.player, 32, 0.02, 58);
+    const bot = makeBot(sim, 10, 32, 0);
+    bot.hear({ x: 36, y: 6, z: 32 }, 70, 0);
+    runBots(sim, [bot], 12);
+    expect(bot.actor.move.pos.y).toBeGreaterThan(5.9);
+    expect(bot.actor.move.pos.x).toBeGreaterThan(30.5);
+  });
+
+  it('climb back down instead of jumping', () => {
+    const { sim } = flatWorld([[0, 0, 50, 64, 5, 51]], ladderBlock, LADDER_LINK);
+    teleport(sim.player, 32, 0.02, 58);
+    const bot = makeBot(sim, 36, 32, Math.PI);
+    teleport(bot.actor, 36, 6.02, 32);
+    bot.hear({ x: 10, y: 0, z: 32 }, 70, 0);
+    runBots(sim, [bot], 12);
+    expect(bot.actor.move.pos.y).toBeLessThan(0.5);
+    expect(bot.actor.move.pos.x).toBeLessThan(28);
+    expect(bot.actor.health).toBe(100);
+  });
+});
+
+describe('fall damage', () => {
+  function drop(height: number) {
+    const { sim } = flatWorld();
+    teleport(sim.player, 32, height, 32);
+    const idle = makeCmd();
+    for (let i = 0; i < 3 * 64; i++) sim.step(idle);
+    return sim.player;
+  }
+
+  it('is free up to about 5 m, hurts from higher, and kills from about 17 m', () => {
+    expect(drop(4.5).health).toBe(100);
+    const hurt = drop(10);
+    expect(hurt.health).toBeLessThan(70);
+    expect(hurt.health).toBeGreaterThan(30);
+    expect(drop(20).alive).toBe(false);
   });
 });
 

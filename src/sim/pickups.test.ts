@@ -32,6 +32,7 @@ function setup(spots: [number, number][] = []) {
     navFloor: new Int16Array(0),
     navFlags: new Uint8Array(0),
     navCover: new Uint8Array(0),
+    navLinks: new Float32Array(0),
     spawns: new Float32Array(0),
     perches: new Float32Array(0),
     patrol: new Float32Array(0),

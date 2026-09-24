@@ -21,6 +21,9 @@ import { currentInaccuracy } from '../weapons/WeaponSystem';
 import { GRENADE_IDS, WEAPONS, type WeaponId } from '../weapons/weaponDefs';
 import type { SimEvent } from '../core/events';
 import { carSpeed } from '../sim/vehicle/carPhysics';
+
+/** Kill feed names for deaths not caused by a weapon. */
+const NON_WEAPON_NAMES: Record<string, string> = { car: 'Car', fall: 'Fall' };
 import { SMOKE_HEALTH, VEHICLE_HEALTH } from '../sim/vehicle/Vehicle';
 
 const NADE_LABELS: Record<string, string> = { hegrenade: 'HE', flashbang: 'FL', smokegrenade: 'SM', molotov: 'MO' };
@@ -122,10 +125,10 @@ export class Presentation {
             : { x: 0, y: 0, z: 1 };
           const l = Math.hypot(dir.x, dir.z) || 1;
           this.particles.blood(e.pos, dir.x / l, 0.3, dir.z / l, e.group === HitGroup.Head);
-          if (e.attackerId === player.id) {
+          if (e.attackerId === player.id && e.victimId !== player.id) {
             this.hud.hit(e.killed ? 'kill' : e.group === HitGroup.Head ? 'head' : 'body');
           }
-          if (e.victimId === player.id && attacker) {
+          if (e.victimId === player.id && attacker && attacker !== player) {
             // Screen-space angle to the attacker for the damage arc (0 = straight ahead).
             const ang = Math.atan2(attacker.move.pos.x - player.move.pos.x, attacker.move.pos.z - player.move.pos.z);
             const viewAng = Math.atan2(-Math.sin(this.input.yaw), -Math.cos(this.input.yaw));
@@ -136,7 +139,7 @@ export class Presentation {
         case 'kill': {
           const killer = sim.getActor(e.attackerId);
           const victim = sim.getActor(e.victimId);
-          const weaponName = WEAPONS[e.weapon as WeaponId]?.name ?? e.weapon;
+          const weaponName = WEAPONS[e.weapon as WeaponId]?.name ?? NON_WEAPON_NAMES[e.weapon] ?? e.weapon;
           this.hud.killFeed(
             killer?.name ?? '?',
             victim?.name ?? '?',

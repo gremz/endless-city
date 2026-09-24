@@ -9,11 +9,11 @@ import { CollisionWorld } from '../physics/CollisionWorld';
 import { MASK_PLAYER } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
 import { HU } from '../core/config';
-import { STAND_MAXS, STAND_MINS } from '../player/movementConfig';
+import { MOVE, STAND_MAXS, STAND_MINS } from '../player/movementConfig';
 import { hullMaxs, hullMins, playerMove } from '../player/pmove';
 import { makeInventory, makeWeaponState } from '../weapons/Inventory';
 import { updateWeapon, type HitInfo, type WeaponContext } from '../weapons/WeaponSystem';
-import type { GrenadeId } from '../weapons/weaponDefs';
+import { FALL_HIT, type GrenadeId } from '../weapons/weaponDefs';
 import { makeActor, storePrev, Team, teleport, type Actor } from './Actor';
 import { applyDamage, bulletDamage } from './damage';
 import { Economy, START_MONEY } from './Economy';
@@ -266,6 +266,7 @@ export class Simulation implements WeaponContext {
     playerMove(p.move, cmd, this.world, this.dt, { autoBhop: this.opts.autoBhop || this.autoBhopIds.has(p.id) });
     if (p.move.jumped) this.events.push({ type: 'jump', actorId: p.id });
     if (p.move.landed && !wasGround) this.events.push({ type: 'land', actorId: p.id, speed: p.move.landSpeed });
+    this.fallDamage(p);
     if (cmd.pressed & Buttons.FLASHLIGHT) {
       p.flashlight = !p.flashlight;
       this.events.push({ type: 'flashlight', actorId: p.id, on: p.flashlight });
@@ -277,11 +278,41 @@ export class Simulation implements WeaponContext {
   }
 
   /**
+   * CS fall damage for an actor that landed this tick: none up to 580 HU/s (about a 5 m drop),
+   * rising linearly to fatal at 1024 HU/s (about 17 m).
+   */
+  fallDamage(a: Actor): void {
+    const m = a.move;
+    if (!m.landed || m.landSpeed <= MOVE.safeFallSpeed || !a.alive) return;
+    const dmg = ((m.landSpeed - MOVE.safeFallSpeed) * 100) / (MOVE.fatalFallSpeed - MOVE.safeFallSpeed);
+    this.onHit({
+      attacker: a,
+      victim: a,
+      def: { ...FALL_HIT, damage: dmg },
+      group: HitGroup.Chest,
+      distance: 0,
+      damageScale: 1,
+      penetrated: false,
+      pos: vec3(m.pos.x, m.pos.y + 0.2, m.pos.z),
+    });
+  }
+
+  /**
    * Footsteps: running (above 150 HU/s) on the ground makes noise every ~1.3 m; walking and
    * crouching are silent, as in CS.
    */
   footsteps(a: Actor): void {
     const m = a.move;
+    if (m.onLadder && !m.onGround) {
+      // Rungs clank every 0.6 m climbed; ladders are loud.
+      a.stepAccum += Math.abs(m.vel.y) * this.dt;
+      if (a.stepAccum < 0.6) return;
+      a.stepAccum = 0;
+      const pos = vec3(m.pos.x, m.pos.y, m.pos.z);
+      this.events.push({ type: 'step', actorId: a.id, pos, material: 6 });
+      this.events.push({ type: 'sound', pos, radius: 18, kind: 'footstep', sourceId: a.id });
+      return;
+    }
     if (!m.onGround || m.noclip) return;
     const speed = Math.hypot(m.vel.x, m.vel.z);
     if (speed < 150 * HU) {

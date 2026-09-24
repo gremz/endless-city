@@ -52,8 +52,10 @@ export class SoundEvents {
       }
       case 'step': {
         const name = sim.env.rain > 0.3 ? 'step_wet' : 'step';
-        if (e.actorId === me) a.play(name, { volume: 0.18, reverb: 0.05 });
-        else a.play(name, { pos: e.pos, volume: 0.9, reverb: 0.1 }, L);
+        // Metal (ladder rungs, fire escape grates) rings higher.
+        const rate = e.material === Material.Metal ? 1.9 : 1;
+        if (e.actorId === me) a.play(name, { volume: 0.18, reverb: 0.05, rate });
+        else a.play(name, { pos: e.pos, volume: 0.9, reverb: 0.1, rate }, L);
         break;
       }
       case 'flashlight':

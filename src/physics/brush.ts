@@ -16,11 +16,17 @@ export const Contents = {
   PENETRABLE: 8,
   /** Ground-class surface used by the nav bake (slabs, floors, ramps). */
   FLOOR: 16,
+  /**
+   * Climbable volume in front of a ladder (not solid). Ladder volumes are thin along the axis
+   * that faces away from the wall.
+   */
+  LADDER: 32,
 } as const;
 
 export const SOLID = Contents.SOLID_PLAYER | Contents.SOLID_BULLET | Contents.VISIBLE;
 export const MASK_PLAYER = Contents.SOLID_PLAYER;
 export const MASK_SHOT = Contents.SOLID_BULLET;
+export const MASK_LADDER = Contents.LADDER;
 
 /** Ramp directions: which horizontal direction the slope rises towards. */
 export const Ramp = { None: 0, PosX: 1, NegX: 2, PosZ: 3, NegZ: 4 } as const;

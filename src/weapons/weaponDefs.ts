@@ -403,3 +403,6 @@ export const GEAR_PRICES = { kevlar: 650, helmet: 1000 } as const;
  * an SMG-sized kill reward). Damage is set per hit; armor doesn't help.
  */
 export const CAR_HIT: WeaponDef = { ...WEAPONS.knife, id: 'car' as WeaponId, name: 'Car', killReward: 600, damage: 0, armorPen: 1, rangeMod: 1 };
+
+/** Not a weapon: what falling damage is credited with (kill feed "Fall"). Armor doesn't help. */
+export const FALL_HIT: WeaponDef = { ...WEAPONS.knife, id: 'fall' as WeaponId, name: 'Fall', killReward: 0, damage: 0, armorPen: 1, rangeMod: 1 };

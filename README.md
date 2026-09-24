@@ -41,7 +41,7 @@ one the nav overlay shows (top, ground, or upper floors only).
 
 ## Controls
 
-WASD to move, mouse to aim and shoot, right mouse to scope. Space jumps, C crouches (Ctrl
+WASD to move, mouse to aim and shoot, right mouse to scope. Space jumps (hold it at a ledge to climb up), C crouches (Ctrl
 also works in fullscreen), and Shift walks silently. R reloads. 1/2/3 select weapons and 4 selects grenades (press 4 again to cycle types), Q
 switches to the last weapon, and the mouse wheel cycles. F inspects the weapon. B opens the
 buy menu, which works only in the spawn area or areas you have cleared. The Ammo category
@@ -52,6 +52,25 @@ gun; H again or firing cancels and keeps the pack. The radar in the top-left cor
 `$` on its rim pointing to the nearest one when it's out of range. M opens the city map.
 L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)). Esc pauses. F3
 toggles the debug overlay.
+
+## Climbing and rooftops
+
+Most roofs in the city can be reached, and fights spill onto them.
+
+- **Ladders.** Walk into a ladder to climb it. Look up or level to go up, look down to go
+  down, and jump to kick off it. At the top, keep walking forward to step onto the roof. Rungs
+  clank, so others can hear you climb.
+- **Mantling.** Hold Space while jumping at a wall or ledge up to about 2.2 m high (a bit
+  more than a crouch-jump clears) and you pull yourself up. Your gun is lowered for the half
+  second it takes, and you need room to crouch on top.
+- **Fire escapes.** Blocks of two floors or more often have one: a drop ladder to the first
+  landing, then stairs up each floor to the roof.
+- **Roof access.** Other buildings sometimes have a ladder up a wall with no door. Neighboring
+  roofs a few metres apart are sometimes joined by plank bridges.
+- **Falling hurts.** Drops of up to about 5 m are free. Longer ones hurt, and from about 17 m
+  they kill. Armor doesn't help.
+
+Bots use ladders, fire escapes and bridges too. Some overwatch bots start on rooftops.
 
 ## Grenades
 

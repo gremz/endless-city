@@ -54,6 +54,7 @@ export class Viewmodel {
   private landDip = 0;
   /** 0..1: gun lowered out of the way while a medkit is applied. */
   private healLower = 0;
+  private mantleLower = 0;
   private bobPhase = 0;
   private swayX = 0;
   private swayY = 0;
@@ -221,6 +222,12 @@ export class Viewmodel {
       py -= this.healLower * 0.2;
       rx -= this.healLower * 0.6;
       rz += this.healLower * 0.3;
+    }
+    // Mantling: the gun drops out of the way while both hands pull up.
+    this.mantleLower += ((a.move.mantleT > 0 ? 1 : 0) - this.mantleLower) * (1 - Math.exp(-frameDt * 18));
+    if (this.mantleLower > 0.001) {
+      py -= this.mantleLower * 0.25;
+      rx -= this.mantleLower * 0.8;
     }
     // Knife swing.
     if (this.swing > 0.01) {

@@ -51,6 +51,7 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     navFloor: new Int16Array(0),
     navFlags: new Uint8Array(0),
     navCover: new Uint8Array(0),
+    navLinks: new Float32Array(0),
     spawns: new Float32Array(0),
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
@@ -68,6 +69,14 @@ function buildCourse(w: BrushWriter): void {
   // Row of step tests along z = 40..44: heights 0.25, 0.45 (stepable), 0.5 (not).
   const steps = [0.25, 0.45, 0.5];
   steps.forEach((h, i) => w.box(4 + i * 5, 0, 40, 7 + i * 5, h, 44, C, FLOOR, 90 + i * 40));
+
+  // Mantle walls: 1.9 m and 2.2 m (hold jump into them), 2.6 m (too high).
+  [1.9, 2.2, 2.6].forEach((h, i) => w.box(4 + i * 5, 0, 14, 7 + i * 5, h, 22, C, FLOOR, 100 + i * 30));
+  // Ladder tower: an 8 m block with a ladder on its -X face and a plank bridge to a second block.
+  w.box(48, 0, 14, 54, 8, 22, Material.Brick, FLOOR, 128);
+  w.ladder(2, 48, 18, 0, 8);
+  w.box(54, 7.85, 17, 57, 8, 19, Material.Wood, FLOOR, 120);
+  w.box(57, 0, 14, 61, 8, 22, Material.Brick, FLOOR, 160);
 
   // Jump boxes: 54 HU (jump), 64 HU (crouch-jump), 72 HU (too high).
   [54, 64, 72].forEach((hu, i) => w.box(22 + i * 5, 0, 40, 25 + i * 5, hu * HU, 43, Material.Crate, SOLID | Contents.PENETRABLE, 120));

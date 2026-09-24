@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { HU, TICK } from '../core/config';
 import { length2D } from '../core/math';
 import { Buttons, makeCmd, type UserCmd } from '../input/UserCmd';
-import { Ramp } from '../physics/brush';
+import { Contents, Ramp } from '../physics/brush';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import { FLOOR, worldFrom } from '../physics/testUtil';
 import { makeMoveState, playerMove, type MoveState } from './pmove';
@@ -293,5 +293,99 @@ describe('pmove steps, ramps and ceilings', () => {
       expect(s.pos.y).toBeGreaterThan(-0.01);
     }
     expect(s.stuckEvents - stuckStart).toBe(0);
+  });
+});
+
+describe('pmove ladders', () => {
+  // A 6 m building from x = 2, with a ladder volume on its -X face.
+  const building = { min: [2, 0, -5] as [number, number, number], max: [10, 6, 5] as [number, number, number] };
+  const ladder = { min: [1.7, 0, -0.4] as [number, number, number], max: [2, 7, 0.4] as [number, number, number], contents: Contents.LADDER };
+  const w = worldFrom([FLOOR, building, ladder]);
+
+  function atLadder(): MoveState {
+    const s = makeMoveState(1.5, 0.01, 0);
+    settle(s, w);
+    return s;
+  }
+
+  it('climbs to the top and steps onto the roof', () => {
+    const s = atLadder();
+    const cmd = makeCmd();
+    cmd.yaw = -Math.PI / 2; // face +X, into the wall
+    cmd.forward = 1;
+    let climbing = false;
+    for (let i = 0; i < 64 * 4 && !(s.onGround && s.pos.y > 5); i++) {
+      playerMove(s, cmd, w, TICK);
+      climbing ||= s.onLadder;
+    }
+    expect(climbing).toBe(true);
+    expect(s.onGround).toBe(true);
+    expect(s.pos.y).toBeCloseTo(6, 1);
+    expect(s.pos.x).toBeGreaterThan(2.3);
+  });
+
+  it('holds on without input and climbs down looking down', () => {
+    const s = atLadder();
+    const cmd = makeCmd();
+    cmd.yaw = -Math.PI / 2;
+    cmd.forward = 1;
+    run(s, w, cmd, 64);
+    const y = s.pos.y;
+    expect(y).toBeGreaterThan(2);
+    cmd.forward = 0;
+    run(s, w, cmd, 64);
+    expect(s.pos.y).toBeCloseTo(y, 2);
+    cmd.forward = 1;
+    cmd.pitch = -1.5;
+    run(s, w, cmd, 64 * 3);
+    expect(s.pos.y).toBeLessThan(0.1);
+    expect(s.onGround).toBe(true);
+  });
+
+  it('jumps off away from the wall', () => {
+    const s = atLadder();
+    const cmd = makeCmd();
+    cmd.yaw = -Math.PI / 2;
+    cmd.forward = 1;
+    run(s, w, cmd, 64);
+    cmd.forward = 0;
+    cmd.pressed = Buttons.JUMP;
+    run(s, w, cmd, 64 * 2);
+    expect(s.onGround).toBe(true);
+    expect(s.pos.y).toBeLessThan(0.1);
+    expect(s.pos.x).toBeLessThan(1);
+  });
+});
+
+describe('pmove mantling', () => {
+  function tryWall(height: number, extra: Parameters<typeof worldFrom>[0] = []): MoveState {
+    const w = worldFrom([FLOOR, { min: [2, 0, -3], max: [40, height, 3] }, ...extra]);
+    // Standing right at the wall.
+    const s = makeMoveState(1.5, 0.01, 0);
+    settle(s, w);
+    const cmd = makeCmd();
+    cmd.yaw = -Math.PI / 2;
+    cmd.forward = 1;
+    cmd.buttons = Buttons.JUMP;
+    cmd.pressed = Buttons.JUMP;
+    run(s, w, cmd, 64 * 2);
+    return s;
+  }
+
+  it('pulls up onto a 1.9 m wall a jump cannot clear', () => {
+    const s = tryWall(1.9);
+    expect(s.pos.y).toBeCloseTo(1.9, 1);
+    expect(s.pos.x).toBeGreaterThan(2);
+    expect(s.mantleT).toBe(0);
+  });
+
+  it('cannot reach a 2.6 m wall', () => {
+    const s = tryWall(2.6);
+    expect(s.pos.y).toBeLessThan(0.1);
+  });
+
+  it('needs headroom on top', () => {
+    const s = tryWall(1.9, [{ min: [2, 2.9, -3], max: [40, 3.2, 3] }]);
+    expect(s.pos.y).toBeLessThan(0.1);
   });
 });

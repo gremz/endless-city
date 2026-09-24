@@ -808,7 +808,7 @@ export class Bot {
     if (walk) cmd.buttons |= Buttons.WALK;
     if (crouch) cmd.buttons |= Buttons.DUCK;
 
-    this.checkStuck(ctx, ml > 1e-4 && !wantFire);
+    this.checkStuck(ctx, ml > 1e-4 && !wantFire && !a.move.onLadder);
     this.finishTick(ctx);
   }
 
@@ -827,13 +827,34 @@ export class Bot {
     const cmd = this.cmd;
     cmd.yaw = cmd.attackYaw = this.aimYaw;
     cmd.pitch = cmd.attackPitch = this.aimPitch;
-    a.yaw = this.aimYaw;
-    a.pitch = this.aimPitch;
+    this.climb(cmd);
+    a.yaw = cmd.yaw;
+    a.pitch = cmd.pitch;
     playerMove(a.move, cmd, sim.world, sim.dt);
+    sim.fallDamage(a);
     updateWeapon(a, cmd, sim);
     sim.footsteps(a);
     cmd.pressed = 0;
     this.publishState(sim);
+  }
+
+  /**
+   * On a ladder the path leads up or down: face the ladder and climb (looking level to go up,
+   * straight down to go down), guns quiet. At the foot of a ladder going down, the normal walk
+   * takes over.
+   */
+  private climb(cmd: UserCmd): void {
+    const m = this.actor.move;
+    const p = this.path[this.pathIdx];
+    if (!m.onLadder || !p?.ladder) return;
+    const up = p.y > m.pos.y + 0.3;
+    if (!up && m.onGround) return;
+    cmd.yaw = cmd.attackYaw = Math.atan2(p.ladder.nx, p.ladder.nz);
+    cmd.pitch = cmd.attackPitch = up ? 0 : -1.5;
+    cmd.forward = 1;
+    cmd.side = 0;
+    cmd.buttons &= ~(Buttons.ATTACK | Buttons.ATTACK2 | Buttons.DUCK | Buttons.JUMP);
+    cmd.pressed &= ~(Buttons.ATTACK | Buttons.ATTACK2 | Buttons.JUMP);
   }
 
   // -------------------------------------------------------------- grenades

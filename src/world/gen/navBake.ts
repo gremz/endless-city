@@ -50,7 +50,14 @@ function topAt(b: B, x: number, z: number): number {
  * street below. Span arrays are indexed by span id; `col` holds each column's first span id
  * (column `c` owns spans `col[c]` to `col[c + 1] - 1`).
  */
+/**
+ * Off-grid link record (ladders), in both directions: from span, to span, cost (in cells),
+ * and the ladder's outward normal nx, nz.
+ */
+export const NAV_LINK_STRIDE = 5;
+
 export interface NavBake {
+  links: Float32Array;
   col: Uint16Array;
   /** Floor height in cm per span. */
   floor: Int16Array;
@@ -133,7 +140,7 @@ class Columns {
  * with room to stand, blocked spans (a bot hull would intersect solid), cover directions and
  * reachability from the street.
  */
-export function bakeNav(packed: Int32Array): NavBake {
+export function bakeNav(packed: Int32Array, ladders: readonly number[] = []): NavBake {
   const n = packed.length / BRUSH_STRIDE;
   const brushes: B[] = [];
   for (let i = 0; i < n; i++) {
@@ -289,7 +296,46 @@ export function bakeNav(packed: Int32Array): NavBake {
       }
     }
   }
-  const nav: NavBake = { col, floor, flags, cover };
+  const nav: NavBake = { col, floor, flags, cover, links: new Float32Array(0) };
+
+  // Ladder links: find the spans at both ends; a ladder whose ends aren't walkable is dropped.
+  /** Walkable span nearest (x, y, z): in its cell or a neighboring one, within 0.6 m in height. */
+  const spanNear = (x: number, y: number, z: number): number => {
+    const ci = Math.floor(x / NAV_CELL);
+    const cj = Math.floor(z / NAV_CELL);
+    let best = -1;
+    let bestD = Infinity;
+    for (let j = cj - 1; j <= cj + 1; j++) {
+      for (let i = ci - 1; i <= ci + 1; i++) {
+        if (i < 0 || j < 0 || i >= N || j >= N) continue;
+        const c = j * N + i;
+        const flat = Math.hypot((i + 0.5) * NAV_CELL - x, (j + 0.5) * NAV_CELL - z);
+        for (let s = col[c]; s < col[c + 1]; s++) {
+          const dy = Math.abs(floorM[s] - y);
+          if (dy < 0.6 && flat + dy < bestD) {
+            bestD = flat + dy;
+            best = s;
+          }
+        }
+      }
+    }
+    return best;
+  };
+  const links: number[] = [];
+  for (let k = 0; k + 8 <= ladders.length; k += 8) {
+    const lo = spanNear(ladders[k], ladders[k + 1], ladders[k + 2]);
+    const up = spanNear(ladders[k + 3], ladders[k + 4], ladders[k + 5]);
+    if (lo < 0 || up < 0) continue;
+    const cost = 4 + (Math.abs(ladders[k + 4] - ladders[k + 1]) / NAV_CELL) * 1.5;
+    links.push(lo, up, cost, ladders[k + 6], ladders[k + 7], up, lo, cost, ladders[k + 6], ladders[k + 7]);
+  }
+  nav.links = new Float32Array(links);
+  const linksFrom = new Map<number, number[]>();
+  for (let k = 0; k < links.length; k += NAV_LINK_STRIDE) {
+    const list = linksFrom.get(links[k]);
+    if (list) list.push(links[k + 1]);
+    else linksFrom.set(links[k], [links[k + 1]]);
+  }
 
   const W = NavFlag.Walkable;
   const DX = [1, 1, 0, -1, -1, -1, 0, 1];
@@ -383,6 +429,11 @@ export function bakeNav(packed: Int32Array): NavBake {
       if (ns < 0 || (flags[ns] & R) !== 0) continue;
       // No corner cutting on diagonals.
       if (dx !== 0 && dz !== 0 && (!stepOk(j * N + ni, fcm) || !stepOk(nj * N + i, fcm))) continue;
+      flags[ns] |= R;
+      queue[tail++] = ns;
+    }
+    for (const ns of linksFrom.get(s) ?? []) {
+      if (flags[ns] & R) continue;
       flags[ns] |= R;
       queue[tail++] = ns;
     }

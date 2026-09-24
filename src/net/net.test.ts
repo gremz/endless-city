@@ -29,6 +29,12 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
   w.box(0, -1, 0, 64, 0, 64, Material.Concrete, SOLID | Contents.FLOOR);
   const encounter = cx === 1 && cz === 0;
   if (encounter) w.box(0, 0, 30, 64, 4, 30.5, Material.Concrete, SOLID);
+  if (cx === 0 && cz === -1) {
+    // Climbing course: a 6 m block with a ladder on its -X wall, and a 1.9 m wall to mantle.
+    w.box(20, 0, 10, 28, 6, 18, Material.Concrete, SOLID | Contents.FLOOR);
+    w.ladder(2, 20, 14, 0, 6);
+    w.box(20, 0, 30, 40, 1.9, 34, Material.Concrete, SOLID | Contents.FLOOR);
+  }
   const brushes = w.finish();
   const nav = bakeNav(brushes);
   const ox = cx * CHUNK;
@@ -46,6 +52,7 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
     navFloor: nav.floor,
     navFlags: nav.flags,
     navCover: nav.cover,
+    navLinks: nav.links,
     spawns: encounter ? new Float32Array([ox + 20, 0.02, oz + 50, ox + 32, 0.02, oz + 50, ox + 44, 0.02, oz + 50]) : new Float32Array(0),
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
@@ -402,6 +409,44 @@ describe('prediction and lag compensation', () => {
       one.cmd.side = i % 50 < 25 ? 1 : 0;
       one.cmd.yaw = Math.sin(i / 40);
     });
+    expect(one.prediction!.corrections).toBe(0);
+  });
+
+  it('predicts ladder climbs and mantles without corrections', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'Climber');
+    run(server, [one], 48);
+    const p = server.sim.players[0];
+    const start = (x: number, z: number) => {
+      teleport(p, x, 0.02, z);
+      one.cmd.forward = 0;
+      one.cmd.buttons = 0;
+      one.cmd.yaw = -Math.PI / 2; // face +X
+      run(server, [one], 64);
+      one.prediction!.corrections = 0;
+    };
+    start(18.5, -50);
+    one.cmd.forward = 1;
+    let climbed = false;
+    run(server, [one], 64 * 3, () => {
+      climbed ||= one.me.move.onLadder;
+      if (one.me.move.onGround && one.me.move.pos.y > 5) one.cmd.forward = 0;
+    });
+    expect(climbed).toBe(true);
+    expect(p.move.pos.y).toBeCloseTo(6, 1);
+    expect(one.prediction!.corrections).toBe(0);
+
+    start(19.3, -32);
+    one.cmd.forward = 1;
+    one.cmd.buttons = Buttons.JUMP;
+    one.cmd.pressed = Buttons.JUMP;
+    let mantled = false;
+    run(server, [one], 64 * 2, () => {
+      mantled ||= one.me.move.mantleT > 0;
+      if (one.me.move.onGround && one.me.move.pos.y > 1.5) one.cmd.forward = 0;
+    });
+    expect(mantled).toBe(true);
+    expect(p.move.pos.y).toBeCloseTo(1.9, 1);
     expect(one.prediction!.corrections).toBe(0);
   });
 

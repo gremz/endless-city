@@ -6,7 +6,7 @@
 import { HU } from '../core/config';
 import { anglesToForward, vec3, yawBasis, type Vec3 } from '../core/math';
 import { Buttons, type UserCmd } from '../input/UserCmd';
-import { MASK_PLAYER } from '../physics/brush';
+import { MASK_LADDER, MASK_PLAYER } from '../physics/brush';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import { DIST_EPSILON, makeTrace, type TraceResult } from '../physics/trace';
 import { DUCK_MAXS, DUCK_MINS, MOVE, STAND_MAXS, STAND_MINS } from './movementConfig';
@@ -32,6 +32,11 @@ export interface MoveState {
   /** Count of times the actor was found inside solid and nudged out (debug). */
   stuckEvents: number;
   noclip: boolean;
+  /** Touching a ladder this tick (derived from position each tick). */
+  onLadder: boolean;
+  /** Seconds left in a mantle (0 = not mantling), and where it ends. */
+  mantleT: number;
+  mantleTo: Vec3;
 }
 
 export function makeMoveState(x = 0, y = 0, z = 0): MoveState {
@@ -49,6 +54,9 @@ export function makeMoveState(x = 0, y = 0, z = 0): MoveState {
     jumped: false,
     stuckEvents: 0,
     noclip: false,
+    onLadder: false,
+    mantleT: 0,
+    mantleTo: vec3(),
   };
 }
 
@@ -67,6 +75,8 @@ export function eyeHeight(s: MoveState): number {
 const tr = makeTrace();
 const tr2 = makeTrace();
 const fwd = vec3();
+const look = vec3();
+const ladderN = vec3();
 const right = vec3();
 const wishDir = vec3();
 const end = vec3();
@@ -472,6 +482,130 @@ export function unstick(s: MoveState, world: CollisionWorld): boolean {
   return true;
 }
 
+/**
+ * If the hull touches a ladder volume, put the ladder's outward normal in ladderN. Ladder
+ * volumes are thin along the axis facing away from the wall; the actor is on the open side.
+ * Someone moving quickly away from the ladder (jumping off it) doesn't grab it.
+ */
+function touchLadder(s: MoveState, world: CollisionWorld): boolean {
+  if (!world.testBox(tr2, s.pos, hullMins(s), hullMaxs(s), MASK_LADDER) || !tr2.brush) return false;
+  const b = tr2.brush;
+  ladderN.x = ladderN.y = ladderN.z = 0;
+  if (b.maxX - b.minX < b.maxZ - b.minZ) ladderN.x = s.pos.x >= (b.minX + b.maxX) / 2 ? 1 : -1;
+  else ladderN.z = s.pos.z >= (b.minZ + b.maxZ) / 2 ? 1 : -1;
+  // Faster than running (250 HU/s) means jumping off; walking off a roof onto it still grabs.
+  return s.vel.x * ladderN.x + s.vel.z * ladderN.z < 260 * HU;
+}
+
+/**
+ * Source-style ladder movement: no gravity or friction; moving into the ladder climbs, the
+ * view pitch steers up or down, strafing moves along it. Returns false (and does nothing) when
+ * standing at the foot of the ladder without climbing, so the ground move runs instead.
+ */
+function ladderMove(s: MoveState, world: CollisionWorld, cmd: UserCmd, dt: number): boolean {
+  anglesToForward(look, cmd.yaw, cmd.pitch);
+  yawBasis(cmd.yaw, fwd, right);
+  const speed = MOVE.ladderSpeed;
+  let vx = (look.x * cmd.forward + right.x * cmd.side) * speed;
+  let vy = look.y * cmd.forward * speed;
+  let vz = (look.z * cmd.forward + right.z * cmd.side) * speed;
+  const into = -(vx * ladderN.x + vz * ladderN.z);
+  // Pushing into the ladder turns into climbing. The horizontal push is kept: the wall
+  // soaks it up, and at the top it carries the climber over the edge.
+  if (into > 0) vy += into;
+  vy = Math.max(-speed, Math.min(speed, vy));
+  if (s.onGround && vy <= 0) return false;
+  const l = Math.hypot(vx, vz);
+  if (l > speed) {
+    vx *= speed / l;
+    vz *= speed / l;
+  }
+  s.vel.x = vx;
+  s.vel.y = vy;
+  s.vel.z = vz;
+  s.onGround = false;
+  slideMove(s, world, dt);
+  return true;
+}
+
+/**
+ * Start a mantle if the actor is airborne, holding jump and moving at a wall whose top (within
+ * reach above the feet) has room to crouch on. The pull-up runs over the next ticks.
+ */
+function tryMantle(s: MoveState, world: CollisionWorld, cmd: UserCmd): boolean {
+  if (cmd.forward <= 0) return false;
+  yawBasis(cmd.yaw, fwd, right);
+  const p = s.pos;
+  // Something must block the way ahead.
+  end.x = p.x + fwd.x * MOVE.mantleProbe;
+  end.y = p.y;
+  end.z = p.z + fwd.z * MOVE.mantleProbe;
+  trace(world, s, p, end);
+  if (tr.fraction === 1 || tr.startSolid || tr.normal.y > 0.3) return false;
+  const reach = MOVE.mantleProbe * tr.fraction + MOVE.halfWidth + 0.12;
+  const tx = p.x + fwd.x * reach;
+  const tz = p.z + fwd.z * reach;
+  // Find the ledge top from above.
+  tmp.x = tx;
+  tmp.y = p.y + MOVE.mantleReach;
+  tmp.z = tz;
+  end.x = tx;
+  end.y = p.y + MOVE.stepSize;
+  end.z = tz;
+  world.traceBox(tr2, tmp, end, DUCK_MINS, DUCK_MAXS, MASK_PLAYER);
+  if (tr2.startSolid || tr2.fraction === 1 || tr2.normal.y < MOVE.minWalkNormal) return false;
+  const ledgeY = tr2.endY;
+  // A jump that clears the ledge on its own doesn't need a pull-up.
+  const apex = p.y + (s.vel.y > 0 ? (s.vel.y * s.vel.y) / (2 * MOVE.gravity) : 0);
+  if (ledgeY < apex + 0.05) return false;
+  // Room to rise straight up (crouched), then to move over the edge.
+  tmp.x = p.x;
+  tmp.y = ledgeY;
+  tmp.z = p.z;
+  world.traceBox(tr2, p, tmp, DUCK_MINS, DUCK_MAXS, MASK_PLAYER);
+  if (tr2.startSolid || tr2.fraction < 1) return false;
+  end.x = tx;
+  end.y = ledgeY;
+  end.z = tz;
+  world.traceBox(tr2, tmp, end, DUCK_MINS, DUCK_MAXS, MASK_PLAYER);
+  if (tr2.startSolid || tr2.fraction < 1) return false;
+  s.mantleT = 1;
+  s.mantleTo.x = tx;
+  s.mantleTo.y = ledgeY;
+  s.mantleTo.z = tz;
+  s.ducked = true;
+  s.vel.x = s.vel.y = s.vel.z = 0;
+  return true;
+}
+
+/** Pull-up: rise to the ledge, then move over it (the path was checked when it started). */
+function mantleMove(s: MoveState, dt: number): void {
+  const p = s.pos;
+  const to = s.mantleTo;
+  s.vel.x = s.vel.y = s.vel.z = 0;
+  s.onGround = false;
+  s.mantleT = Math.max(0, s.mantleT - dt);
+  // Tolerances: snapshots carry positions as float32, and a replayed mantle must take the
+  // same number of ticks as the original.
+  if (p.y < to.y - 1e-4) {
+    p.y = Math.min(to.y, p.y + MOVE.mantleUpSpeed * dt);
+    return;
+  }
+  p.y = to.y;
+  const dx = to.x - p.x;
+  const dz = to.z - p.z;
+  const d = Math.hypot(dx, dz);
+  const step = MOVE.mantleOverSpeed * dt;
+  if (d <= step + 1e-4) {
+    p.x = to.x;
+    p.z = to.z;
+    s.mantleT = 0;
+  } else {
+    p.x += (dx / d) * step;
+    p.z += (dz / d) * step;
+  }
+}
+
 function noclipMove(s: MoveState, cmd: UserCmd, dt: number): void {
   anglesToForward(fwd, cmd.yaw, cmd.pitch);
   yawBasis(cmd.yaw, tmp, right);
@@ -504,8 +638,35 @@ export function playerMove(
   }
   if (s.tagTime > 0) s.tagTime = Math.max(0, s.tagTime - dt);
 
+  if (s.mantleT > 0) {
+    mantleMove(s, dt);
+    s.onLadder = false;
+    categorizePosition(s, world);
+    return;
+  }
+
   unstick(s, world);
   updateDuck(s, world, cmd, dt);
+
+  s.onLadder = touchLadder(s, world);
+  if (s.onLadder) {
+    if (cmd.pressed & Buttons.JUMP) {
+      // Jump off, away from the wall.
+      s.vel.x = ladderN.x * MOVE.ladderJumpSpeed;
+      s.vel.y = 0;
+      s.vel.z = ladderN.z * MOVE.ladderJumpSpeed;
+      s.onLadder = false;
+      s.onGround = false;
+      s.jumped = true;
+      slideMove(s, world, dt);
+      categorizePosition(s, world);
+      return;
+    }
+    if (ladderMove(s, world, cmd, dt)) {
+      categorizePosition(s, world);
+      return;
+    }
+  }
 
   const wantJump =
     (cmd.pressed & Buttons.JUMP) !== 0 || (opts.autoBhop === true && (cmd.buttons & Buttons.JUMP) !== 0);
@@ -520,8 +681,13 @@ export function playerMove(
     friction(s.vel, dt);
   }
 
+  // Speed going into the ground this tick (the slide move clips it away on impact).
+  const impact = s.onGround ? 0 : -(s.vel.y - MOVE.gravity * dt);
   if (s.onGround) walkMove(s, world, cmd, dt);
-  else airMove(s, world, cmd, dt);
+  else {
+    airMove(s, world, cmd, dt);
+    if (cmd.buttons & Buttons.JUMP && tryMantle(s, world, cmd)) return;
+  }
 
   const mv = MOVE.maxVelocity;
   if (s.vel.x > mv) s.vel.x = mv;
@@ -532,4 +698,5 @@ export function playerMove(
   else if (s.vel.z < -mv) s.vel.z = -mv;
 
   categorizePosition(s, world);
+  if (s.landed) s.landSpeed = Math.max(s.landSpeed, impact);
 }

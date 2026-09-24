@@ -185,7 +185,8 @@ export function updateWeapon(a: Actor, cmd: UserCmd, ctx: WeaponContext): void {
   const altDown = ((cmd.buttons | cmd.pressed) & Buttons.ATTACK2) !== 0;
   if (!attackDown) w.dryFired = false;
 
-  const ready = t >= w.nextAttack && t >= w.deployEnd && w.reloadEnd < 0;
+  // Both hands are busy pulling up onto a ledge.
+  const ready = t >= w.nextAttack && t >= w.deployEnd && w.reloadEnd < 0 && a.move.mantleT <= 0;
   if (def.category === 'knife') {
     if (ready && (attackDown || altDown)) knifeAttack(a, def, altDown && !attackDown, cmd, ctx);
     w.triggerHeld = attackDown;

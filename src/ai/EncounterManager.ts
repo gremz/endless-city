@@ -280,7 +280,8 @@ export class EncounterManager implements SimSystem {
   onHit(sim: Simulation, info: HitInfo, killed: boolean): void {
     const victimBot = this.bots.find((b) => b.actor === info.victim);
     if (victimBot) {
-      victimBot.onDamaged(info.attacker, sim.time);
+      // A fall isn't an attack.
+      if (info.attacker !== info.victim) victimBot.onDamaged(info.attacker, sim.time);
       // The rest of the squad hears about it quickly.
       for (const m of victimBot.squad.members) {
         if (m !== victimBot && m.actor.alive) m.awareness = Math.max(m.awareness, 0.5);

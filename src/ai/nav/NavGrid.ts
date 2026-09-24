@@ -1,6 +1,6 @@
 import { chunkKey } from '../../world/chunkMath';
 import { NAV_CELL, NAV_RES, type ChunkData } from '../../world/gen/ChunkData';
-import { NAV_STEP, spanColumns } from '../../world/gen/navBake';
+import { NAV_LINK_STRIDE, NAV_STEP, spanColumns } from '../../world/gen/navBake';
 import type { StreamerListener } from '../../world/WorldStreamer';
 
 /** One resident chunk's layered nav (see navBake.ts). Span ids are chunk-local. */
@@ -13,6 +13,20 @@ export interface NavChunk {
   cover: Uint8Array;
   /** Column of each span. */
   spanCol: Uint16Array;
+  /** Ladder link records (NAV_LINK_STRIDE floats), and link record indices by from-span. */
+  links: Float32Array;
+  linksFrom: Map<number, number[]>;
+}
+
+function linkIndex(links: Float32Array): Map<number, number[]> {
+  const out = new Map<number, number[]>();
+  for (let k = 0; k * NAV_LINK_STRIDE < links.length; k++) {
+    const from = links[k * NAV_LINK_STRIDE];
+    const list = out.get(from);
+    if (list) list.push(k);
+    else out.set(from, [k]);
+  }
+  return out;
 }
 
 /** Global cell index for a world coordinate. */
@@ -50,6 +64,8 @@ export class NavGrid implements StreamerListener {
       flags: d.navFlags,
       cover: d.navCover,
       spanCol: spanColumns(d.navCol),
+      links: d.navLinks,
+      linksFrom: linkIndex(d.navLinks),
     });
     this.lastKey = -1;
   }

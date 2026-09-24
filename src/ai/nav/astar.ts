@@ -1,5 +1,5 @@
 import { NAV_RES, NavFlag } from '../../world/gen/ChunkData';
-import { NAV_STEP } from '../../world/gen/navBake';
+import { NAV_LINK_STRIDE, NAV_STEP } from '../../world/gen/navBake';
 import { cellCenter, toCell, type NavChunk, type NavGrid } from './NavGrid';
 
 const STEP = NAV_STEP;
@@ -12,6 +12,8 @@ export interface PathPoint {
   x: number;
   y: number;
   z: number;
+  /** Set on a point reached by climbing a ladder: the ladder's outward normal. */
+  ladder?: { nx: number; nz: number };
 }
 
 export interface PathOptions {
@@ -33,8 +35,11 @@ export interface PathResult {
   expansions: number;
 }
 
-/** Cell in a path: global cell coordinates plus the floor height of its span. */
-export type PathCell = [gx: number, gz: number, y: number];
+/**
+ * Cell in a path: global cell coordinates plus the floor height of its span, and for a cell
+ * reached by ladder, the ladder's outward normal.
+ */
+export type PathCell = [gx: number, gz: number, y: number, ladderNx?: number, ladderNz?: number];
 
 /**
  * A* over the layered nav spans in a window of 3x3 chunks, with arrays reused across queries
@@ -47,6 +52,8 @@ export class AStar {
   private parent = new Int32Array(0);
   private stamp = new Uint32Array(0);
   private closed = new Uint32Array(0);
+  /** Ladder link record a node was reached through, or -1. */
+  private via = new Int32Array(0);
   private heap = new Int32Array(0);
   private heapF = new Float32Array(0);
   private heapSize = 0;
@@ -64,6 +71,7 @@ export class AStar {
       this.parent = new Int32Array(this.cap);
       this.stamp = new Uint32Array(this.cap);
       this.closed = new Uint32Array(this.cap);
+      this.via = new Int32Array(this.cap);
       this.cur = 0;
     }
     if (heap > this.heap.length) {
@@ -191,11 +199,17 @@ export class AStar {
     let nfl = 0;
     let nfcm = 0;
     let nflags = 0;
+    let nslot = 0;
+    let nchunk: NavChunk | undefined;
+    let nspan = 0;
     const decode = (node: number) => {
       let k = 0;
       while (node >= slotOff[k + 1]) k++;
       const c = slotChunk[k]!;
       const sp = node - slotOff[k];
+      nslot = k;
+      nchunk = c;
+      nspan = sp;
       const col = c.spanCol[sp];
       ngx = c.cx * N + (col % N);
       ngz = c.cz * N + Math.floor(col / N);
@@ -204,9 +218,11 @@ export class AStar {
       nflags = c.flags[sp];
     };
 
+    const via = this.via;
     decode(s);
     g[s] = 0;
     parent[s] = -1;
+    via[s] = -1;
     stamp[s] = stampV;
     let bestH = h(ngx, ngz, nfl);
     this.push(s, bestH);
@@ -227,6 +243,9 @@ export class AStar {
       const cgx = ngx;
       const cgz = ngz;
       const cfcm = nfcm;
+      const cslot = nslot;
+      const cchunk = nchunk!;
+      const cspan = nspan;
       const hc = h(cgx, cgz, nfl);
       if (hc < bestH) {
         bestH = hc;
@@ -250,7 +269,26 @@ export class AStar {
         stamp[ni] = stampV;
         g[ni] = ng;
         parent[ni] = cur;
+        via[ni] = -1;
         this.push(ni, ng + h(nx, nz, nfl));
+      }
+      // Ladders.
+      const lks = cchunk.linksFrom.get(cspan);
+      if (lks) {
+        for (const li of lks) {
+          const o = li * NAV_LINK_STRIDE;
+          const ni = slotOff[cslot] + cchunk.links[o + 1];
+          if (closed[ni] === stampV) continue;
+          const ng = g[cur] + cchunk.links[o + 2];
+          if (stamp[ni] === stampV && ng >= g[ni]) continue;
+          if (this.heapSize >= this.heap.length) continue;
+          decode(ni);
+          stamp[ni] = stampV;
+          g[ni] = ng;
+          parent[ni] = cur;
+          via[ni] = li;
+          this.push(ni, ng + h(ngx, ngz, nfl));
+        }
       }
     }
 
@@ -258,12 +296,17 @@ export class AStar {
     const cells: PathCell[] = [];
     for (let c = end; c !== -1; c = parent[c]) {
       decode(c);
-      cells.push([ngx, ngz, nfl]);
+      if (via[c] >= 0) {
+        const o = via[c] * NAV_LINK_STRIDE;
+        cells.push([ngx, ngz, nfl, nchunk!.links[o + 3], nchunk!.links[o + 4]]);
+      } else cells.push([ngx, ngz, nfl]);
     }
     cells.reverse();
     const smoothed = smooth(nav, cells, 64, opts.hazard);
     return {
-      points: smoothed.map(([gx, gz, y]) => ({ x: cellCenter(gx), y, z: cellCenter(gz) })),
+      points: smoothed.map(([gx, gz, y, nx, nz]) =>
+        nx === undefined ? { x: cellCenter(gx), y, z: cellCenter(gz) } : { x: cellCenter(gx), y, z: cellCenter(gz), ladder: { nx, nz: nz! } },
+      ),
       complete: found >= 0,
       expansions,
     };

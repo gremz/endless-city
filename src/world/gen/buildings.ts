@@ -2,7 +2,7 @@ import { randInt, type Rand } from '../../core/rng';
 import { Contents, Ramp, SOLID } from '../../physics/brush';
 import type { BrushWriter } from './BrushWriter';
 import { District, Material } from './ChunkData';
-import { inset, Occ, rd, rect, rw, subtractRects, type GenContext, type Rect } from './genContext';
+import { inset, Occ, rd, rect, rw, subtractRects, type BuildingInfo, type GenContext, type Rect } from './genContext';
 
 interface Opening {
   a: number;
@@ -100,6 +100,12 @@ function shuffled<T>(r: Rand, a: T[]): T[] {
 /** Side ids: 0 = -Z, 1 = +Z, 2 = -X, 3 = +X. */
 type Side = 0 | 1 | 2 | 3;
 
+/** Record the roof cap just written (the last brush) for the rooftop pass. */
+function roof(ctx: GenContext, kind: BuildingInfo['kind'], fp: Rect, floors: number, roofY: number, overhang: number, doorSides: number[]): void {
+  const cap = rect(fp.x0 - overhang, fp.z0 - overhang, fp.x1 + overhang, fp.z1 + overhang);
+  ctx.buildings.push({ kind, fp, floors, roofY, capBrush: ctx.w.count - 1, cap, doorSides });
+}
+
 export function buildBuilding(ctx: GenContext, parcel: Rect): boolean {
   const d = ctx.district;
   const fp = inset(parcel, d.setback);
@@ -130,6 +136,7 @@ function solidBlock(ctx: GenContext, fp: Rect, floors: number, mat: number, tint
       w.box(fp.x0, y + 1.3, fp.z0, fp.x1, y + FLOOR_H, fp.z1, mat, SOLID, tint);
     }
     w.box(fp.x0 - 0.1, lotY + height, fp.z0 - 0.1, fp.x1 + 0.1, lotY + height + 0.5, fp.z1 + 0.1, mat, SOLID, tint);
+    roof(ctx, 'block', fp, floors, lotY + height + 0.5, 0.1, []);
   } else {
     w.box(fp.x0, lotY, fp.z0, fp.x1, lotY + height, fp.z1, mat, SOLID, tint);
     // Floor-line ledges (above head height, so they never block walking).
@@ -139,6 +146,7 @@ function solidBlock(ctx: GenContext, fp: Rect, floors: number, mat: number, tint
     }
     // Parapet cap.
     w.box(fp.x0 - 0.1, lotY + height, fp.z0 - 0.1, fp.x1 + 0.1, lotY + height + 0.3, fp.z1 + 0.1, mat, SOLID, Math.max(0, tint - 40));
+    roof(ctx, 'block', fp, floors, lotY + height + 0.3, 0.1, []);
   }
   // Rooftop box (AC unit / stair house).
   if (r() < 0.6 && rw(fp) > 4 && rd(fp) > 4) {
@@ -202,6 +210,7 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   if (!twoStory) {
     w.box(fp.x0, lotY + groundH, fp.z0, fp.x1, lotY + groundH + SLAB_T, fp.z1, mat, SOLID, Math.max(0, tint - 30));
     w.box(fp.x0 - 0.1, lotY + groundH + SLAB_T, fp.z0 - 0.1, fp.x1 + 0.1, lotY + groundH + SLAB_T + 0.35, fp.z1 + 0.1, mat, SOLID, Math.max(0, tint - 50));
+    roof(ctx, 'house', fp, 1, lotY + groundH + SLAB_T + 0.35, 0.1, [...doorSides]);
     return;
   }
 
@@ -238,6 +247,7 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   const roofY = upperY + upperH;
   w.box(fp.x0, roofY, fp.z0, fp.x1, roofY + SLAB_T, fp.z1, mat, SOLID, Math.max(0, tint - 30));
   w.box(fp.x0 - 0.1, roofY + SLAB_T, fp.z0 - 0.1, fp.x1 + 0.1, roofY + SLAB_T + 0.35, fp.z1 + 0.1, mat, SOLID, Math.max(0, tint - 50));
+  roof(ctx, 'house', fp, 2, roofY + SLAB_T + 0.35, 0.1, [...doorSides]);
 
   // Perches: upper floor spots next to windows, for overwatch bots.
   const py = upperY + 0.02;
@@ -286,6 +296,7 @@ function warehouse(ctx: GenContext, fp: Rect, tint: number): void {
     wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, H, ops, Material.Metal, tint);
   }
   w.box(fp.x0 - 0.2, lotY + H, fp.z0 - 0.2, fp.x1 + 0.2, lotY + H + 0.3, fp.z1 + 0.2, Material.Metal, SOLID, 4);
+  roof(ctx, 'warehouse', fp, 1, lotY + H + 0.3, 0.2, [bigSide, sideDoor]);
 
   // Catwalk along the wall opposite the big door, with a ramp up to it.
   if (rw(I) >= 12 && rd(I) >= 9) {

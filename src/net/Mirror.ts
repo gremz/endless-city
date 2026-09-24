@@ -285,7 +285,7 @@ export class Mirror {
     [a.lastDamagedAt, a.lastDealtAt, a.lastAttacker] = p.combat;
     a.inv = unpackInv(p.inv);
     Object.assign(a.wpn, p.wpn);
-    [a.move.tagTime, a.move.maxSpeed, a.move.groundNormalY] = p.mv;
+    [a.move.tagTime, a.move.maxSpeed, a.move.groundNormalY, a.move.mantleT, a.move.mantleTo.x, a.move.mantleTo.y, a.move.mantleTo.z] = p.mv;
     if (p.swap !== this.swapId) {
       this.swapId = p.swap;
       this.pickups?.setSwapCandidate(this.localId, p.swap);

@@ -36,7 +36,7 @@ function storeName(name: string): void {
 const CONTROLS: [string, string][] = [
   ['WASD', 'Move'],
   ['Mouse', 'Aim / shoot (LMB), scope (RMB)'],
-  ['Space', 'Jump'],
+  ['Space', 'Jump (hold at a ledge to climb up)'],
   ['C', 'Crouch (Ctrl in fullscreen)'],
   ['Shift', 'Walk (silent)'],
   ['R', 'Reload'],

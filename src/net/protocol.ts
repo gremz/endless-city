@@ -11,7 +11,7 @@ import type { BuyItem, GrenadeId, WeaponId, WeaponSlot } from '../weapons/weapon
  * Wire format between a host's ServerGame and its clients. Commands and snapshots are compact
  * binary sent on the unreliable channel; everything else is JSON on the reliable channel.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 /** A snapshot goes out every this many server ticks (32 Hz at 64 Hz). */
 export const SNAPSHOT_EVERY = 2;
 /** Commands per packet: each one repeats the last few in case packets are lost. */
@@ -336,7 +336,7 @@ export interface PrivateState {
   wpn: WeaponState;
   /** Pickup id the E key would take, or -1. */
   swap: number;
-  mv: [tagTime: number, maxSpeed: number, groundNormalY: number];
+  mv: [tagTime: number, maxSpeed: number, groundNormalY: number, mantleT: number, mantleX: number, mantleY: number, mantleZ: number];
 }
 
 export interface NetGrenades {
@@ -468,7 +468,7 @@ export function privateState(a: Actor, swap: number): PrivateState {
     inv: netInv(a.inv),
     wpn: { ...a.wpn },
     swap,
-    mv: [a.move.tagTime, a.move.maxSpeed, a.move.groundNormalY],
+    mv: [a.move.tagTime, a.move.maxSpeed, a.move.groundNormalY, a.move.mantleT, a.move.mantleTo.x, a.move.mantleTo.y, a.move.mantleTo.z],
   };
 }
 

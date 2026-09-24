@@ -4,6 +4,7 @@ import { hash3, Salt, sfc32 } from '../../core/rng';
 import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
 import { buildBuilding, buildCourtyard } from './buildings';
+import { buildRooftops } from './facades';
 import { District, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
 import { districtFor, levelFor } from './district';
 import { placeEncounters } from './encounters';
@@ -54,6 +55,8 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     interiors: [],
     perches: [],
     vehicles: [],
+    buildings: [],
+    ladders: [],
   };
 
   buildStreets(ctx);
@@ -91,6 +94,8 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
           break;
       }
     }
+    // Fire escapes, ladders and rooftop bridges, now that every structure is in place.
+    buildRooftops(ctx, sfc32(hash3(seed, cx, cz, Salt.Facades)));
     // Pass 2: props.
     for (const [area, density, allowed] of propAreas) {
       if (allowed?.includes('sandbags') && ctx.rp() < 0.5) lowWalls(ctx, area, 1 + Math.floor(ctx.rp() * 2));
@@ -105,7 +110,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
   // Bots path around the parked driveable cars as if they were part of the city.
   const navWriter = new BrushWriter(64);
   for (const v of ctx.vehicles) carBrushes(navWriter, v.style, v.alongX, v.lane, v.at, v.y);
-  const nav = bakeNav(ctx.vehicles.length ? concatBrushes(brushes, navWriter.finish()) : brushes);
+  const nav = bakeNav(ctx.vehicles.length ? concatBrushes(brushes, navWriter.finish()) : brushes, ctx.ladders);
   const enc = placeEncounters(sfc32(hash3(seed, cx, cz, Salt.Encounter)), nav, cx, cz, level, ctx.perches);
   const pickups = placePickups(sfc32(hash3(seed, cx, cz, Salt.Pickups)), nav, cx, cz, enc.hasEncounter, district.id === District.Spawn);
 
@@ -122,6 +127,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     navFloor: nav.floor,
     navFlags: nav.flags,
     navCover: nav.cover,
+    navLinks: nav.links,
     spawns: enc.spawns,
     perches: enc.perches,
     patrol: enc.patrol,
@@ -144,6 +150,7 @@ function buildSpawnPlaza(ctx: GenContext, lot: Rect): void {
   // Two small houses in opposite corners.
   buildBuilding(ctx, rect(lot.x0, lot.z0, lot.x0 + 14, lot.z0 + 12));
   buildBuilding(ctx, rect(lot.x1 - 14, lot.z1 - 12, lot.x1, lot.z1));
+  buildRooftops(ctx, sfc32(hash3(ctx.seed, ctx.cx, ctx.cz, Salt.Facades)));
   ctx.open.push(lot);
   lowWalls(ctx, lot, 3);
   scatterProps(ctx, lot, 0.35, ['crates', 'barriers']);

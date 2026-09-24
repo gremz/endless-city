@@ -80,6 +80,8 @@ export interface ChunkData {
   navFlags: Uint8Array;
   /** 8-direction cover bitmask per span (bit i = cover towards direction i*45°). */
   navCover: Uint8Array;
+  /** Off-grid nav links (ladders), NAV_LINK_STRIDE floats each: see navBake.ts. */
+  navLinks: Float32Array;
   /** Spawn slots / perches / patrol points: x, y, z triples in world meters. */
   spawns: Float32Array;
   perches: Float32Array;
@@ -105,6 +107,7 @@ export function transferList(d: ChunkData): ArrayBuffer[] {
     d.navFloor.buffer as ArrayBuffer,
     d.navFlags.buffer as ArrayBuffer,
     d.navCover.buffer as ArrayBuffer,
+    d.navLinks.buffer as ArrayBuffer,
     d.spawns.buffer as ArrayBuffer,
     d.perches.buffer as ArrayBuffer,
     d.patrol.buffer as ArrayBuffer,

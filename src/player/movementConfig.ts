@@ -32,6 +32,20 @@ export const MOVE = {
   tagRecovery: 0.5,
   /** Default max speed (knife). */
   defaultMaxSpeed: 250 * HU,
+  /** Climbing speed on ladders. */
+  ladderSpeed: 200 * HU,
+  /** Speed of the push away from a ladder when jumping off it. */
+  ladderJumpSpeed: 270 * HU,
+  /** Highest ledge above the feet a mantle can grab (from a jump's apex, ~2.2 m walls). */
+  mantleReach: 0.8,
+  /** How far ahead of the hull a mantle looks for a ledge. */
+  mantleProbe: 0.3,
+  /** Pull-up speeds: up, then over the edge. */
+  mantleUpSpeed: 4.5,
+  mantleOverSpeed: 3,
+  /** Landing speed above which a fall hurts, and the speed that kills (CS: 580 / 1024 HU/s). */
+  safeFallSpeed: 580 * HU,
+  fatalFallSpeed: 1024 * HU,
 } as const;
 
 export const STAND_MINS: Vec3 = { x: -MOVE.halfWidth, y: 0, z: -MOVE.halfWidth };
