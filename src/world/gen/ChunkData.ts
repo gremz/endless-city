@@ -70,10 +70,15 @@ export interface ChunkData {
   meshes: MeshData[];
   district: number;
   level: number;
-  /** Floor height per nav cell in cm (NAV_RES²), or empty if not baked. */
+  /**
+   * Layered nav (see navBake.ts): first span id per column (NAV_RES² + 1 entries), or empty
+   * if not baked. The other nav arrays are per span.
+   */
+  navCol: Uint16Array;
+  /** Floor height per nav span in cm. */
   navFloor: Int16Array;
   navFlags: Uint8Array;
-  /** 8-direction cover bitmask per cell (bit i = cover towards direction i*45°). */
+  /** 8-direction cover bitmask per span (bit i = cover towards direction i*45°). */
   navCover: Uint8Array;
   /** Spawn slots / perches / patrol points: x, y, z triples in world meters. */
   spawns: Float32Array;
@@ -96,6 +101,7 @@ export const VEHICLE_STRIDE = 6;
 export function transferList(d: ChunkData): ArrayBuffer[] {
   const out: ArrayBuffer[] = [
     d.brushes.buffer as ArrayBuffer,
+    d.navCol.buffer as ArrayBuffer,
     d.navFloor.buffer as ArrayBuffer,
     d.navFlags.buffer as ArrayBuffer,
     d.navCover.buffer as ArrayBuffer,

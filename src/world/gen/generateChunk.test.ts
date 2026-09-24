@@ -20,10 +20,37 @@ function digest(d: ChunkData): number {
     }
   };
   mix(d.brushes);
+  mix(d.navCol);
   mix(d.navFlags);
   mix(d.navFloor);
   mix(new Int32Array(d.spawns.buffer.slice(0)));
   return h >>> 0;
+}
+
+/** Flags of the nav span in local cell (i, j) whose floor is within 0.3 m of y (0 if none). */
+function spanFlags(d: ChunkData, i: number, j: number, y: number): number {
+  const c = j * NAV_RES + i;
+  for (let s = d.navCol[c]; s < d.navCol[c + 1]; s++) {
+    if (Math.abs(d.navFloor[s] / 100 - y) <= 0.3) return d.navFlags[s];
+  }
+  return 0;
+}
+
+/** Whether local cell (i, j) has any walkable span. */
+const columnWalkable = (d: ChunkData, i: number, j: number) => d.navCol[j * NAV_RES + i + 1] > d.navCol[j * NAV_RES + i];
+
+/** Whether some column has two reachable floors at least 2.5 m apart (one above the other). */
+function hasReachableStorey(d: ChunkData): boolean {
+  for (let c = 0; c < NAV_RES * NAV_RES; c++) {
+    let low = Infinity;
+    for (let s = d.navCol[c]; s < d.navCol[c + 1]; s++) {
+      if (!(d.navFlags[s] & NavFlag.Reachable)) continue;
+      const y = d.navFloor[s] / 100;
+      if (y - low >= 2.5) return true;
+      low = Math.min(low, y);
+    }
+  }
+  return false;
 }
 
 describe('generateChunk', () => {
@@ -66,8 +93,8 @@ describe('generateChunk', () => {
     let aOpen = 0;
     let bOpen = 0;
     for (let j = 10; j < NAV_RES - 10; j++) {
-      if (a.navFlags[j * NAV_RES + NAV_RES - 1] & NavFlag.Walkable) aOpen++;
-      if (b.navFlags[j * NAV_RES] & NavFlag.Walkable) bOpen++;
+      if (columnWalkable(a, NAV_RES - 1, j)) aOpen++;
+      if (columnWalkable(b, 0, j)) bOpen++;
     }
     expect(aOpen).toBeGreaterThan(40);
     expect(bOpen).toBeGreaterThan(40);
@@ -137,6 +164,7 @@ describe('generateChunk', () => {
   it('every spawn slot and patrol point is on a reachable walkable cell (200 chunks)', () => {
     let totalSpawns = 0;
     let encounters = 0;
+    let multiStorey = 0;
     for (let k = 0; k < 200; k++) {
       const cx = (k % 20) - 10;
       const cz = Math.floor(k / 20) - 5;
@@ -145,7 +173,7 @@ describe('generateChunk', () => {
         for (let s = 0; s < arr.length; s += 3) {
           const i = Math.floor((arr[s] - cx * CHUNK) / NAV_CELL);
           const j = Math.floor((arr[s + 2] - cz * CHUNK) / NAV_CELL);
-          const f = d.navFlags[j * NAV_RES + i];
+          const f = spanFlags(d, i, j, arr[s + 1] - 0.02);
           expect(f & NavFlag.Walkable).toBeTruthy();
           expect(f & NavFlag.Reachable).toBeTruthy();
         }
@@ -158,7 +186,7 @@ describe('generateChunk', () => {
       // A good share of the lot should be reachable from the street.
       let lotWalk = 0;
       let lotReach = 0;
-      for (let idx = 0; idx < NAV_RES * NAV_RES; idx++) {
+      for (let idx = 0; idx < d.navFlags.length; idx++) {
         const f = d.navFlags[idx];
         if (f & NavFlag.Walkable && !(f & NavFlag.Street)) {
           lotWalk++;
@@ -166,7 +194,10 @@ describe('generateChunk', () => {
         }
       }
       expect(lotReach / Math.max(1, lotWalk)).toBeGreaterThan(0.6);
+      if (hasReachableStorey(d)) multiStorey++;
     }
+    // Upstairs rooms (two-storey houses, catwalks) are part of the walkable city.
+    expect(multiStorey).toBeGreaterThan(50);
     expect(totalSpawns / 200).toBeGreaterThan(8);
     expect(encounters).toBeGreaterThan(60);
   }, 60000);

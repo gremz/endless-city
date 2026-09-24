@@ -1,7 +1,7 @@
 import { CHUNK } from '../../core/config';
 import type { Rand } from '../../core/rng';
 import { NAV_CELL, NAV_RES, NavFlag } from './ChunkData';
-import type { NavBake } from './navBake';
+import { spanColumns, type NavBake } from './navBake';
 
 export interface EncounterData {
   spawns: Float32Array;
@@ -25,30 +25,35 @@ export function placeEncounters(
   const N = NAV_RES;
   const ox = cx * CHUNK;
   const oz = cz * CHUNK;
-  // Candidate cells packed as (score << 14 | cellIndex) so a typed-array sort ranks them.
-  const keys = new Int32Array(N * N);
+  // Candidate spans packed as (score << 16 | spanId) so a typed-array sort ranks them.
+  const spanCol = spanColumns(nav.col);
+  const keys = new Int32Array(nav.floor.length);
   let count = 0;
-  for (let j = 2; j < N - 2; j++) {
-    for (let i = 2; i < N - 2; i++) {
-      const f = nav.flags[j * N + i];
-      if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & NavFlag.Street) continue;
-      let score = r();
-      if (f & NavFlag.CoverFull) score += 2;
-      else if (f & NavFlag.CoverHalf) score += 1.5;
-      if (f & NavFlag.Indoor) score += 1;
-      if (f & NavFlag.NearWall && !(f & (NavFlag.CoverHalf | NavFlag.CoverFull))) score -= 0.5;
-      keys[count++] = (Math.max(0, Math.floor((score + 1) * 1000)) << 14) | (j * N + i);
-    }
+  for (let s = 0; s < nav.floor.length; s++) {
+    const c = spanCol[s];
+    const i = c % N;
+    const j = (c - i) / N;
+    if (i < 2 || j < 2 || i >= N - 2 || j >= N - 2) continue;
+    const f = nav.flags[s];
+    if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & NavFlag.Street) continue;
+    let score = r();
+    if (f & NavFlag.CoverFull) score += 2;
+    else if (f & NavFlag.CoverHalf) score += 1.5;
+    if (f & NavFlag.Indoor) score += 1;
+    if (f & NavFlag.NearWall && !(f & (NavFlag.CoverHalf | NavFlag.CoverFull))) score -= 0.5;
+    keys[count++] = (Math.max(0, Math.floor((score + 1) * 1000)) << 16) | s;
   }
   const ranked = keys.subarray(0, count).sort().reverse();
-  const cellOf = (k: number) => k & 0x3fff;
+  const spanOf = (k: number) => k & 0xffff;
+  const cellOf = (k: number) => spanCol[spanOf(k)];
 
   const spawns: number[] = [];
   const slotCells: number[] = [];
   const minSpacing2 = (3.5 / NAV_CELL) ** 2;
   const MAX_SLOTS = 10;
   for (let c = 0; c < ranked.length && slotCells.length < MAX_SLOTS; c++) {
-    const cell = cellOf(ranked[c]);
+    const span = spanOf(ranked[c]);
+    const cell = spanCol[span];
     const ci = cell % N;
     const cj = (cell - ci) / N;
     let ok = true;
@@ -62,13 +67,13 @@ export function placeEncounters(
     }
     if (!ok) continue;
     slotCells.push(cell);
-    spawns.push(ox + (ci + 0.5) * NAV_CELL, nav.floor[cell] / 100 + 0.02, oz + (cj + 0.5) * NAV_CELL);
+    spawns.push(ox + (ci + 0.5) * NAV_CELL, nav.floor[span] / 100 + 0.02, oz + (cj + 0.5) * NAV_CELL);
   }
 
   // Patrol loop: farthest-point sampling over reachable open cells.
   const patrol: number[] = [];
   if (count) {
-    const pts: number[] = [cellOf(ranked[Math.floor(r() * Math.min(count, 40))])];
+    const pts: number[] = [spanOf(ranked[Math.floor(r() * Math.min(count, 40))])];
     for (let k = 1; k < 4; k++) {
       let best = pts[0];
       let bestD = -1;
@@ -77,17 +82,17 @@ export function placeEncounters(
         const ci = cell % N;
         const cj = (cell - ci) / N;
         let d = Infinity;
-        for (const p of pts) d = Math.min(d, (p % N - ci) ** 2 + (Math.floor(p / N) - cj) ** 2);
+        for (const p of pts) d = Math.min(d, (spanCol[p] % N - ci) ** 2 + (Math.floor(spanCol[p] / N) - cj) ** 2);
         if (d > bestD) {
           bestD = d;
-          best = cell;
+          best = spanOf(ranked[s]);
         }
       }
       pts.push(best);
     }
     for (const p of pts) {
-      const pi = p % N;
-      const pj = (p - pi) / N;
+      const pi = spanCol[p] % N;
+      const pj = (spanCol[p] - pi) / N;
       patrol.push(ox + (pi + 0.5) * NAV_CELL, nav.floor[p] / 100 + 0.02, oz + (pj + 0.5) * NAV_CELL);
     }
   }

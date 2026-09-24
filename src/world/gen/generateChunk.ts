@@ -118,6 +118,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     meshes,
     district: district.id,
     level,
+    navCol: nav.col,
     navFloor: nav.floor,
     navFlags: nav.flags,
     navCover: nav.cover,

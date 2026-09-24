@@ -210,22 +210,24 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   const steps = Math.round(rise / 0.25);
   const tread = 0.3;
   const run = steps * tread;
-  const sw = 1.2;
+  // Wide enough that a bot fits between the wall and the railing above the top steps.
+  const sw = 1.5;
   const sx0 = I.x0 + 0.9;
   const sx1 = sx0 + run;
   const sz0 = stairSide === 0 ? I.z0 : I.z1 - sw;
   const sz1 = sz0 + sw;
-  w.stairs(sx0, lotY, sz0, sx1, lotY + rise, sz1, Ramp.PosX, Material.Wood, 0.25, 150, false);
+  w.stairs(sx0, lotY, sz0, sx1, lotY + rise, sz1, Ramp.PosX, Material.Wood, 0.25, 150);
   ctx.occ.mark(rect(sx0 - 1, sz0 - 0.8, sx1 + 1, sz1 + 0.8), Occ.Reserved);
 
   const upperY = lotY + FLOOR_H;
-  const hole = rect(sx0 - 0.1, sz0, sx1 + 0.2, sz1);
+  // The slab meets the top step flush, so the landing is continuous floor.
+  const hole = rect(sx0 - 0.1, sz0, sx1, sz1);
   for (const piece of subtractRects(I, [hole])) {
-    w.box(piece.x0, upperY - SLAB_T, piece.z0, piece.x1, upperY, piece.z1, Material.Wood, SOLID, 120);
+    w.box(piece.x0, upperY - SLAB_T, piece.z0, piece.x1, upperY, piece.z1, Material.Wood, SOLID | Contents.FLOOR, 120);
   }
   // Railing along the open side of the stair hole.
   const railZ = stairSide === 0 ? sz1 : sz0 - 0.08;
-  w.box(sx0 + 1.2, upperY, railZ, sx1 + 0.2, upperY + 1.0, railZ + 0.08, Material.Wood, SOLID, 90);
+  w.box(sx0 + 1.2, upperY, railZ, sx1, upperY + 1.0, railZ + 0.08, Material.Wood, SOLID, 90);
 
   // Upper floor walls with windows all round.
   const upperH = 3.0;
@@ -293,7 +295,7 @@ function warehouse(ctx: GenContext, fp: Rect, tint: number): void {
     const cz1 = cz0 + depth;
     const cxa = I.x0 + 0.5;
     const cxb = I.x1 - 0.5;
-    w.box(cxa, cy - 0.2, cz0, cxb, cy, cz1, Material.Metal, SOLID, 4);
+    w.box(cxa, cy - 0.2, cz0, cxb, cy, cz1, Material.Metal, SOLID | Contents.FLOOR, 4);
     // Railing.
     const rz = bigSide === 0 ? cz0 : cz1 - 0.06;
     w.box(cxa + 7.2, cy, rz, cxb, cy + 1.0, rz + 0.06, Material.Metal, SOLID, 4);
@@ -301,7 +303,7 @@ function warehouse(ctx: GenContext, fp: Rect, tint: number): void {
     for (let x = cxa + 3; x < cxb - 1; x += 5) w.box(x, lotY, cz0 + 0.1, x + 0.15, cy - 0.2, cz0 + 0.25, Material.Metal, SOLID, 4);
     // Ramp from the floor up to the catwalk, running along the catwalk.
     const rz0 = bigSide === 0 ? cz0 - depth : cz1;
-    w.ramp(cxa, lotY, rz0, cxa + 7, cy, rz0 + depth, Ramp.NegX, Material.Metal, SOLID, 4);
+    w.ramp(cxa, lotY, rz0, cxa + 7, cy, rz0 + depth, Ramp.NegX, Material.Metal, SOLID | Contents.FLOOR, 4);
     ctx.occ.mark(rect(cxa - 1, Math.min(rz0, cz0) - 1, cxb, Math.max(rz0 + depth, cz1) + 1), Occ.Reserved);
     for (let x = cxa + 9; x < cxb - 1; x += 6) ctx.perches.push(x, cy + 0.02, (cz0 + cz1) / 2);
   }

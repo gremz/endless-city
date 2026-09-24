@@ -3,7 +3,7 @@ import { TICK } from '../core/config';
 import { vec3 } from '../core/math';
 import { parseParams } from '../core/urlParams';
 import { makeCmd } from '../input/UserCmd';
-import { Contents, SOLID } from '../physics/brush';
+import { Contents, Ramp, SOLID } from '../physics/brush';
 import { makeActor, Team, teleport } from '../sim/Actor';
 import { Simulation } from '../sim/Simulation';
 import { addGrenades, makeInventory } from '../weapons/Inventory';
@@ -12,19 +12,20 @@ import { chunkKey } from '../world/chunkMath';
 import type { WorldStreamer } from '../world/WorldStreamer';
 import { WEAPONS } from '../weapons/weaponDefs';
 import { BrushWriter } from '../world/gen/BrushWriter';
-import { Material, type ChunkData } from '../world/gen/ChunkData';
+import { Material, NAV_RES, type ChunkData } from '../world/gen/ChunkData';
 import { bakeNav } from '../world/gen/navBake';
 import { Bot, TargetHistory, type BotContext, type Squad } from './Bot';
 import { skillFor } from './difficulty';
 import { EncounterManager, hearingRadius } from './EncounterManager';
 import { AStar, smooth } from './nav/astar';
-import { NavGrid } from './nav/NavGrid';
+import { NavGrid, toCell } from './nav/NavGrid';
 
 /** A flat 64 m chunk at (0, 0) with optional extra boxes, loaded into a sim (collision + nav). */
-function flatWorld(boxes: [number, number, number, number, number, number][] = []) {
+function flatWorld(boxes: [number, number, number, number, number, number][] = [], build?: (w: BrushWriter) => void) {
   const w = new BrushWriter();
   w.box(0, -1, 0, 64, 0, 64, Material.Concrete, SOLID | Contents.FLOOR);
   for (const b of boxes) w.box(b[0], b[1], b[2], b[3], b[4], b[5], Material.Concrete, SOLID);
+  build?.(w);
   const brushes = w.finish();
   const nav = bakeNav(brushes);
   const data = {
@@ -36,6 +37,7 @@ function flatWorld(boxes: [number, number, number, number, number, number][] = [
     meshes: [],
     district: 0,
     level: 0,
+    navCol: nav.col,
     navFloor: nav.floor,
     navFlags: nav.flags,
     navCover: nav.cover,
@@ -53,11 +55,17 @@ function flatWorld(boxes: [number, number, number, number, number, number][] = [
   return { sim, data };
 }
 
+/** Stairs (x 20..24.2 at z 30..31.5) up to a 3.5 m slab (x 24.2..40, z 26..38). */
+function upperFloor(w: BrushWriter): void {
+  w.stairs(20, 0, 30, 24.2, 3.5, 31.5, Ramp.PosX, Material.Wood);
+  w.box(24.2, 3.25, 26, 40, 3.5, 38, Material.Wood, SOLID | Contents.FLOOR);
+}
+
 describe('A*', () => {
   it('finds a straight path on open ground', () => {
     const { sim } = flatWorld();
     const astar = new AStar(sim.nav);
-    const res = astar.find(10, 10, 100, 100, 0, 0)!;
+    const res = astar.find(10, 0, 10, 50, 0, 50, 0, 0)!;
     expect(res.complete).toBe(true);
     // Smoothed to (nearly) a straight line.
     expect(res.points.length).toBeLessThanOrEqual(3);
@@ -66,7 +74,7 @@ describe('A*', () => {
   it('routes around a wall, and smoothing never crosses blocked cells', () => {
     const { sim } = flatWorld([[30, 0, 5, 30.5, 3, 59]]);
     const astar = new AStar(sim.nav);
-    const res = astar.find(20, 32, 80, 64, 0, 0)!;
+    const res = astar.find(20, 0, 32, 40, 0, 32, 0, 0)!;
     expect(res.complete).toBe(true);
     const pts = res.points;
     expect(pts.length).toBeGreaterThan(2);
@@ -91,7 +99,7 @@ describe('A*', () => {
       [49.5, 0, 40, 50, 3, 50],
     ]);
     const astar = new AStar(sim.nav);
-    const res = astar.find(10, 10, 90, 90, 0, 0, { maxExpansions: 20000 });
+    const res = astar.find(10, 0, 10, 45, 0, 45, 0, 0, { maxExpansions: 20000 });
     expect(res).not.toBeNull();
     expect(res!.complete).toBe(false);
   });
@@ -99,13 +107,37 @@ describe('A*', () => {
   it('does not climb steps higher than 0.45 m', () => {
     const { sim } = flatWorld([[20, 0, 0, 64, 0.6, 64]]);
     const astar = new AStar(sim.nav);
-    const res = astar.find(10, 32, 80, 64, 0, 0, { maxExpansions: 30000 });
+    const res = astar.find(10, 0, 32, 40, 0, 32, 0, 0, { maxExpansions: 30000 });
     expect(res!.complete).toBe(false);
+  });
+
+  it('paths up stairs to an upper floor, keeping the floor underneath walkable', () => {
+    const { sim } = flatWorld([], upperFloor);
+    // Two floors in one column under the slab.
+    expect(sim.nav.near(toCell(32), toCell(32), 0, 0.1)).toBe(true);
+    expect(sim.nav.near(toCell(32), toCell(32), 3.5, 0.1)).toBe(true);
+    const astar = new AStar(sim.nav);
+    const res = astar.find(10, 0, 31, 32, 3.5, 32, 0, 0, { maxExpansions: 30000 })!;
+    expect(res.complete).toBe(true);
+    const last = res.points[res.points.length - 1];
+    expect(last.y).toBeCloseTo(3.5, 1);
+    // It goes up the stairs: the polyline crosses x = 22 within the stairs' width.
+    const pts = res.points;
+    const k = pts.findIndex((p, i) => i > 0 && pts[i - 1].x < 22 && p.x >= 22);
+    expect(k).toBeGreaterThan(0);
+    const t = (22 - pts[k - 1].x) / (pts[k].x - pts[k - 1].x);
+    const z = pts[k - 1].z + (pts[k].z - pts[k - 1].z) * t;
+    expect(z).toBeGreaterThan(30);
+    expect(z).toBeLessThan(31.5);
+    // And a path that stays downstairs stays on the ground floor.
+    const down = astar.find(10, 0, 31, 32, 0, 32, 0, 0, { maxExpansions: 30000 })!;
+    expect(down.complete).toBe(true);
+    expect(Math.max(...down.points.map((p) => p.y))).toBeLessThan(0.5);
   });
 
   it('smooth() keeps endpoints', () => {
     const nav = new NavGrid();
-    expect(smooth(nav, [[0, 0], [1, 1]])).toEqual([[0, 0], [1, 1]]);
+    expect(smooth(nav, [[0, 0, 0], [1, 1, 0]])).toEqual([[0, 0, 0], [1, 1, 0]]);
   });
 });
 
@@ -192,6 +224,26 @@ describe('bots', () => {
     const start = { ...bot.actor.move.pos };
     runBots(sim, [bot], 4);
     expect(Math.hypot(bot.actor.move.pos.x - start.x, bot.actor.move.pos.z - start.z)).toBeGreaterThan(3);
+  });
+});
+
+describe('bots on several floors', () => {
+  it('climb the stairs to investigate a noise upstairs', () => {
+    // The player waits behind a wall, out of sight.
+    const { sim } = flatWorld([[0, 0, 50, 64, 5, 51]], upperFloor);
+    teleport(sim.player, 32, 0.02, 58);
+    const bot = makeBot(sim, 10, 31, 0);
+    bot.hear({ x: 34, y: 3.5, z: 32 }, 70, 0);
+    runBots(sim, [bot], 10);
+    expect(bot.actor.move.pos.y).toBeGreaterThan(3.3);
+    expect(bot.actor.move.pos.x).toBeGreaterThan(25);
+  });
+
+  it('nav spans exist only where there is headroom', () => {
+    const { data } = flatWorld([], upperFloor);
+    // Right under the slab edge a bot has room (3.25 m ceiling); on the slab too.
+    const c = toCell(30) * NAV_RES + toCell(30);
+    expect(data.navCol[c + 1] - data.navCol[c]).toBe(2);
   });
 });
 

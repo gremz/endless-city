@@ -18,7 +18,7 @@ import type { BotSkill } from './difficulty';
 import { bodyScale } from './hitboxes';
 import type { AStar, PathPoint } from './nav/astar';
 import { findCover, type CoverSpot } from './nav/cover';
-import { cellCenter, toCell } from './nav/NavGrid';
+import { cellCenter } from './nav/NavGrid';
 
 export type BotState = 'idle' | 'patrol' | 'alert' | 'engage' | 'cover' | 'flank' | 'retreat' | 'overwatch';
 export type BotRole = 'anchor' | 'patroller' | 'flanker' | 'overwatch';
@@ -398,14 +398,14 @@ export class Bot {
 
   // -------------------------------------------------------------- navigation
 
-  private requestPath(ctx: BotContext, gx: number, gz: number, extra?: (gx: number, gz: number) => number): boolean {
+  private requestPath(ctx: BotContext, target: Vec3, extra?: (gx: number, gz: number) => number): boolean {
     if (ctx.pathBudget <= 0) return false;
     ctx.pathBudget--;
     const m = this.actor.move.pos;
     const g = ctx.sim.grenades;
     const y = m.y;
     const hazard = g.fires.length ? (cx: number, cz: number) => g.inFire(cellCenter(cx), y, cellCenter(cz), 0.3) : undefined;
-    const res = ctx.astar.find(m.x, m.z, gx, gz, this.squad.homeCx, this.squad.homeCz, { extraCost: extra, hazard });
+    const res = ctx.astar.find(m.x, m.y, m.z, target.x, target.y, target.z, this.squad.homeCx, this.squad.homeCz, { extraCost: extra, hazard });
     this.pathIdx = 0;
     this.path = res ? res.points : [];
     this.repathAt = ctx.sim.time + 4;
@@ -416,7 +416,7 @@ export class Bot {
     const now = ctx.sim.time;
     const changed = !this.goal || Math.hypot(this.goal.x - target.x, this.goal.z - target.z) > 2;
     if (changed || (this.path.length === 0 && now >= this.repathAt) || now >= this.repathAt) {
-      if (this.requestPath(ctx, toCell(target.x), toCell(target.z), extra)) this.goal = vec3(target.x, target.y, target.z);
+      if (this.requestPath(ctx, target, extra)) this.goal = vec3(target.x, target.y, target.z);
       else if (changed) this.goal = null;
     }
   }
@@ -427,7 +427,7 @@ export class Bot {
     while (this.pathIdx < this.path.length) {
       const p = this.path[this.pathIdx];
       const d = Math.hypot(p.x - m.x, p.z - m.z);
-      if (d < 0.4 && this.pathIdx < this.path.length - 1) {
+      if (d < 0.4 && Math.abs(p.y - m.y) < 1.2 && this.pathIdx < this.path.length - 1) {
         this.pathIdx++;
         continue;
       }
@@ -471,11 +471,11 @@ export class Bot {
     this.repathAt = now + 0.5;
     if (this.stuckCount >= 3) {
       // Snap to the nearest walkable cell if the player can't see it happen.
-      const cell = ctx.sim.nav.nearestWalkable(m.x, m.z, 6, m.y);
+      const cell = ctx.sim.nav.nearestWalkable(m.x, m.y, m.z, 6);
       if (cell && !this.visible) {
-        m.x = (cell[0] + 0.5) * 0.5;
-        m.z = (cell[1] + 0.5) * 0.5;
-        m.y = ctx.sim.nav.floor(cell[0], cell[1]) + 0.02;
+        m.x = cellCenter(cell[0]);
+        m.z = cellCenter(cell[1]);
+        m.y = cell[2] + 0.02;
         this.actor.prevPos.x = m.x;
         this.actor.prevPos.y = m.y;
         this.actor.prevPos.z = m.z;
@@ -667,7 +667,7 @@ export class Bot {
           const threat = vec3(this.lastKnown.x, this.lastKnown.y + 1.6, this.lastKnown.z);
           const g = sim.grenades;
           const y = a.move.pos.y;
-          this.cover = findCover(sim.nav, sim.world, a.move.pos.x, a.move.pos.z, threat, 15, undefined, {
+          this.cover = findCover(sim.nav, sim.world, a.move.pos.x, a.move.pos.y, a.move.pos.z, threat, 15, undefined, {
             reject: g.fires.length ? (x, z) => g.inFire(x, y, z, 0.5) : undefined,
             blocksSight: g.smokes.length ? (p, q) => g.blocksSight(p, q) : undefined,
           });
@@ -1009,10 +1009,9 @@ export class Bot {
       const d = 12 + this.r() * 13;
       const x = lk.x + Math.cos(ang) * d;
       const z = lk.z + Math.sin(ang) * d;
-      const cell = ctx.sim.nav.nearestWalkable(x, z, 4);
+      const cell = ctx.sim.nav.nearestWalkable(x, lk.y, z, 4, 2);
       if (!cell) continue;
-      const y = ctx.sim.nav.floor(cell[0], cell[1]);
-      return vec3((cell[0] + 0.5) * 0.5, y, (cell[1] + 0.5) * 0.5);
+      return vec3(cellCenter(cell[0]), cell[2], cellCenter(cell[1]));
     }
     return null;
   }

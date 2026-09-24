@@ -18,13 +18,14 @@ const a = vec3();
 const b = vec3();
 
 /**
- * Find a walkable cell within `radius` meters of (x, z) whose cover faces the threat and from
+ * Find a walkable cell within `radius` meters of (x, z), on about the same floor as y, whose cover faces the threat and from
  * which the threat's eye cannot see the bot's head (verified with a ray).
  */
 export function findCover(
   nav: NavGrid,
   world: CollisionWorld,
   x: number,
+  y: number,
   z: number,
   threatEye: Vec3,
   radius = 15,
@@ -39,34 +40,36 @@ export function findCover(
   const gx0 = toCell(x);
   const gz0 = toCell(z);
   const rc = Math.ceil(radius / 0.5);
-  const cands: { gx: number; gz: number; d: number; crouch: boolean }[] = [];
+  const cands: { gx: number; gz: number; y: number; d: number; crouch: boolean }[] = [];
   for (let dz = -rc; dz <= rc; dz += 1) {
     for (let dx = -rc; dx <= rc; dx += 1) {
       const d2 = dx * dx + dz * dz;
       if (d2 > rc * rc) continue;
       const gx = gx0 + dx;
       const gz = gz0 + dz;
-      const f = nav.flags(gx, gz);
+      if (!nav.near(gx, gz, y, 1.5)) continue;
+      const f = nav.qFlags;
       if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || !(f & (NavFlag.CoverFull | NavFlag.CoverHalf))) continue;
       const cx = cellCenter(gx);
       const cz = cellCenter(gz);
       // Cover must face the threat: the direction towards it should be in the cover mask.
       const ang = Math.atan2(threatEye.z - cz, threatEye.x - cx);
       const dirIdx = ((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8;
-      const mask = nav.cover(gx, gz);
+      const mask = nav.qCover;
+      const fy = nav.qFloor;
       if (!(mask & (1 << dirIdx)) && !(mask & (1 << ((dirIdx + 1) % 8))) && !(mask & (1 << ((dirIdx + 7) % 8)))) continue;
       const tdist = Math.hypot(threatEye.x - cx, threatEye.z - cz);
       if (tdist < 6) continue;
       if (avoidNear && Math.hypot(avoidNear.x - cx, avoidNear.z - cz) < 1.5) continue;
       if (opts.reject?.(cx, cz)) continue;
-      cands.push({ gx, gz, d: Math.sqrt(d2) * 0.5, crouch: !(f & NavFlag.CoverFull) });
+      cands.push({ gx, gz, y: fy, d: Math.sqrt(d2) * 0.5, crouch: !(f & NavFlag.CoverFull) });
     }
   }
   cands.sort((p, q) => p.d - q.d);
   let tests = 0;
   for (const c of cands) {
     if (tests++ > 14) break;
-    const y = nav.floor(c.gx, c.gz);
+    const y = c.y;
     a.x = threatEye.x;
     a.y = threatEye.y;
     a.z = threatEye.z;

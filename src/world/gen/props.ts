@@ -53,8 +53,10 @@ function container(ctx: GenContext, r: Rand, x: number, z: number): boolean {
   const fp = alongX ? rect(x, z, x + L + (withRamp ? 4.5 : 0), z + W) : rect(x, z, x + W, z + L + (withRamp ? 4.5 : 0));
   if (!claim(ctx, fp)) return false;
   const tint = Math.floor(r() * 6);
-  if (alongX) w.box(x, lotY, z, x + L, lotY + H, z + W, Material.Metal, SOLID, tint);
-  else w.box(x, lotY, z, x + W, lotY + H, z + L, Material.Metal, SOLID, tint);
+  // A container with a ramp has a roof bots can stand on.
+  const roof = withRamp ? SOLID | Contents.FLOOR : SOLID;
+  if (alongX) w.box(x, lotY, z, x + L, lotY + H, z + W, Material.Metal, roof, tint);
+  else w.box(x, lotY, z, x + W, lotY + H, z + L, Material.Metal, roof, tint);
   let top = lotY + H;
   if (r() < 0.3) {
     // Stacked container, shifted a little.
@@ -64,8 +66,8 @@ function container(ctx: GenContext, r: Rand, x: number, z: number): boolean {
     top += H;
   } else if (withRamp) {
     // Ramp onto the roof: a vantage point you can run up.
-    if (alongX) w.ramp(x + L, lotY, z, x + L + 4.5, lotY + H, z + W, Ramp.NegX, Material.Metal, SOLID, 4);
-    else w.ramp(x, lotY, z + L, x + W, lotY + H, z + L + 4.5, Ramp.NegZ, Material.Metal, SOLID, 4);
+    if (alongX) w.ramp(x + L, lotY, z, x + L + 4.5, lotY + H, z + W, Ramp.NegX, Material.Metal, SOLID | Contents.FLOOR, 4);
+    else w.ramp(x, lotY, z + L, x + W, lotY + H, z + L + 4.5, Ramp.NegZ, Material.Metal, SOLID | Contents.FLOOR, 4);
   }
   if (alongX) ctx.perches.push(x + L / 2, top + 0.02, z + W / 2);
   else ctx.perches.push(x + W / 2, top + 0.02, z + L / 2);

@@ -18,6 +18,7 @@ function draw(): void {
   const ccx = Number($<HTMLInputElement>('cx').value) | 0;
   const ccz = Number($<HTMLInputElement>('cz').value) | 0;
   const showNav = $<HTMLInputElement>('nav').checked;
+  const layer = $<HTMLSelectElement>('layer').value;
   const size = SPAN * CHUNK * PX;
   canvas.width = canvas.height = size;
   ctx.fillStyle = '#222';
@@ -38,8 +39,11 @@ function draw(): void {
         const cell = (CHUNK / NAV_RES) * PX;
         for (let j = 0; j < NAV_RES; j++) {
           for (let i = 0; i < NAV_RES; i++) {
-            const f = d.navFlags[j * NAV_RES + i];
-            if (!(f & NavFlag.Walkable)) continue;
+            // Spans are sorted bottom-up: ground is the first, top the last.
+            const c = j * NAV_RES + i;
+            const n = d.navCol[c + 1] - d.navCol[c];
+            if (!n || (layer === 'upper' && n < 2)) continue;
+            const f = d.navFlags[layer === 'ground' ? d.navCol[c] : d.navCol[c + 1] - 1];
             ctx.fillStyle = f & NavFlag.Reachable ? (f & (NavFlag.CoverFull | NavFlag.CoverHalf) ? 'rgba(80,160,255,0.35)' : 'rgba(80,255,120,0.22)') : 'rgba(255,60,60,0.45)';
             ctx.fillRect(ox + i * cell, oz + j * cell, cell, cell);
           }
@@ -66,5 +70,5 @@ function draw(): void {
   $('info').textContent = `avg gen ${(totalMs / (SPAN * SPAN)).toFixed(1)} ms · ${encounters} encounters · yellow = spawn slots, magenta = perches, red = health packs`;
 }
 
-for (const id of ['seed', 'cx', 'cz', 'nav']) $(id).addEventListener('change', draw);
+for (const id of ['seed', 'cx', 'cz', 'nav', 'layer']) $(id).addEventListener('change', draw);
 draw();

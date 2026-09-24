@@ -151,6 +151,7 @@ function setup() {
     meshes: [],
     district: 0,
     level: 0,
+    navCol: new Uint16Array(0),
     navFloor: new Int16Array(0),
     navFlags: new Uint8Array(0),
     navCover: new Uint8Array(0),

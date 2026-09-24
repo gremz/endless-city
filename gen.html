@@ -18,6 +18,13 @@
       <label>center cx <input id="cx" type="number" value="0" /></label>
       <label>cz <input id="cz" type="number" value="0" /></label>
       <label><input id="nav" type="checkbox" /> nav overlay</label>
+      <label title="Which floor of multi-storey columns the nav overlay shows">floor
+        <select id="layer">
+          <option value="top">top</option>
+          <option value="ground">ground</option>
+          <option value="upper">upper only</option>
+        </select>
+      </label>
       <span id="info"></span>
     </header>
     <canvas id="map"></canvas>

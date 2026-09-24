@@ -36,7 +36,8 @@ If `localhost` doesn't reach WSL from Windows, use the Network URL that Vite pri
 | `?peerdebug=3` | Log WebRTC signalling (PeerJS) to the console |
 
 `/gen.html?seed=…` shows a top-down map of the generator output: layouts, nav reachability,
-spawn slots and perches.
+spawn slots and perches. Where a column has several floors, the floor picker chooses which
+one the nav overlay shows (top, ground, or upper floors only).
 
 ## Controls
 
@@ -179,7 +180,9 @@ round-trip time, traffic and prediction corrections.
   enforces that.
 - **World** (`src/world`): 64 m chunks are generated purely from `(seed, cx, cz)` in web
   workers. Each chunk gets streets, districts, terraces, buildings, courtyards and props. It is
-  baked into brushes, per-material meshes, and a 0.5 m nav grid with cover and reachability.
+  baked into brushes, per-material meshes, and a layered 0.5 m nav grid with cover and
+  reachability. Each nav column holds every floor with standing room in it (street, upper
+  storeys, catwalks), so bots path up stairs and ramps and fight on more than one level.
   Chunks stream in around the player.
 - **Presentation** (`src/render`, `src/ui`, `src/audio`, `src/game`) reads simulation state and
   events to draw the world, the viewmodel, effects and HUD, and to play synthesized positional
