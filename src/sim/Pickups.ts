@@ -217,7 +217,7 @@ export class PickupManager implements SimSystem, StreamerListener {
       if (this.items[i].expiresAt <= t) this.items.splice(i, 1);
     }
     this.swapCandidates.clear();
-    for (const p of sim.players) if (p.alive) this.touch(p, sim);
+    for (const p of sim.players) if (p.alive && p.vehicle < 0) this.touch(p, sim);
   }
 
   /** Walk-over pickups and the E swap for one player. */
@@ -272,7 +272,7 @@ export class PickupManager implements SimSystem, StreamerListener {
       sim.events.push({ type: 'pickup', actorId: p.id, item: 'medkit', pos: it.pos, amount: 1 });
     }
     if (!swap) return;
-    if (sim.cmdFor(p).pressed & Buttons.USE) this.swap(swap, p, sim);
+    if (sim.cmdFor(p).pressed & Buttons.USE && !sim.usedVehicle(p.id)) this.swap(swap, p, sim);
     else this.swapCandidates.set(p.id, swap);
   }
 

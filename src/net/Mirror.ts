@@ -5,9 +5,11 @@ import { makeActor, storePrev, Team, teleport, type Actor, type TeamId } from '.
 import type { Fire, Projectile, SmokeCloud } from '../sim/Grenades';
 import type { PickupManager } from '../sim/Pickups';
 import type { Simulation } from '../sim/Simulation';
+import type { Vehicle } from '../sim/vehicle/Vehicle';
 import { makeInventory, makeItem, syncGrenade, type Inventory } from '../weapons/Inventory';
 import { WEAPONS } from '../weapons/weaponDefs';
-import { Flag, fromNetPickup, type NetActor, type NetInv, type PrivateState, type ServerMsg, type Snapshot } from './protocol';
+import { makeVehicle, storeVehiclePrev, syncVehicleBrushes } from '../sim/vehicle/Vehicle';
+import { CarFlag, Flag, fromNetPickup, type NetActor, type NetInv, type NetVehicle, type PrivateState, type ServerMsg, type Snapshot } from './protocol';
 
 /** Other actors are drawn this far in the past, between two snapshots that already arrived. */
 export const INTERP_DELAY = 0.1;
@@ -25,7 +27,21 @@ interface Sample {
 }
 
 /** Events our own prediction already produced; the host's copies are dropped. */
-const PREDICTED = new Set<SimEvent['type']>(['shot', 'impact', 'reload', 'deploy', 'dryfire', 'nade_pin', 'nade_throw', 'jump', 'land', 'step', 'flashlight']);
+const PREDICTED = new Set<SimEvent['type']>([
+  'shot',
+  'impact',
+  'reload',
+  'deploy',
+  'dryfire',
+  'nade_pin',
+  'nade_throw',
+  'jump',
+  'land',
+  'step',
+  'flashlight',
+  'car_door',
+  'car_crash',
+]);
 
 function actorOf(e: SimEvent): number {
   if (e.type === 'shot') return e.shooterId;
@@ -44,6 +60,8 @@ export class Mirror {
   private seen = new Set<number>();
   private samples = new Map<number, Sample[]>();
   private nadeSamples = new Map<number, Sample[]>();
+  private carSamples = new Map<number, Sample[]>();
+  private seenCars = new Set<number>();
   /** Host time minus local time (seconds), smoothed. */
   private clockOffset: number | null = null;
 
@@ -127,8 +145,43 @@ export class Mirror {
       this.samples.delete(a.id);
     }
     const me = sim.getActor(this.localId);
+    this.applyVehicles(s);
     if (me && s.me) this.applyPrivate(me, s.me);
     this.applyGrenades(s, me ?? sim.player);
+  }
+
+  /**
+   * Cars: everything the host sent, raw (the one we drive is then re-predicted on top), and
+   * who is driving what.
+   */
+  private applyVehicles(s: Snapshot): void {
+    const sim = this.sim;
+    const me = sim.getActor(this.localId);
+    const mine = this.predicted && me ? me.vehicle : -1;
+    const seen = this.seenCars;
+    seen.clear();
+    for (const nv of s.vehicles) {
+      seen.add(nv.id);
+      let v = sim.getVehicle(nv.id);
+      if (!v) {
+        v = makeVehicle(nv.id, nv.x, nv.y, nv.z, nv.yaw, nv.paint, !!(nv.flags & CarFlag.Hatch));
+        sim.addVehicle(v);
+        this.carSamples.delete(nv.id);
+      } else if (nv.id !== mine) storeVehiclePrev(v);
+      applyVehicle(v, nv);
+      this.record(this.carSamples, nv.id, s.time, nv.x, nv.y, nv.z, nv.yaw, nv.pitch, nv.roll);
+    }
+    for (let i = sim.vehicles.length - 1; i >= 0; i--) {
+      const v = sim.vehicles[i];
+      if (seen.has(v.id)) continue;
+      sim.removeVehicle(v);
+      this.carSamples.delete(v.id);
+    }
+    for (const a of sim.actors) a.vehicle = -1;
+    for (const v of sim.vehicles) {
+      const d = v.driver >= 0 ? sim.getActor(v.driver) : undefined;
+      if (d) d.vehicle = v.id;
+    }
   }
 
   private record(map: Map<number, Sample[]>, id: number, t: number, x: number, y: number, z: number, yaw: number, pitch: number, duck: number): void {
@@ -153,6 +206,25 @@ export class Mirror {
       a.yaw = a.prevYaw = p.yaw;
       a.pitch = p.pitch;
       a.move.duckAmount = p.duck;
+    }
+    const me = sim.getActor(this.localId);
+    const mine = this.predicted && me ? me.vehicle : -1;
+    for (const v of sim.vehicles) {
+      if (v.id !== mine) {
+        const list = this.carSamples.get(v.id);
+        if (list?.length) {
+          const p = sampleAt(list, t);
+          const c = v.car;
+          c.pos.x = v.prevPos.x = p.x;
+          c.pos.y = v.prevPos.y = p.y;
+          c.pos.z = v.prevPos.z = p.z;
+          c.yaw = v.prevYaw = p.yaw;
+          c.pitch = p.pitch;
+          c.roll = p.duck;
+        }
+      }
+      // Our own player collides with where everyone else's cars are drawn.
+      syncVehicleBrushes(sim.world, v);
     }
     for (const g of sim.grenades.projectiles) {
       const list = this.nadeSamples.get(g.id);
@@ -249,6 +321,30 @@ export class Mirror {
     g.fires.length = 0;
     g.fires.push(...fires);
   }
+}
+
+function applyVehicle(v: Vehicle, n: NetVehicle): void {
+  const c = v.car;
+  c.pos.x = n.x;
+  c.pos.y = n.y;
+  c.pos.z = n.z;
+  c.vel.x = n.vx;
+  c.vel.y = n.vy;
+  c.vel.z = n.vz;
+  c.yaw = n.yaw;
+  c.yawRate = n.yawRate;
+  c.steer = n.steer;
+  c.throttle = n.throttle;
+  c.pitch = n.pitch;
+  c.roll = n.roll;
+  c.onGround = !!(n.flags & CarFlag.OnGround);
+  c.braking = !!(n.flags & CarFlag.Braking);
+  v.paint = n.paint;
+  v.hatch = !!(n.flags & CarFlag.Hatch);
+  v.destroyed = !!(n.flags & CarFlag.Destroyed);
+  v.health = n.health;
+  v.driver = n.driver;
+  v.burnUntil = n.burnUntil;
 }
 
 const out: Sample = { t: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, duck: 0 };

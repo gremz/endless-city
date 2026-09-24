@@ -397,3 +397,9 @@ export const BUY_MENU: { title: string; items: BuyItem[] }[] = [
 ];
 
 export const GEAR_PRICES = { kevlar: 650, helmet: 1000 } as const;
+
+/**
+ * Not a weapon: what run-over hits and wrecked-car injuries are credited with (kill feed "Car",
+ * an SMG-sized kill reward). Damage is set per hit; armor doesn't help.
+ */
+export const CAR_HIT: WeaponDef = { ...WEAPONS.knife, id: 'car' as WeaponId, name: 'Car', killReward: 600, damage: 0, armorPen: 1, rangeMod: 1 };

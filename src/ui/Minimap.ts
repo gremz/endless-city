@@ -28,6 +28,8 @@ export interface MinimapView {
   pickups: readonly { pos: { x: number; z: number }; item: { kind: string }; stash: boolean }[];
   /** Where the player's death stash lies. */
   stash: { x: number; z: number } | null;
+  /** Cars free to drive. */
+  cars?: { x: number; z: number; yaw: number }[];
 }
 
 const STASH = '#7fd4ff';
@@ -155,6 +157,16 @@ export class Minimap implements StreamerListener {
       ctx.fillRect(sx - bar, sy - arm, bar * 2, arm * 2);
     }
 
+    // Driveable cars: little yellow cars pointing the way they face.
+    for (const car of v.cars ?? []) {
+      const dx = car.x - v.x;
+      const dz = car.z - v.z;
+      if (Math.hypot(dx, dz) > range) continue;
+      const [sx, sy] = toScreen(dx, dz);
+      const [fx, fy] = toScreen(dx - Math.sin(car.yaw), dz - Math.cos(car.yaw));
+      drawCar(ctx, sx, sy, Math.atan2(fy - sy, fx - sx), this.dpr);
+    }
+
     const dot = 3 * this.dpr;
     ctx.fillStyle = '#ff4a3a';
     for (const e of v.enemies) {
@@ -253,6 +265,22 @@ export function drawAlly(ctx: CanvasRenderingContext2D, x: number, y: number, k:
   ctx.arc(x, y, 4 * k, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
+}
+
+/** Car marker (shared with the world map): a yellow body with a dark windshield towards `angle`. */
+export function drawCar(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, dpr: number): void {
+  const l = 5.5 * dpr;
+  const w = 3 * dpr;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(-l - dpr, -w - dpr, (l + dpr) * 2, (w + dpr) * 2);
+  ctx.fillStyle = '#ffd24a';
+  ctx.fillRect(-l, -w, l * 2, w * 2);
+  ctx.fillStyle = '#2a2f36';
+  ctx.fillRect(l * 0.2, -w * 0.75, l * 0.35, w * 1.5);
+  ctx.restore();
 }
 
 /** Death stash marker: a dark disc with a light-blue bag, shared with the world map. */

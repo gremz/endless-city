@@ -3,6 +3,7 @@ import type { GameParams } from '../core/urlParams';
 import type { UserCmd } from '../input/UserCmd';
 import type { Actor } from '../sim/Actor';
 import type { Pickup, PickupItem } from '../sim/Pickups';
+import type { Vehicle } from '../sim/vehicle/Vehicle';
 import type { Inventory, WeaponState } from '../weapons/Inventory';
 import type { BuyItem, GrenadeId, WeaponId, WeaponSlot } from '../weapons/weaponDefs';
 
@@ -10,7 +11,7 @@ import type { BuyItem, GrenadeId, WeaponId, WeaponSlot } from '../weapons/weapon
  * Wire format between a host's ServerGame and its clients. Commands and snapshots are compact
  * binary sent on the unreliable channel; everything else is JSON on the reliable channel.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 /** A snapshot goes out every this many server ticks (32 Hz at 64 Hz). */
 export const SNAPSHOT_EVERY = 2;
 /** Commands per packet: each one repeats the last few in case packets are lost. */
@@ -347,6 +348,65 @@ export interface NetGrenades {
   f: [number, number, number, number, number, number, number][];
 }
 
+export const CarFlag = {
+  OnGround: 1,
+  Braking: 2,
+  Destroyed: 4,
+  Hatch: 8,
+} as const;
+
+/** A car as every client sees it: the full handling state, so its driver can predict it. */
+export interface NetVehicle {
+  id: number;
+  flags: number;
+  paint: number;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  yaw: number;
+  yawRate: number;
+  steer: number;
+  throttle: number;
+  pitch: number;
+  roll: number;
+  health: number;
+  /** Driver's actor id, or -1. */
+  driver: number;
+  burnUntil: number;
+}
+
+export function netVehicle(v: Vehicle): NetVehicle {
+  const c = v.car;
+  let flags = 0;
+  if (c.onGround) flags |= CarFlag.OnGround;
+  if (c.braking) flags |= CarFlag.Braking;
+  if (v.destroyed) flags |= CarFlag.Destroyed;
+  if (v.hatch) flags |= CarFlag.Hatch;
+  return {
+    id: v.id,
+    flags,
+    paint: v.paint,
+    x: c.pos.x,
+    y: c.pos.y,
+    z: c.pos.z,
+    vx: c.vel.x,
+    vy: c.vel.y,
+    vz: c.vel.z,
+    yaw: c.yaw,
+    yawRate: c.yawRate,
+    steer: c.steer,
+    throttle: c.throttle,
+    pitch: c.pitch,
+    roll: c.roll,
+    health: Math.max(0, Math.ceil(v.health)),
+    driver: v.driver,
+    burnUntil: v.burnUntil,
+  };
+}
+
 export interface Snapshot {
   /** Server tick the snapshot was taken on (also its sequence number). */
   tick: number;
@@ -354,6 +414,7 @@ export interface Snapshot {
   /** Last command sequence the host has run for this client. */
   ackCmd: number;
   actors: NetActor[];
+  vehicles: NetVehicle[];
   me: PrivateState | null;
   nades: NetGrenades;
 }
@@ -436,6 +497,27 @@ export function encodeSnapshot(s: Snapshot): ArrayBuffer {
     w.u8(SLOTS.indexOf(a.slot));
     w.f32(a.diedAt);
   }
+  w.u16(s.vehicles.length);
+  for (const v of s.vehicles) {
+    w.u16(v.id);
+    w.u8(v.flags);
+    w.u8(v.paint);
+    w.f32(v.x);
+    w.f32(v.y);
+    w.f32(v.z);
+    w.f32(v.vx);
+    w.f32(v.vy);
+    w.f32(v.vz);
+    w.f32(v.yaw);
+    w.f32(v.yawRate);
+    w.f32(v.steer);
+    w.i8(Math.round(Math.max(-1, Math.min(1, v.throttle)) * 127));
+    w.f32(v.pitch);
+    w.f32(v.roll);
+    w.u16(v.health);
+    w.u16(v.driver < 0 ? 0xffff : v.driver);
+    w.f32(v.burnUntil);
+  }
   w.bytes(enc.encode(toJson({ me: s.me, nades: s.nades })));
   return w.finish();
 }
@@ -468,6 +550,29 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
       diedAt: r.f32(),
     });
   }
+  const nv = r.u16();
+  const vehicles: NetVehicle[] = [];
+  for (let i = 0; i < nv; i++) {
+    const id = r.u16();
+    const flags = r.u8();
+    const paint = r.u8();
+    const x = r.f32();
+    const y = r.f32();
+    const z = r.f32();
+    const vx = r.f32();
+    const vy = r.f32();
+    const vz = r.f32();
+    const yaw = r.f32();
+    const yawRate = r.f32();
+    const steer = r.f32();
+    const throttle = r.i8() / 127;
+    const pitch = r.f32();
+    const roll = r.f32();
+    const health = r.u16();
+    const d = r.u16();
+    const burnUntil = r.f32();
+    vehicles.push({ id, flags, paint, x, y, z, vx, vy, vz, yaw, yawRate, steer, throttle, pitch, roll, health, driver: d === 0xffff ? -1 : d, burnUntil });
+  }
   const extra = JSON.parse(dec.decode(r.bytes())) as { me: PrivateState | null; nades: NetGrenades };
-  return { tick, time, ackCmd, actors, me: extra.me, nades: extra.nades };
+  return { tick, time, ackCmd, actors, vehicles, me: extra.me, nades: extra.nades };
 }

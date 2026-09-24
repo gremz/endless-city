@@ -52,9 +52,12 @@ export type SimEvent =
     }
   | { type: 'flashed'; actorId: number; strength: number; duration: number }
   | { type: 'fire_out'; pos: Vec3 }
-  | { type: 'flashlight'; actorId: number; on: boolean };
+  | { type: 'flashlight'; actorId: number; on: boolean }
+  | { type: 'car_door'; actorId: number; vehicleId: number; pos: Vec3; enter: boolean }
+  | { type: 'car_crash'; /** Driver, or -1. */ actorId: number; vehicleId: number; pos: Vec3; speed: number }
+  | { type: 'car_destroyed'; vehicleId: number; pos: Vec3 };
 
-export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife' | 'grenade';
+export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife' | 'grenade' | 'vehicle';
 
 /** Simple append-only queue drained once per frame by presentation. */
 export class EventQueue {

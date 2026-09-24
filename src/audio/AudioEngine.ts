@@ -1,5 +1,6 @@
 import type { Vec3 } from '../core/math';
 import { Ambience } from './Ambience';
+import { EngineSounds, type EngineSource } from './Engines';
 import { Music } from './Music';
 import { makeImpulse, renderAll } from './synth';
 
@@ -41,6 +42,8 @@ export class AudioEngine {
   private volume = 0.7;
   private music: Music | null = null;
   private ambience: Ambience | null = null;
+  private engines: EngineSounds | null = null;
+  private paused = false;
   private musicVolume = 0.35;
 
   /** Create/resume the context (call from a click handler). */
@@ -78,6 +81,7 @@ export class AudioEngine {
       this.music = new Music(ctx, this.master, this.reverbIn);
       // Ambience sits on the effects bus: it follows the effects volume and flashbang deafness.
       this.ambience = new Ambience(ctx, this.sfx);
+      this.engines = new EngineSounds(ctx, this.sfx);
       this.music.setVolume(this.musicVolume);
       renderAll(ctx.sampleRate)
         .then((bank) => {
@@ -125,6 +129,7 @@ export class AudioEngine {
   }
 
   setMusicPaused(p: boolean): void {
+    this.paused = p;
     this.music?.setPaused(p);
     this.ambience?.setPaused(p);
   }
@@ -133,6 +138,11 @@ export class AudioEngine {
   setAmbience(rain: number, night: number, indoor: boolean): void {
     this.ambience?.set(rain, night, indoor);
     this.ambience?.update();
+  }
+
+  /** Running car engines near the listener, nearest first. Call every frame. */
+  setEngines(sources: readonly EngineSource[]): void {
+    if (this.ctx?.state === 'running') this.engines?.update(sources, this.paused);
   }
 
   /** Schedule upcoming music; call every frame. */
@@ -228,6 +238,8 @@ export class AudioEngine {
     this.music = null;
     this.ambience?.dispose();
     this.ambience = null;
+    this.engines?.dispose();
+    this.engines = null;
     void this.ctx?.close();
     this.ctx = null;
   }

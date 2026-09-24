@@ -17,7 +17,11 @@ const ZERO: Vec3 = { x: 0, y: 0, z: 0 };
 export class CollisionWorld {
   private cells = new Map<number, Brush[]>();
   private chunks = new Map<number, { brushes: Brush[]; cellKeys: number[] }>();
+  /** Moving brushes (vehicles) by owner id, with the cells they are bucketed in. */
+  private dynamic = new Map<number, { brushes: Brush[]; cellKeys: number[] }>();
   private stamp = 1;
+  /** Brushes of this owner (a vehicle id) are invisible to traces; 0 = none. */
+  ignoreOwner = 0;
   /** Number of brush tests performed (debug stat). */
   brushTests = 0;
 
@@ -66,11 +70,57 @@ export class CollisionWorld {
     for (const k of c.cellKeys) {
       const list = this.cells.get(k);
       if (!list) continue;
-      const kept = list.filter((b) => b.chunkKey !== key);
+      const kept = list.filter((b) => b.owner !== 0 || b.chunkKey !== key);
       if (kept.length) this.cells.set(k, kept);
       else this.cells.delete(k);
     }
     this.chunks.delete(key);
+  }
+
+  /**
+   * Put (or move) an owner's moving brushes. Brushes are bucketed by their current bounds, so
+   * call this again whenever they move.
+   */
+  setDynamic(owner: number, brushes: Brush[]): void {
+    this.clearDynamic(owner);
+    const keys: number[] = [];
+    for (const b of brushes) {
+      b.owner = owner;
+      b.chunkKey = -1;
+      const ix0 = Math.floor(b.minX / CELL);
+      const ix1 = Math.floor(b.maxX / CELL);
+      const iz0 = Math.floor(b.minZ / CELL);
+      const iz1 = Math.floor(b.maxZ / CELL);
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iz = iz0; iz <= iz1; iz++) {
+          const k = cellKey(ix, iz);
+          let list = this.cells.get(k);
+          if (!list) {
+            list = [];
+            this.cells.set(k, list);
+          }
+          list.push(b);
+          if (!keys.includes(k)) keys.push(k);
+        }
+      }
+    }
+    this.dynamic.set(owner, { brushes, cellKeys: keys });
+  }
+
+  clearDynamic(owner: number): void {
+    const d = this.dynamic.get(owner);
+    if (!d) return;
+    for (const k of d.cellKeys) {
+      const list = this.cells.get(k);
+      if (!list) continue;
+      for (let i = list.length - 1; i >= 0; i--) if (list[i].owner === owner) list.splice(i, 1);
+      if (!list.length) this.cells.delete(k);
+    }
+    this.dynamic.delete(owner);
+  }
+
+  hasDynamic(owner: number): boolean {
+    return this.dynamic.has(owner);
   }
 
   /** Visit every brush whose cell overlaps the XZ box (brushes may be visited once per call). */
@@ -152,6 +202,7 @@ export class CollisionWorld {
             if (b.stamp === stamp) continue;
             b.stamp = stamp;
             if ((b.contents & mask) === 0) continue;
+            if (b.owner !== 0 && b.owner === this.ignoreOwner) continue;
             // Cheap AABB rejection against the whole sweep's vertical span and this segment.
             if (b.maxY < loY || b.minY > hiY) continue;
             if (b.maxX < minX || b.minX > maxX || b.maxZ < minZ || b.minZ > maxZ) {

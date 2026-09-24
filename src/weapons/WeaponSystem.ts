@@ -8,6 +8,7 @@ import type { CollisionWorld } from '../physics/CollisionWorld';
 import { makeTrace, rayExitFraction } from '../physics/trace';
 import { eyeHeight } from '../player/pmove';
 import type { Actor } from '../sim/Actor';
+import { rangeDamage } from '../sim/damage';
 import { decayFireInacc, inaccuracy, sampleSpread } from './inaccuracy';
 import { activeItem, cycleSlot, nextGrenadeType, slotFromNumber, syncGrenade, type WeaponItem } from './Inventory';
 import { getPattern, patternAt } from './sprayPatterns';
@@ -49,6 +50,8 @@ export interface WeaponContext {
   canHit(attacker: Actor, victim: Actor): boolean;
   /** Launch a grenade from the actor's eye along the view angles. */
   throwGrenade(a: Actor, id: GrenadeId, strength: number, yaw: number, pitch: number): void;
+  /** A shot hit a car's body. */
+  onVehicleHit?(attacker: Actor, vehicleId: number, damage: number): void;
 }
 
 /** Seconds after a throw before the next grenade is drawn. */
@@ -382,6 +385,10 @@ function hitscan(a: Actor, def: WeaponDef, start: Vec3, d: Vec3, ctx: WeaponCont
       material: tr.brush.material,
       chunkKey: tr.brush.chunkKey,
     });
+    if (tr.brush.owner) {
+      ctx.onVehicleHit?.(a, tr.brush.owner, rangeDamage(def.damage, def.rangeMod, travelled + worldT) * scale);
+      return hit;
+    }
 
     // Penetration.
     const b = tr.brush;
@@ -474,5 +481,6 @@ function knifeAttack(a: Actor, def: WeaponDef, alt: boolean, cmd: UserCmd, ctx: 
       material: tr.brush.material,
       chunkKey: tr.brush.chunkKey,
     });
+    if (tr.brush.owner) ctx.onVehicleHit?.(a, tr.brush.owner, (alt ? (def.altDamage ?? 65) : def.damage) * 0.5);
   }
 }

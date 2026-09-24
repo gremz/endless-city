@@ -515,6 +515,31 @@ kbd {
   text-align: right;
 }
 
+.car-bar {
+  width: 150px;
+  height: 6px;
+  margin: 4px 0 8px auto;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.car-bar-fill {
+  height: 100%;
+  background: #cfe8ff;
+  transform-origin: right;
+}
+
+.car-bar-fill.low {
+  background: #ff7a4a;
+}
+
+.car-keys {
+  font-size: 12px;
+  color: #cfd6db;
+  white-space: pre;
+}
+
 .hud-weapon {
   font-size: 14px;
   color: #cfd6db;
@@ -725,7 +750,8 @@ kbd {
   white-space: nowrap;
 }
 
-.use-prompt kbd {
+.use-prompt kbd,
+.car-keys kbd {
   display: inline-block;
   min-width: 18px;
   padding: 0 4px;

@@ -35,6 +35,7 @@ function setup(spots: [number, number][] = []) {
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
     pickups: new Float32Array(spots.flatMap(([x, z]) => [x, 0.02, z])),
+    vehicles: new Float32Array(0),
     hasEncounter: false,
     genMs: 0,
   } satisfies ChunkData;

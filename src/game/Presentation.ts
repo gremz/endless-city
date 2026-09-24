@@ -20,6 +20,8 @@ import { getPattern, patternAt } from '../weapons/sprayPatterns';
 import { currentInaccuracy } from '../weapons/WeaponSystem';
 import { GRENADE_IDS, WEAPONS, type WeaponId } from '../weapons/weaponDefs';
 import type { SimEvent } from '../core/events';
+import { carSpeed } from '../sim/vehicle/carPhysics';
+import { SMOKE_HEALTH, VEHICLE_HEALTH } from '../sim/vehicle/Vehicle';
 
 const NADE_LABELS: Record<string, string> = { hegrenade: 'HE', flashbang: 'FL', smokegrenade: 'SM', molotov: 'MO' };
 
@@ -109,7 +111,8 @@ export class Presentation {
           break;
         }
         case 'impact':
-          this.decals.add(e.pos, e.normal, e.chunkKey);
+          // No bullet holes on cars (they'd stay behind when the car drives off).
+          if (e.chunkKey >= 0) this.decals.add(e.pos, e.normal, e.chunkKey);
           this.particles.impact(e.pos, e.normal, e.material);
           break;
         case 'hit': {
@@ -216,7 +219,8 @@ export class Presentation {
       cam.updateProjectionMatrix();
     }
     this.input.sensScale = scoped ? (fov / this.baseFov) * this.settings.zoomSensitivityRatio : 1;
-    this.viewmodel.visible = !scoped;
+    const car = sim.vehicleOf(p);
+    this.viewmodel.visible = !scoped && !car;
     this.hud.setScope(scoped);
     this.viewmodel.update(frameDt, p, simTime, this.input.yaw, this.input.pitch);
 
@@ -232,7 +236,8 @@ export class Presentation {
     this.hud.setFlash(p.alive ? flashAmount(p, simTime) : 0);
     this.hud.setClock(sim.env.hour, sim.env.daylight, sim.env.weather);
     const inacc = currentInaccuracy(p) * 0.001;
-    this.hud.setSpread(inacc, cam.fov * DEG, window.innerHeight, !scoped && p.alive);
+    this.hud.setSpread(inacc, cam.fov * DEG, window.innerHeight, !scoped && p.alive && !car);
+    this.hud.setDriving(car ? { speed: carSpeed(car.car), health: car.health / VEHICLE_HEALTH, smoking: car.health < SMOKE_HEALTH } : null);
     this.hud.update(frameDt);
   }
 

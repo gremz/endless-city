@@ -12,7 +12,7 @@ sounds and music are all generated in code.
 ```bash
 npm install
 npm run dev        # http://localhost:5173 (also reachable from Windows when running in WSL)
-npm run test:run   # unit tests (movement, weapons, generation, nav, bots, co-op networking, boundaries)
+npm run test:run   # unit tests (movement, weapons, cars, generation, nav, bots, co-op networking, boundaries)
 npm run build      # type-check + production build to dist/
 ```
 
@@ -49,7 +49,8 @@ without opening the menu. Red-cross health packs lie around the city (and bots s
 carry it (up to 3), and press H to use it for +50 HP. Using one takes a second and lowers your
 gun; H again or firing cancels and keeps the pack. The radar in the top-left corner shows buy zones in green, with a
 `$` on its rim pointing to the nearest one when it's out of range. M opens the city map.
-L toggles your flashlight. Esc pauses. F3 toggles the debug overlay.
+L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)). Esc pauses. F3
+toggles the debug overlay.
 
 ## Grenades
 
@@ -72,6 +73,28 @@ Bots from difficulty level 3 up carry grenades. Level 5 and up adds flashbangs a
 adds molotovs. A bot throws a grenade when you break line of sight nearby, and uses a molotov
 if you hold one spot too long. Grenades go into your death stash with the rest of your gear,
 and dead bots drop theirs.
+
+## Cars
+
+Some of the parked cars still run. A driveable car is intact and clean, with shiny glass and
+working lights. Every other car in the city is an obvious wreck: it sits on flat tires, its
+windows are smashed black, its paint is faded and rusting, and its lights are dead. Walk up to
+a driveable car and the prompt shows **E Drive**, and the radar marks driveable cars with a
+small yellow car. The spawn plaza always has one waiting on the road behind you.
+
+- **Driving.** E gets in and out. W accelerates, S brakes and then reverses, A/D steer, and
+  Space is the handbrake (use it to slide the back end round). The camera follows behind the
+  car; move the mouse to look around, and it swings back behind you once you drive on. You can
+  only get out below about 20 km/h, and you get out on the driver's side if there's room.
+- **Combat.** Driving into a bot at speed knocks it down and can kill it, and the kill pays like
+  an SMG kill. Teammates only get pushed aside. Your guns are put away while you drive. Bots can
+  still see and shoot you through the windows, and the body blocks their shots.
+- **Damage.** Bullets, HE grenades and hard crashes damage a car. It starts smoking when it's
+  badly hurt. If it's destroyed it blows up, throws you out and burns for a while, and the burnt
+  shell can't be driven again.
+- **Where they stay.** A car you've driven stays where you leave it, even after you move away
+  and come back, and it's kept in your save. You can't save while you're in a car.
+- At night the car you drive has headlights.
 
 ## Day, night and weather
 
@@ -177,5 +200,12 @@ round-trip time, traffic and prediction corrections.
   - **Lag compensation.** The host checks a player's shots against where that player saw their
     targets, up to 250 ms back.
   - **Tests.** `src/net/net.test.ts` runs a host with several clients in one process. It covers
-    packet loss and reordering, prediction accuracy, lag compensation, buying, clears, chat and
-    saves.
+    packet loss and reordering, prediction accuracy, lag compensation, buying, clears, chat,
+    driving and saves.
+- **Cars** (`src/sim/vehicle`): driveable cars are generated as spawn points instead of brushes.
+  Their physics (`carPhysics.ts`) is an arcade bicycle model with lateral grip. It moves three
+  box hulls against the world with a slide move, and four wheel rays set the ride height and
+  tilt. It's deterministic, so a driver's client predicts their car like it predicts walking.
+  Each car puts four moving boxes into the collision world: the body blocks movement and
+  bullets, and the cabin above the beltline blocks only movement, so shots reach the driver
+  through the windows. On screen, a car uses the same brush-built model as the wrecks.

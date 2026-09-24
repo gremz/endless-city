@@ -116,7 +116,8 @@ export class BotRenderer {
     this.beamCount = 0;
     let n = 0;
     for (const a of actors) {
-      if (a.id === playerId) continue;
+      // Drivers are inside their cars.
+      if (a.id === playerId || a.vehicle >= 0) continue;
       if (!a.alive && time - a.diedAt > 12) continue;
       if (n >= MAX) break;
       this.writeActor(a, n, alpha, time, frameDt);

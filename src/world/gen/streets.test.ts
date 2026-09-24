@@ -3,8 +3,8 @@ import { sfc32 } from '../../core/rng';
 import { Contents } from '../../physics/brush';
 import { BrushWriter } from './BrushWriter';
 import { BRUSH_STRIDE, Material, wordContents, wordMaterial } from './ChunkData';
-import { bakeMeshes } from './meshBake';
-import { car } from './streets';
+import { bakeMeshes, CAR_PAINT_COUNT, CarGlassTint, CarTrim } from './meshBake';
+import { car, carBrushes, rollCarStyle } from './streets';
 
 const CAR_MATERIALS = [Material.CarPaint, Material.CarGlass, Material.CarWheel, Material.CarTrim];
 
@@ -64,5 +64,47 @@ describe('car', () => {
     const meshes = bakeMeshes(buildCar(3, false, 5, 5, 0));
     const mats = meshes.map((m) => m.material).sort((a, b) => a - b);
     expect(mats).toEqual([...CAR_MATERIALS].sort((a, b) => a - b));
+  });
+
+  it('makes wrecks look nothing like the driveable cars', () => {
+    const style = { paint: 2, hatch: false, flip: false } as const;
+    const build = (look: 'intact' | 'wreck') => {
+      const w = new BrushWriter();
+      carBrushes(w, { ...style, look }, true, 0, 0, 0);
+      return w.finish();
+    };
+    const summary = (b: Int32Array) => {
+      let roof = 0;
+      const glass = new Set<number>();
+      const paint = new Set<number>();
+      const trim = new Set<number>();
+      for (let o = 0; o < b.length; o += BRUSH_STRIDE) {
+        roof = Math.max(roof, b[o + 4]);
+        const m = wordMaterial(b[o + 6]);
+        if (m === Material.CarGlass) glass.add(b[o + 7]);
+        if (m === Material.CarPaint) paint.add(b[o + 7]);
+        if (m === Material.CarTrim) trim.add(b[o + 7]);
+      }
+      return { roof, glass, paint, trim };
+    };
+    const intact = summary(build('intact'));
+    const wreck = summary(build('wreck'));
+    // Flat tires: the wreck sits lower.
+    expect(wreck.roof).toBeLessThan(intact.roof - 10);
+    expect([...intact.glass]).toEqual([CarGlassTint.Intact]);
+    expect([...wreck.glass]).toEqual([CarGlassTint.Broken]);
+    expect([...intact.paint]).toEqual([2]);
+    for (const t of wreck.paint) expect(t).toBeGreaterThanOrEqual(CAR_PAINT_COUNT);
+    // Lit lamps only on the intact car.
+    expect(intact.trim.has(CarTrim.Headlight)).toBe(true);
+    expect(wreck.trim.has(CarTrim.Headlight)).toBe(false);
+    expect(wreck.trim.has(CarTrim.Taillight)).toBe(false);
+  });
+
+  it('rolls driveable cars from the intact paint colors', () => {
+    const r = sfc32(5);
+    const style = rollCarStyle(r, 'intact');
+    expect(style.paint).toBeLessThan(CAR_PAINT_COUNT);
+    expect(style.look).toBe('intact');
   });
 });

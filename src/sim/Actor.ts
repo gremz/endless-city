@@ -49,6 +49,8 @@ export interface Actor {
   money: number;
   /** Bot in a firefight (shows on radars, blocks buying nearby). */
   engaging: boolean;
+  /** Id of the car this actor is driving, or -1. */
+  vehicle: number;
 }
 
 export function makeActor(id: number, name: string, team: TeamId, x: number, y: number, z: number): Actor {
@@ -84,6 +86,7 @@ export function makeActor(id: number, name: string, team: TeamId, x: number, y: 
     flashlight: false,
     money: 0,
     engaging: false,
+    vehicle: -1,
   };
 }
 

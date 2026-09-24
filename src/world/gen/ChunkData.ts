@@ -81,9 +81,17 @@ export interface ChunkData {
   patrol: Float32Array;
   /** Health pack spots: x, y, z triples in world meters. */
   pickups: Float32Array;
+  /** Driveable cars, VEHICLE_STRIDE floats each. */
+  vehicles: Float32Array;
   hasEncounter: boolean;
   genMs: number;
 }
+
+/**
+ * Driveable car spawn record in ChunkData.vehicles: world x, y (ground), z of the footprint
+ * center, heading yaw, paint index, hatchback (0/1).
+ */
+export const VEHICLE_STRIDE = 6;
 
 export function transferList(d: ChunkData): ArrayBuffer[] {
   const out: ArrayBuffer[] = [
@@ -95,6 +103,7 @@ export function transferList(d: ChunkData): ArrayBuffer[] {
     d.perches.buffer as ArrayBuffer,
     d.patrol.buffer as ArrayBuffer,
     d.pickups.buffer as ArrayBuffer,
+    d.vehicles.buffer as ArrayBuffer,
   ];
   for (const m of d.meshes) {
     out.push(

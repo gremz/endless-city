@@ -127,6 +127,13 @@ export class SoundEvents {
       case 'fire_out':
         a.play('fire_out', { pos: e.pos, volume: 0.8, reverb: 0.2 }, L);
         break;
+      case 'car_door':
+        a.play('car_door', { pos: e.pos, volume: e.actorId === me ? 0.7 : 0.9, reverb: 0.1 }, L);
+        break;
+      case 'car_crash':
+        if (Math.hypot(e.pos.x - L.x, e.pos.z - L.z) > 60) return;
+        a.play('car_crash', { pos: e.pos, volume: Math.min(1.6, 0.25 + e.speed * 0.06), reverb: 0.3 }, L);
+        break;
       case 'chunkCleared':
         a.play('cleared', { volume: 0.5, reverb: 0.2 });
         break;

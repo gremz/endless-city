@@ -1,8 +1,21 @@
 import * as THREE from 'three';
 import { CHUNK } from '../core/config';
-import type { ChunkData } from '../world/gen/ChunkData';
+import type { ChunkData, MeshData } from '../world/gen/ChunkData';
 import type { StreamerListener } from '../world/WorldStreamer';
 import type { MaterialLibrary } from './materials';
+
+/** GPU geometry for a baked brush mesh. */
+export function meshGeometry(m: MeshData): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3, true));
+  geo.setAttribute('uv', new THREE.BufferAttribute(m.uvs, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(m.colors, 3, true));
+  geo.setIndex(new THREE.BufferAttribute(m.indices, 1));
+  geo.computeBoundingSphere();
+  geo.computeBoundingBox();
+  return geo;
+}
 
 /** Turns streamed ChunkData into meshes (one per material), positioned at the chunk origin. */
 export class ChunkRenderer implements StreamerListener {
@@ -32,15 +45,7 @@ export class ChunkRenderer implements StreamerListener {
     group.position.set(data.cx * CHUNK, 0, data.cz * CHUNK);
     group.visible = visible;
     for (const m of data.meshes) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
-      geo.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3, true));
-      geo.setAttribute('uv', new THREE.BufferAttribute(m.uvs, 2));
-      geo.setAttribute('color', new THREE.BufferAttribute(m.colors, 3, true));
-      geo.setIndex(new THREE.BufferAttribute(m.indices, 1));
-      geo.computeBoundingSphere();
-      geo.computeBoundingBox();
-      const mesh = new THREE.Mesh(geo, this.materials.get(m.material));
+      const mesh = new THREE.Mesh(meshGeometry(m), this.materials.get(m.material));
       mesh.castShadow = this.shadows;
       mesh.receiveShadow = this.shadows;
       mesh.matrixAutoUpdate = false;

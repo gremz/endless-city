@@ -4,6 +4,7 @@ import { Contents, Ramp, SOLID } from '../../physics/brush';
 import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
 import { District, Material, type ChunkData } from './ChunkData';
+import { vehicleSpawns } from './generateChunk';
 import { bakeMeshes } from './meshBake';
 
 const FLOOR = SOLID | Contents.FLOOR;
@@ -54,6 +55,8 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     patrol: new Float32Array(0),
     // Two health packs beside the course start, for trying medkits out.
     pickups: cx === 0 && cz === 0 ? new Float32Array([26, 0.02, 26, 38, 0.02, 26]) : new Float32Array(0),
+    // A car to try driving in, beside the course start.
+    vehicles: cx === 0 && cz === 0 ? vehicleSpawns([{ style: { paint: 5, hatch: false, flip: false, look: 'intact' }, alongX: false, lane: 46, at: 12, y: 0 }], cx, cz) : new Float32Array(0),
     hasEncounter: false,
     genMs: performance.now() - t0,
   };

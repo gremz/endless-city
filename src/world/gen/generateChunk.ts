@@ -1,18 +1,19 @@
+import { CHUNK } from '../../core/config';
 import { worldNoise } from '../../core/noise';
 import { hash3, Salt, sfc32 } from '../../core/rng';
 import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
 import { buildBuilding, buildCourtyard } from './buildings';
-import { District, type ChunkData } from './ChunkData';
+import { District, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
 import { districtFor, levelFor } from './district';
 import { placeEncounters } from './encounters';
-import { Occupancy, rect, rd, rw, type GenContext, type Rect } from './genContext';
+import { Occupancy, rect, rd, rw, type GenContext, type Rect, type VehicleSpot } from './genContext';
 import { splitLot, typeParcels } from './lots';
 import { bakeMeshes } from './meshBake';
 import { bakeNav } from './navBake';
 import { placePickups } from './pickups';
 import { lowWalls, scatterProps } from './props';
-import { buildLot, buildStreets, CURB, LOT0, LOT1 } from './streets';
+import { buildLot, buildStreets, carBrushes, carYaw, CAR_L, CAR_W, CURB, LOT0, LOT1 } from './streets';
 
 /** Lot floor height from district and terrace noise. */
 function lotHeight(seed: number, cx: number, cz: number, district: number): number {
@@ -52,6 +53,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     open: [],
     interiors: [],
     perches: [],
+    vehicles: [],
   };
 
   buildStreets(ctx);
@@ -100,7 +102,10 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
 
   const brushes = ctx.w.finish();
   const meshes = bakeMeshes(brushes);
-  const nav = bakeNav(brushes);
+  // Bots path around the parked driveable cars as if they were part of the city.
+  const navWriter = new BrushWriter(64);
+  for (const v of ctx.vehicles) carBrushes(navWriter, v.style, v.alongX, v.lane, v.at, v.y);
+  const nav = bakeNav(ctx.vehicles.length ? concatBrushes(brushes, navWriter.finish()) : brushes);
   const enc = placeEncounters(sfc32(hash3(seed, cx, cz, Salt.Encounter)), nav, cx, cz, level, ctx.perches);
   const pickups = placePickups(sfc32(hash3(seed, cx, cz, Salt.Pickups)), nav, cx, cz, enc.hasEncounter, district.id === District.Spawn);
 
@@ -120,6 +125,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     perches: enc.perches,
     patrol: enc.patrol,
     pickups,
+    vehicles: vehicleSpawns(ctx.vehicles, cx, cz),
     hasEncounter: enc.hasEncounter,
     genMs: performance.now() - t0,
   };
@@ -140,4 +146,25 @@ function buildSpawnPlaza(ctx: GenContext, lot: Rect): void {
   ctx.open.push(lot);
   lowWalls(ctx, lot, 3);
   scatterProps(ctx, lot, 0.35, ['crates', 'barriers']);
+}
+
+function concatBrushes(a: Int32Array, b: Int32Array): Int32Array {
+  const out = new Int32Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+}
+
+/** Driveable car spots as ChunkData.vehicles records (world coordinates). */
+export function vehicleSpawns(spots: readonly VehicleSpot[], cx: number, cz: number): Float32Array {
+  const out = new Float32Array(spots.length * VEHICLE_STRIDE);
+  spots.forEach((v, i) => {
+    // Footprint center: `at` runs along the length, `lane` is the near side.
+    const along = v.at + CAR_L / 2;
+    const across = v.lane + CAR_W / 2;
+    const x = v.alongX ? along : across;
+    const z = v.alongX ? across : along;
+    out.set([cx * CHUNK + x, v.y, cz * CHUNK + z, carYaw(v.alongX, v.style.flip), v.style.paint, v.style.hatch ? 1 : 0], i * VEHICLE_STRIDE);
+  });
+  return out;
 }

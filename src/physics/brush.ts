@@ -42,6 +42,8 @@ export interface Brush {
   /** Trace dedupe stamp, owned by CollisionWorld. */
   stamp: number;
   chunkKey: number;
+  /** 0 for the static city; a vehicle id for the moving boxes of that car. */
+  owner: number;
 }
 
 export function makeBrush(
@@ -126,7 +128,25 @@ export function makeBrush(
     ramp,
     stamp: 0,
     chunkKey,
+    owner: 0,
   };
+}
+
+/** Move and resize a box brush (no ramp) in place. */
+export function setBox(b: Brush, minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): void {
+  const p = b.planes;
+  p[3] = maxX;
+  p[7] = -minX;
+  p[11] = maxY;
+  p[15] = -minY;
+  p[19] = maxZ;
+  p[23] = -minZ;
+  b.minX = minX;
+  b.minY = minY;
+  b.minZ = minZ;
+  b.maxX = maxX;
+  b.maxY = maxY;
+  b.maxZ = maxZ;
 }
 
 /** Height of the brush's top surface at (x, z) (slope-aware). */

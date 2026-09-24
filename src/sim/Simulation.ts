@@ -20,6 +20,7 @@ import { Economy, START_MONEY } from './Economy';
 import { envAt, type Env, type EnvOverride } from './Environment';
 import { GrenadeSystem } from './Grenades';
 import { updateHeal } from './medkit';
+import { damageVehicle, driveVehicle, exitVehicle, storeVehiclePrev, useVehicle, type Vehicle } from './vehicle/Vehicle';
 
 export interface SimOptions {
   autoBhop: boolean;
@@ -47,6 +48,8 @@ export class Simulation implements WeaponContext {
   readonly actors: Actor[] = [];
   readonly systems: SimSystem[] = [];
   readonly grenades = new GrenadeSystem(this);
+  /** Driveable cars in the loaded world (Vehicles spawns them; online clients mirror them). */
+  readonly vehicles: Vehicle[] = [];
   /** Time of day and weather, recomputed every tick from the clock. */
   readonly env: Env;
   /** Fixed time of day / weather (URL parameters, settings). */
@@ -55,6 +58,8 @@ export class Simulation implements WeaponContext {
   time = 0;
   /** Each player's command for the current tick (systems read edge-triggered buttons like USE). */
   private cmds = new Map<number, UserCmd>();
+  /** Players whose E got them into or out of a car this tick (it doesn't also pick things up). */
+  private vehicleUsers = new Set<number>();
   private nextActorId = 1;
   private dummyGear = new Map<number, [number, boolean]>();
 
@@ -103,6 +108,7 @@ export class Simulation implements WeaponContext {
   }
 
   removePlayer(a: Actor): void {
+    this.leaveVehicle(a);
     const i = this.players.indexOf(a);
     if (i >= 0) this.players.splice(i, 1);
     this.removeActor(a);
@@ -136,6 +142,41 @@ export class Simulation implements WeaponContext {
     return this.actors.find((a) => a.id === id);
   }
 
+  getVehicle(id: number): Vehicle | undefined {
+    return this.vehicles.find((v) => v.id === id);
+  }
+
+  addVehicle(v: Vehicle): void {
+    this.vehicles.push(v);
+  }
+
+  /** Take a car out of the world (its driver, if any, is left standing where they sat). */
+  removeVehicle(v: Vehicle): void {
+    const i = this.vehicles.indexOf(v);
+    if (i >= 0) this.vehicles.splice(i, 1);
+    this.world.clearDynamic(v.id);
+    const d = v.driver >= 0 ? this.getActor(v.driver) : undefined;
+    if (d && d.vehicle === v.id) d.vehicle = -1;
+    v.driver = -1;
+  }
+
+  /** The car an actor is driving. */
+  vehicleOf(a: Actor): Vehicle | undefined {
+    return a.vehicle >= 0 ? this.getVehicle(a.vehicle) : undefined;
+  }
+
+  /** Put an actor out of their car (beside it) if they're in one. */
+  leaveVehicle(a: Actor): void {
+    const v = this.vehicleOf(a);
+    if (v) exitVehicle(this, a, v, true);
+    a.vehicle = -1;
+  }
+
+  /** The player's E this tick went to a car (so it shouldn't also swap a gun). */
+  usedVehicle(id: number): boolean {
+    return this.vehicleUsers.has(id);
+  }
+
   /** Height a standing hull comes to rest at when dropped at (x, z) from fromY. */
   findFloor(x: number, z: number, fromY: number): number {
     const tr = makeTrace();
@@ -162,6 +203,7 @@ export class Simulation implements WeaponContext {
    */
   step(cmds: UserCmd | ReadonlyMap<number, UserCmd>): void {
     this.cmds.clear();
+    this.vehicleUsers.clear();
     if (isCmd(cmds)) {
       if (this.player) this.cmds.set(this.player.id, cmds);
     } else {
@@ -172,6 +214,7 @@ export class Simulation implements WeaponContext {
     this.events.beginTick();
     this.updateEnv();
     for (const a of this.actors) storePrev(a);
+    for (const v of this.vehicles) storeVehiclePrev(v);
 
     for (const p of this.players) {
       const cmd = this.cmds.get(p.id);
@@ -207,6 +250,18 @@ export class Simulation implements WeaponContext {
   runCmd(p: Actor, cmd: UserCmd, heal = true): void {
     p.yaw = cmd.yaw;
     p.pitch = cmd.pitch;
+    if (cmd.pressed & Buttons.USE) {
+      const was = p.vehicle;
+      useVehicle(this, p);
+      if (p.vehicle !== was) this.vehicleUsers.add(p.id);
+    }
+    const car = this.vehicleOf(p);
+    if (car) {
+      // Driving: the car moves, the driver rides along with their guns put away.
+      driveVehicle(this, p, car, cmd);
+      return;
+    }
+    p.vehicle = -1;
     const wasGround = p.move.onGround;
     playerMove(p.move, cmd, this.world, this.dt, { autoBhop: this.opts.autoBhop || this.autoBhopIds.has(p.id) });
     if (p.move.jumped) this.events.push({ type: 'jump', actorId: p.id });
@@ -247,10 +302,10 @@ export class Simulation implements WeaponContext {
     const minD = 0.75;
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
-      if (!a.alive || a.move.noclip) continue;
+      if (!a.alive || a.move.noclip || a.vehicle >= 0) continue;
       for (let j = i + 1; j < list.length; j++) {
         const b = list[j];
-        if (!b.alive || b.move.noclip) continue;
+        if (!b.alive || b.move.noclip || b.vehicle >= 0) continue;
         const dx = b.move.pos.x - a.move.pos.x;
         const dz = b.move.pos.z - a.move.pos.z;
         const dy = Math.abs(b.move.pos.y - a.move.pos.y);
@@ -286,6 +341,11 @@ export class Simulation implements WeaponContext {
     this.grenades.throw(a, id, strength, yaw, pitch);
   }
 
+  onVehicleHit(attacker: Actor, vehicleId: number, damage: number): void {
+    const v = this.getVehicle(vehicleId);
+    if (v) damageVehicle(this, v, damage, attacker.id);
+  }
+
   onHit(info: HitInfo): void {
     if (this.predicting) return;
     const { attacker, victim, def } = info;
@@ -303,7 +363,11 @@ export class Simulation implements WeaponContext {
     victim.lastAttacker = attacker.id;
     victim.lastDamagedAt = this.time;
     attacker.lastDealtAt = this.time;
-    if (killed) victim.diedAt = this.time;
+    if (killed) {
+      victim.diedAt = this.time;
+      // The body falls out of the car.
+      this.leaveVehicle(victim);
+    }
     this.events.push({
       type: 'hit',
       attackerId: attacker.id,
@@ -329,6 +393,7 @@ export class Simulation implements WeaponContext {
 
   /** Bring a player back: full health, default loadout (bought gear is lost), money kept. */
   respawnPlayer(p: Actor, x: number, z: number): void {
+    this.leaveVehicle(p);
     p.alive = true;
     p.health = 100;
     p.diedAt = -1;

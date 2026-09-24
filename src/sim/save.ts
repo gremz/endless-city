@@ -7,6 +7,8 @@ import { MAX_MONEY } from './Economy';
 import { MEDKIT_MAX } from './medkit';
 import type { PickupItem, PickupManager, PickupSave, SavedPickup } from './Pickups';
 import type { Simulation } from './Simulation';
+import { VEHICLE_HEALTH } from './vehicle/Vehicle';
+import type { SavedVehicle, VehicleSave, Vehicles } from './vehicle/Vehicles';
 
 export const SAVE_VERSION = 1;
 
@@ -51,6 +53,8 @@ export interface SaveData {
   player: SavedPlayer;
   encounters: SavedEncounter[];
   pickups: PickupSave;
+  /** Cars that were driven or wrecked (absent in older saves). */
+  vehicles?: VehicleSave;
   /** Chunk keys seen on the city map. */
   explored: number[];
 }
@@ -63,6 +67,7 @@ export function captureSave(
   p: Actor,
   pickups: PickupManager,
   encounters: EncounterManager | null,
+  vehicles: Vehicles | null,
   explored: readonly number[],
   now = Date.now(),
 ): SaveData {
@@ -96,6 +101,7 @@ export function captureSave(
     },
     encounters: encounters?.serialize() ?? [],
     pickups: pickups.serialize(),
+    vehicles: vehicles?.serialize() ?? { taken: [], cars: [] },
     explored: [...explored],
   };
 }
@@ -104,13 +110,21 @@ export function captureSave(
  * Restore the world state (clock, progress, items). Call before any chunk streams in. The saved
  * death stash goes to the actor with id `owner` (the player the save is loaded for).
  */
-export function applyWorldSave(save: SaveData, sim: Simulation, pickups: PickupManager, encounters: EncounterManager | null, owner: number): void {
+export function applyWorldSave(
+  save: SaveData,
+  sim: Simulation,
+  pickups: PickupManager,
+  encounters: EncounterManager | null,
+  vehicles: Vehicles | null,
+  owner: number,
+): void {
   sim.time = save.time;
   sim.tick = save.tick;
   sim.cleared.clear();
   for (const k of save.cleared) sim.cleared.add(k);
   encounters?.restore(save.encounters);
   pickups.restore(save.pickups, owner);
+  if (save.vehicles) vehicles?.restore(save.vehicles);
 }
 
 /**
@@ -203,6 +217,27 @@ function pickupItem(v: unknown): PickupItem {
   throw new Invalid('pickup item');
 }
 
+function vehicleSave(v: unknown): VehicleSave {
+  if (v === undefined) return { taken: [], cars: [] };
+  if (!isObj(v) || !Array.isArray(v.taken) || !Array.isArray(v.cars)) throw new Invalid('vehicles');
+  const taken = v.taken.map((t) => {
+    if (typeof t !== 'string' || !/^\d+:\d+$/.test(t)) throw new Invalid('vehicle slot');
+    return t;
+  });
+  const cars: SavedVehicle[] = v.cars.map((c) => {
+    if (!isObj(c) || !Array.isArray(c.pos) || c.pos.length !== 3) throw new Invalid('car');
+    return {
+      pos: c.pos.map((x) => need(num(x), 'car pos')) as [number, number, number],
+      yaw: need(num(c.yaw), 'car yaw'),
+      paint: clamp(need(int(c.paint), 'paint'), 0, 255),
+      hatch: c.hatch === true,
+      health: clamp(need(num(c.health), 'car health'), 0, VEHICLE_HEALTH),
+      destroyed: c.destroyed === true,
+    };
+  });
+  return { taken, cars };
+}
+
 function intList(v: unknown, what: string): number[] {
   if (!Array.isArray(v)) throw new Invalid(what);
   return v.map((k) => need(int(k), what));
@@ -278,6 +313,7 @@ export function validateSave(raw: unknown): SaveData | null {
       player,
       encounters,
       pickups: { taken, drops },
+      vehicles: vehicleSave(raw.vehicles),
       explored: intList(raw.explored ?? [], 'explored'),
     };
   } catch (e) {

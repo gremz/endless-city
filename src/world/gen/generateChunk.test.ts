@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK } from '../../core/config';
 import { fnv1a } from '../../core/rng';
-import { BRUSH_STRIDE, NAV_CELL, NAV_RES, NavFlag, type ChunkData } from './ChunkData';
+import { vec3 } from '../../core/math';
+import { MASK_PLAYER } from '../../physics/brush';
+import { CollisionWorld } from '../../physics/CollisionWorld';
+import { makeTrace } from '../../physics/trace';
+import { brushesFromPacked } from '../chunkBrushes';
+import { worldToChunk } from '../chunkMath';
+import { BRUSH_STRIDE, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
+import { CAR_L, CAR_W } from './streets';
 import { generateChunk } from './generateChunk';
 
 function digest(d: ChunkData): number {
@@ -93,6 +100,37 @@ describe('generateChunk', () => {
       const d = generateChunk(seed, 0, 0);
       expect(d.pickups.length).toBe(3);
       expect(Math.hypot(d.pickups[0] - 32, d.pickups[2] - 22)).toBeLessThan(15);
+    }
+  });
+
+  it('parks driveable cars on clear road, one always by the spawn plaza', () => {
+    let cars = 0;
+    for (let cx = -5; cx <= 5; cx++) {
+      for (let cz = -5; cz <= 5; cz++) {
+        const d = generateChunk(99, cx, cz);
+        const world = new CollisionWorld();
+        world.addChunk(d.key, brushesFromPacked(d.brushes, cx, cz, d.key));
+        const tr = makeTrace();
+        for (let i = 0; i < d.vehicles.length; i += VEHICLE_STRIDE) {
+          cars++;
+          const [x, y, z, yaw] = [d.vehicles[i], d.vehicles[i + 1], d.vehicles[i + 2], d.vehicles[i + 3]];
+          expect(worldToChunk(x)).toBe(cx);
+          expect(worldToChunk(z)).toBe(cz);
+          // Parked along the road: heading is a multiple of 90°.
+          const alongX = Math.abs(Math.sin(yaw)) > 0.5;
+          const half = alongX ? vec3(CAR_L / 2, 0.7, CAR_W / 2) : vec3(CAR_W / 2, 0.7, CAR_L / 2);
+          const center = vec3(x, y + 0.75, z);
+          expect(world.testBox(tr, center, vec3(-half.x, -half.y, -half.z), half, MASK_PLAYER)).toBe(false);
+          // Standing on the asphalt.
+          world.traceRay(tr, vec3(x, y + 1, z), vec3(x, y - 1, z), MASK_PLAYER);
+          expect(tr.endY).toBeCloseTo(y, 1);
+        }
+      }
+    }
+    expect(cars).toBeGreaterThan(10);
+    for (const seed of [1, 1337, 2024]) {
+      const d = generateChunk(seed, 0, 0);
+      expect(d.vehicles.length).toBeGreaterThanOrEqual(VEHICLE_STRIDE);
     }
   });
 

@@ -1,6 +1,7 @@
 import { copyCmd, type UserCmd } from '../input/UserCmd';
 import { storePrev, type Actor } from '../sim/Actor';
 import type { Simulation } from '../sim/Simulation';
+import { storeVehiclePrev } from '../sim/vehicle/Vehicle';
 import type { SeqCmd } from './protocol';
 
 /** Unacknowledged commands kept for replay (2 s at 64 Hz). */
@@ -38,6 +39,8 @@ export class Prediction {
     sim.tick++;
     sim.time += sim.dt;
     storePrev(this.me);
+    const car = sim.vehicleOf(this.me);
+    if (car) storeVehiclePrev(car);
     this.run(cmd);
   }
 
@@ -69,6 +72,12 @@ export class Prediction {
       me.prevPos.x += dx;
       me.prevPos.y += dy;
       me.prevPos.z += dz;
+      const car = sim.vehicleOf(me);
+      if (car) {
+        car.prevPos.x += dx;
+        car.prevPos.y += dy;
+        car.prevPos.z += dz;
+      }
     }
   }
 

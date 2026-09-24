@@ -41,7 +41,7 @@ const METAL_PALETTE: readonly Rgb[] = [
 ];
 
 /** Car paint colors, weighted towards the whites, silvers and blacks of a real street. */
-export const CAR_PAINT_PALETTE: readonly Rgb[] = [
+const INTACT_PAINT: readonly Rgb[] = [
   [0.92, 0.92, 0.9],
   [0.7, 0.72, 0.74],
   [0.12, 0.12, 0.13],
@@ -54,6 +54,42 @@ export const CAR_PAINT_PALETTE: readonly Rgb[] = [
   [0.66, 0.6, 0.48],
   [0.2, 0.2, 0.22],
   [0.26, 0.4, 0.58],
+];
+
+/** Faded, sun-bleached and rusty paint of the abandoned wrecks. */
+const WRECK_PAINT: readonly Rgb[] = [
+  [0.58, 0.38, 0.24],
+  [0.52, 0.5, 0.44],
+  [0.5, 0.28, 0.16],
+  [0.42, 0.46, 0.4],
+  [0.62, 0.54, 0.4],
+  [0.44, 0.36, 0.32],
+];
+
+/** Number of intact paint colors (the tint of a driveable car's paint is below this). */
+export const CAR_PAINT_COUNT = INTACT_PAINT.length;
+/** First wreck paint tint, and how many there are. */
+export const WRECK_PAINT_BASE = INTACT_PAINT.length;
+export const WRECK_PAINT_COUNT = WRECK_PAINT.length;
+/** Paint tints of a burnt-out car, of rust patches and of a primer-grey replacement panel. */
+export const BURNT_PAINT = INTACT_PAINT.length + WRECK_PAINT.length;
+export const RUST_PAINT = BURNT_PAINT + 1;
+export const PRIMER_PAINT = BURNT_PAINT + 2;
+
+/** Every car paint by tint: intact colors, then wreck colors, then burnt. */
+export const CAR_PAINT_PALETTE: readonly Rgb[] = [
+  ...INTACT_PAINT,
+  ...WRECK_PAINT,
+  [0.09, 0.085, 0.08],
+  [0.44, 0.19, 0.07],
+  [0.6, 0.6, 0.58],
+];
+
+/** Car glass tints: intact, and the smashed black holes of a wreck. */
+export const CarGlassTint = { Intact: 0, Broken: 1 } as const;
+const CAR_GLASS_PALETTE: readonly Rgb[] = [
+  [1, 1, 1],
+  [0.22, 0.2, 0.19],
 ];
 
 /** Car trim colors by tint index. */
@@ -74,7 +110,7 @@ const PALETTES: Record<number, readonly Rgb[]> = {
   [Material.Metal]: METAL_PALETTE,
   [Material.CarPaint]: CAR_PAINT_PALETTE,
   [Material.CarTrim]: CAR_TRIM_PALETTE,
-  [Material.CarGlass]: NEUTRAL,
+  [Material.CarGlass]: CAR_GLASS_PALETTE,
   [Material.CarWheel]: NEUTRAL,
   [Material.LampGlow]: NEUTRAL,
 };

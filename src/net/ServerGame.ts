@@ -10,6 +10,7 @@ import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../
 import { PickupManager } from '../sim/Pickups';
 import { RESPAWN_DELAY, respawnPoint } from '../sim/respawn';
 import { Simulation } from '../sim/Simulation';
+import { Vehicles } from '../sim/vehicle/Vehicles';
 import { WEAPONS, type BuyItem } from '../weapons/weaponDefs';
 import type { ChunkSource } from '../world/WorldStreamer';
 import { WorldStreamer } from '../world/WorldStreamer';
@@ -22,6 +23,7 @@ import {
   netActor,
   netParams,
   netPickup,
+  netVehicle,
   privateState,
   PROTOCOL_VERSION,
   SNAPSHOT_EVERY,
@@ -49,6 +51,8 @@ const HISTORY = 64;
 /** Positional events further than this from a player aren't sent to them. */
 const EVENT_RANGE = 150;
 const MAX_NAME = 20;
+/** Cars further than this from a player aren't in their snapshots. */
+const VEHICLE_RANGE = 160;
 /** The first player to join (the host) always gets this actor id. */
 const HOST_ID = 1;
 
@@ -89,6 +93,7 @@ export class ServerGame {
   readonly streamer: WorldStreamer;
   readonly encounters: EncounterManager | null;
   readonly pickups: PickupManager;
+  readonly vehicles: Vehicles;
   private loop: FixedLoop;
   private conns: Conn[] = [];
   private cmds = new Map<number, UserCmd>();
@@ -118,10 +123,13 @@ export class ServerGame {
     this.pickups = new PickupManager(this.sim);
     this.streamer.addListener(this.pickups);
     this.sim.systems.push(this.pickups);
+    this.vehicles = new Vehicles(this.sim);
+    this.streamer.addListener(this.vehicles);
+    this.sim.systems.push(this.vehicles);
     this.sim.lagComp = (p, cmd, fire) => this.rewound(p, cmd, fire);
     this.hostSave = save;
     // The host joins first and gets the first actor id: their saved stash waits for them.
-    if (save) applyWorldSave(save, this.sim, this.pickups, this.encounters, HOST_ID);
+    if (save) applyWorldSave(save, this.sim, this.pickups, this.encounters, this.vehicles, HOST_ID);
   }
 
   /**
@@ -135,7 +143,8 @@ export class ServerGame {
     const t = this.sim.time;
     const fighting = t - host.lastDamagedAt < OUT_OF_COMBAT || t - host.lastDealtAt < OUT_OF_COMBAT || engagedNear(this.sim, host);
     if (manual && fighting) return 'You can’t save during a fight.';
-    return captureSave(this.sim, host, this.pickups, this.encounters, explored);
+    if (host.vehicle >= 0) return 'Get out of the car to save.';
+    return captureSave(this.sim, host, this.pickups, this.encounters, this.vehicles, explored);
   }
 
   get playerCount(): number {
@@ -467,7 +476,9 @@ export class ServerGame {
         c.transport.send(scoresJson, true);
       }
       const swap = this.pickups.swapCandidate(a.id)?.id ?? -1;
-      const snap = encodeSnapshot({ tick: sim.tick, time: sim.time, ackCmd: c.ranSeq, actors, me: privateState(a, swap), nades });
+      const pos = a.move.pos;
+      const vehicles = sim.vehicles.filter((v) => v.id === a.vehicle || Math.hypot(v.car.pos.x - pos.x, v.car.pos.z - pos.z) < VEHICLE_RANGE).map(netVehicle);
+      const snap = encodeSnapshot({ tick: sim.tick, time: sim.time, ackCmd: c.ranSeq, actors, vehicles, me: privateState(a, swap), nades });
       c.transport.send(snap, false);
     }
   }

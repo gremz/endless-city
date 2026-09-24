@@ -15,6 +15,8 @@ type KeyHandler = (code: string, e: KeyboardEvent) => void;
 export class Input {
   yaw = 0;
   pitch = 0;
+  /** performance.now() of the last mouse look movement. */
+  lastLook = 0;
   sensitivity = 2;
   /** Multiplier applied to sensitivity (zoomed weapons). */
   sensScale = 1;
@@ -122,6 +124,7 @@ export class Input {
     const dx = clamp(e.movementX, -800, 800);
     const dy = clamp(e.movementY, -800, 800);
     const k = this.sensitivity * this.sensScale * M_YAW * DEG;
+    if (dx !== 0 || dy !== 0) this.lastLook = performance.now();
     this.yaw -= dx * k;
     this.pitch -= dy * k * (this.invertY ? -1 : 1);
     this.pitch = clamp(this.pitch, -MAX_PITCH, MAX_PITCH);

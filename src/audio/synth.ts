@@ -311,6 +311,29 @@ export const RECIPES: Record<string, Recipe> = {
     duration: 0.15,
     build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.02, gain: 0.35, type: 'bandpass', freq: 2800, q: 5, decay: 0.006 }),
   },
+  car_door: {
+    duration: 0.5,
+    variants: 2,
+    build: (ctx, out, s) => {
+      // Latch click, then the door's dull thunk.
+      noise(ctx, out, s, { dur: 0.015, gain: 0.35, type: 'bandpass', freq: 3200, q: 2, decay: 0.004 });
+      tone(ctx, out, { at: 0.01, f0: 150 + (s % 2) * 20, f1: 70, sweep: 0.06, gain: 0.8, decay: 0.05, dur: 0.3 });
+      noise(ctx, out, s + 3, { at: 0.01, dur: 0.12, gain: 0.4, type: 'lowpass', freq: 800, decay: 0.03 });
+    },
+  },
+  car_crash: {
+    duration: 1.4,
+    variants: 3,
+    build: (ctx, out, s) => {
+      tone(ctx, out, { f0: 120, f1: 40, sweep: 0.12, gain: 1.1, decay: 0.09, dur: 0.6 });
+      noise(ctx, out, s, { dur: 0.35, gain: 0.9, type: 'bandpass', freq: 1300, q: 0.7, decay: 0.08, freqEnd: 500 });
+      // Crumpling metal and bits of glass.
+      for (let i = 0; i < 5; i++) {
+        noise(ctx, out, s * 5 + i, { at: 0.03 + i * 0.05 + (s % 3) * 0.01, dur: 0.05, gain: 0.25, type: 'bandpass', freq: 2200 + i * 700, q: 4, decay: 0.02 });
+      }
+      noise(ctx, out, s + 20, { at: 0.08, dur: 0.6, gain: 0.15, type: 'highpass', freq: 4000, decay: 0.12 });
+    },
+  },
   fire_out: {
     duration: 1,
     build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.9, gain: 0.4, type: 'highpass', freq: 2000, attack: 0.02, decay: 0.3, freqEnd: 900 }),

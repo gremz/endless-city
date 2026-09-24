@@ -7,6 +7,8 @@ import { DEBUG_KEYS } from '../input/bindings';
 import { Input } from '../input/Input';
 import { makeCmd } from '../input/UserCmd';
 import { CameraController } from '../player/CameraController';
+import type { EngineSource } from '../audio/Engines';
+import type { Vehicle } from '../sim/vehicle/Vehicle';
 import { ChunkRenderer } from '../render/ChunkRenderer';
 import { MaterialLibrary } from '../render/materials';
 import { Renderer } from '../render/Renderer';
@@ -53,6 +55,11 @@ import { Mirror } from '../net/Mirror';
 import type { NetClient } from '../net/NetClient';
 import { Prediction } from '../net/Prediction';
 import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
+import { VehicleRenderer } from '../render/VehicleRenderer';
+import { carSpeed, forwardSpeed } from '../sim/vehicle/carPhysics';
+import { enterableVehicle } from '../sim/vehicle/Vehicle';
+import { Vehicles } from '../sim/vehicle/Vehicles';
+import { CHASE_PITCH_MAX, CHASE_PITCH_MIN } from '../player/CameraController';
 
 type State = 'menu' | 'playing' | 'paused' | 'map';
 
@@ -112,6 +119,11 @@ export class Game {
   private roofTo = new THREE.Vector3();
   readonly encounters: EncounterManager | null;
   readonly pickups: PickupManager;
+  /** Car lifecycle (null online: the host runs it). */
+  readonly vehicles: Vehicles | null = null;
+  private vehicleRenderer: VehicleRenderer;
+  /** Id of the car we were driving last frame (-1 on foot). */
+  private drivingId = -1;
   private death: { killer: number; text: string } | null = null;
   private buyMenu: BuyMenu;
   readonly audio = new AudioEngine();
@@ -163,6 +175,8 @@ export class Game {
     this.materials = new MaterialLibrary(this.renderer.anisotropy);
     this.chunkRenderer = new ChunkRenderer(this.materials, this.settings.shadows > 0);
     this.renderer.scene.add(this.chunkRenderer.root);
+    this.vehicleRenderer = new VehicleRenderer(this.materials, this.settings.shadows > 0);
+    this.renderer.scene.add(this.vehicleRenderer.root);
 
     const source: ChunkSource =
       params.world === 'city'
@@ -181,6 +195,9 @@ export class Game {
       if (this.encounters) this.sim.systems.push(this.encounters);
       this.streamer.addListener(this.pickups);
       this.sim.systems.push(this.pickups);
+      this.vehicles = new Vehicles(this.sim);
+      this.streamer.addListener(this.vehicles);
+      this.sim.systems.push(this.vehicles);
     }
 
     this.input = new Input(canvas);
@@ -304,7 +321,7 @@ export class Game {
     // Progress, items and the map come back before any chunk streams in.
     if (save) {
       // Online, the host's worker restored the world; only our map is ours.
-      if (!online) applyWorldSave(save, this.sim, this.pickups, this.encounters, this.me.id);
+      if (!online) applyWorldSave(save, this.sim, this.pickups, this.encounters, this.vehicles, this.me.id);
       this.worldMap.restoreExplored(save.explored);
     }
 
@@ -323,6 +340,7 @@ export class Game {
     this.renderer.setShadowMapSize(s.shadows);
     this.renderer.setRenderScale(s.renderScale);
     this.chunkRenderer.setShadows(s.shadows > 0);
+    this.vehicleRenderer?.setShadows(s.shadows > 0);
     this.sim.opts.autoBhop = s.autoBhop;
     this.audio.setVolume(s.masterVolume);
     this.audio.setMusicVolume(s.musicVolume);
@@ -423,7 +441,8 @@ export class Game {
     if (this.loading) return 'Still loading.';
     if (!this.me.alive) return 'You can’t save while dead.';
     if (manual && this.inCombat()) return 'You can’t save during a fight.';
-    const data = captureSave(this.sim, this.me, this.pickups, this.encounters, this.worldMap.exploredKeys());
+    if (this.me.vehicle >= 0) return 'Get out of the car to save.';
+    const data = captureSave(this.sim, this.me, this.pickups, this.encounters, this.vehicles, this.worldMap.exploredKeys());
     if (!writeSave(data)) return 'Could not write the save (storage blocked or full).';
     this.pendingAutosave = false;
     this.refreshSaveInfo();
@@ -444,7 +463,7 @@ export class Game {
   /** Autosave after an area is cleared, once the player is alive and out of combat. */
   private autosave(): void {
     if (this.online?.save) {
-      if (!this.pendingAutosave || !this.me.alive || this.inCombat()) return;
+      if (!this.pendingAutosave || !this.me.alive || this.inCombat() || this.me.vehicle >= 0) return;
       // The host saves the shared progress after a clear, once the fight is over.
       this.pendingAutosave = false;
       void this.online.save(this.worldMap.exploredKeys(), false).then((err) => {
@@ -453,7 +472,8 @@ export class Game {
       return;
     }
     if (this.online) return;
-    if (!this.pendingAutosave || this.state !== 'playing' || !this.me.alive || this.inCombat()) return;
+    // Waits until the player is out of the fight (and out of the car).
+    if (!this.pendingAutosave || this.state !== 'playing' || !this.me.alive || this.inCombat() || this.me.vehicle >= 0) return;
     if (this.saveGame(false) === null) this.hud.message('Game saved', 1.5);
     else this.pendingAutosave = false;
   }
@@ -647,9 +667,17 @@ export class Game {
 
     this.presentation.update(this.sim, alpha, frameMs / 1000);
     const cam = this.renderer.camera;
-    this.camCtl.update(cam, p, alpha, this.input.yaw, this.input.pitch);
+    const car = p.alive ? this.sim.vehicleOf(p) : undefined;
+    if (car) {
+      this.steerView(car, frameMs / 1000);
+      this.camCtl.chase(cam, car, alpha, this.input.yaw, this.input.pitch, this.sim.world);
+    } else {
+      this.drivingId = -1;
+      this.camCtl.update(cam, p, alpha, this.input.yaw, this.input.pitch);
+    }
     const env = this.sim.env;
-    this.atmosphere.update(env, frameMs / 1000, cam, p.alive && p.flashlight);
+    this.vehicleRenderer.update(this.sim.vehicles, alpha, this.sim.time, frameMs / 1000, car?.id ?? -1, env.darkness);
+    this.atmosphere.update(env, frameMs / 1000, cam, p.alive && p.flashlight && !car);
     this.presentation.setWorldLight(this.atmosphere.viewmodelLight, env.daylight);
     this.presentation.torches = this.botTorches(env.darkness);
     this.weather.update(env.rain, Math.min(frameMs / 1000, 0.1), cam.position);
@@ -663,6 +691,7 @@ export class Game {
     this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, this.fwd.x, this.fwd.y, this.fwd.z, this.up.x, this.up.y, this.up.z);
     this.sounds.tick(frameMs / 1000);
     this.sounds.fires(this.sim);
+    this.audio.setEngines(this.engineSources());
     this.audio.setDeafen(this.me.alive ? Math.min(1, flashAmount(this.me, this.sim.time) * 1.2) : 0);
     this.audio.setMusicIntensity(this.inCombat() ? 1 : 0);
     this.audio.updateMusic();
@@ -679,6 +708,35 @@ export class Game {
     this.debug.frame(frameMs);
     this.debug.setSpeed(Math.hypot(p.move.vel.x, p.move.vel.z) / HU, p.move.onGround);
     if (this.debug.due(now)) this.updateDebug();
+  }
+
+  /**
+   * Chase-camera housekeeping: face forward on getting in, keep the pitch in the chase range,
+   * and swing the view back behind the car while driving with the mouse left alone.
+   */
+  private steerView(car: Vehicle, dt: number): void {
+    const input = this.input;
+    if (this.drivingId !== car.id) {
+      this.drivingId = car.id;
+      input.yaw = car.car.yaw;
+      input.pitch = 0;
+    }
+    input.pitch = Math.max(CHASE_PITCH_MIN, Math.min(CHASE_PITCH_MAX, input.pitch));
+    if (performance.now() - input.lastLook > 1000) input.yaw = CameraController.recenter(input.yaw, car.car.yaw, forwardSpeed(car.car), dt);
+  }
+
+  /** Engines running near the camera, nearest first. */
+  private engineSources(): EngineSource[] {
+    const L = this.sounds.listener;
+    const out: (EngineSource & { d: number })[] = [];
+    for (const v of this.sim.vehicles) {
+      if (v.driver < 0 || v.destroyed) continue;
+      const c = v.car;
+      const d = Math.hypot(c.pos.x - L.x, c.pos.z - L.z);
+      if (d > 90) continue;
+      out.push({ id: v.id, x: c.pos.x, y: c.pos.y + 0.6, z: c.pos.z, speed: carSpeed(c), load: Math.abs(c.throttle), d });
+    }
+    return out.sort((a, b) => a.d - b.d);
   }
 
   /** While dead: after 3 s, fire or jump respawns at the nearest cleared area (or spawn). */
@@ -745,7 +803,9 @@ export class Game {
     this.hud.setBuyHint(zone.ok && !this.buyMenu.open && this.params.world === 'city');
     const swap = this.pickups.swapCandidate(p.id);
     let prompt: string | null = null;
-    if (swap?.item.kind === 'weapon' && p.alive) {
+    // E gets into a car before it swaps guns.
+    if (enterableVehicle(this.sim, p)) prompt = 'Drive';
+    else if (swap?.item.kind === 'weapon' && p.alive && p.vehicle < 0) {
       const def = WEAPONS[swap.item.weapon];
       const cur = p.inv[def.slot];
       prompt = cur ? `Swap ${cur.def.name} for ${def.name}` : `Pick up ${def.name}`;
@@ -782,6 +842,7 @@ export class Game {
       allies: this.allies().map((a) => ({ x: a.move.pos.x, z: a.move.pos.z, alive: a.alive })),
       pickups: this.pickups.items,
       stash: this.pickups.stashPos(this.me.id),
+      cars: this.sim.vehicles.filter((v) => !v.destroyed && v.driver < 0).map((v) => ({ x: v.car.pos.x, z: v.car.pos.z, yaw: v.car.yaw })),
     });
   }
 
@@ -808,6 +869,7 @@ export class Game {
       ['state', `${m.onGround ? 'ground' : 'air'}${m.ducked ? ' ducked' : ''}${m.noclip ? ' NOCLIP' : ''}  stuck ${m.stuckEvents}`],
       ['bots', `${this.encounters?.aliveCount ?? 0} alive  paths ${this.encounters?.pathQueries ?? 0}  snaps ${stuckSnaps}`],
       ['money', `$${p.money}  cleared ${this.sim.cleared.size}`],
+      ['cars', this.carDebug()],
       ...this.netDebug(),
       ['seed', this.params.seedText],
     ]);
@@ -904,6 +966,14 @@ export class Game {
     board.render(`CO-OP  ·  ${rows.length} PLAYER${rows.length === 1 ? '' : 'S'}${code}`, rows, this.me.id);
   }
 
+  private carDebug(): string {
+    const v = this.sim.vehicleOf(this.me);
+    const n = `${this.sim.vehicles.length} loaded`;
+    if (!v) return n;
+    const c = v.car;
+    return `${n}  driving #${v.id}  ${(carSpeed(c) * 3.6).toFixed(0)} km/h  hp ${Math.ceil(v.health)}  ${c.onGround ? 'ground' : 'air'}`;
+  }
+
   private netDebug(): [string, string][] {
     const net = this.online?.net;
     if (!net) return [];
@@ -925,6 +995,7 @@ export class Game {
     this.weather.dispose();
     this.audio.dispose();
     this.chunkRenderer.dispose();
+    this.vehicleRenderer.dispose();
     this.materials.dispose();
     this.renderer.dispose();
     this.ui.replaceChildren();

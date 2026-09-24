@@ -35,6 +35,7 @@ function chunk(): ChunkData {
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
     pickups: new Float32Array([5, 0.02, 5]),
+    vehicles: new Float32Array(0),
     hasEncounter: false,
     genMs: 0,
   };
@@ -91,7 +92,7 @@ function played(): { save: SaveData; time: number } {
     { key: chunkKey(1, 0), level: 1, cleared: true, remaining: 0, spawnedOnce: true },
     { key: chunkKey(2, 0), level: 2, cleared: false, remaining: 2, spawnedOnce: true },
   ]);
-  const save = JSON.parse(JSON.stringify(captureSave(sim, sim.player, pickups, encounters, [chunkKey(0, 0), chunkKey(1, 0)], 1234))) as unknown;
+  const save = JSON.parse(JSON.stringify(captureSave(sim, sim.player, pickups, encounters, null, [chunkKey(0, 0), chunkKey(1, 0)], 1234))) as unknown;
   const valid = validateSave(save);
   expect(valid).not.toBeNull();
   return { save: valid!, time: sim.time };
@@ -104,7 +105,7 @@ describe('save games', () => {
     expect(params).toMatchObject({ seed: save.seed, seedText: 'abc', world: 'city', debug: true });
 
     const { sim, pickups, encounters } = world(`?seed=${save.seedText}`);
-    applyWorldSave(save, sim, pickups, encounters, sim.player.id);
+    applyWorldSave(save, sim, pickups, encounters, null, sim.player.id);
     load(sim, pickups);
     applyPlayerSave(save.player, sim.player, save.money);
     const p = sim.player;

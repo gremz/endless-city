@@ -9,6 +9,7 @@ import { clipVelocity, eyeHeight } from '../player/pmove';
 import { WEAPONS, type GrenadeId } from '../weapons/weaponDefs';
 import type { Actor } from './Actor';
 import type { Simulation } from './Simulation';
+import { damageVehicle } from './vehicle/Vehicle';
 
 /** Grenades collide with anything solid to players or bullets. */
 const MASK_NADE = Contents.SOLID_PLAYER | Contents.SOLID_BULLET;
@@ -33,6 +34,8 @@ const SMOKE_FADE = 2;
 const SMOKE_REST_FUSE = 0.5;
 const SMOKE_MAX_FUSE = 5;
 export const FIRE_RADIUS = 3;
+/** HE damage to a car at the center of the blast. */
+const HE_CAR_DAMAGE = 280;
 export const FIRE_DURATION = 7;
 const FIRE_TICK = 0.25;
 
@@ -377,6 +380,20 @@ export class GrenadeSystem {
         pos: vec3(v.move.pos.x, v.move.pos.y + 1, v.move.pos.z),
       });
     }
+    // Cars in the blast (their boxes don't shield themselves).
+    const reach = HE_RADIUS + 1.5;
+    for (const car of sim.vehicles) {
+      const c = car.car.pos;
+      const d = Math.hypot(c.x - from.x, c.y + 0.6 - from.y, c.z - from.z);
+      if (d < reach) damageVehicle(sim, car, HE_CAR_DAMAGE * (1 - d / reach), p.owner.id);
+    }
+  }
+
+  /** A fire that isn't from a molotov (a burning car). */
+  ignite(pos: Vec3, owner: Actor, duration: number, radius = FIRE_RADIUS): void {
+    const t = this.sim.time;
+    this.fires.push({ id: this.nextId++, pos, radius, start: t, end: t + duration, owner, nextTick: t });
+    this.fireVersion++;
   }
 
   private flash(pos: Vec3): void {

@@ -18,7 +18,8 @@ import { WEAPONS } from '../weapons/weaponDefs';
 import { Mirror } from './Mirror';
 import { Prediction } from './Prediction';
 import { NetClient } from './NetClient';
-import { decodeCmds, decodeSnapshot, encodeCmds, encodeSnapshot, netActor } from './protocol';
+import { CarFlag, decodeCmds, decodeSnapshot, encodeCmds, encodeSnapshot, netActor, netVehicle } from './protocol';
+import { makeVehicle } from '../sim/vehicle/Vehicle';
 import { ServerGame } from './ServerGame';
 import { LoopbackTransport } from './Transport';
 
@@ -48,6 +49,8 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
     perches: new Float32Array(0),
     patrol: new Float32Array(0),
     pickups: new Float32Array(0),
+    // A car parked east of the spawn point, facing -Z.
+    vehicles: cx === 0 && cz === 0 ? new Float32Array([50, 0, 40, 0, 2, 0]) : new Float32Array(0),
     hasEncounter: encounter,
     genMs: 0,
   };
@@ -153,11 +156,29 @@ describe('wire format', () => {
     const sim = new Simulation(parseParams('', 1), { autoBhop: false }, TICK);
     sim.player.move.pos.x = 12.5;
     sim.player.health = 73;
+    const car = makeVehicle(3, 10.25, 0, -4, 1.25, 4, true);
+    car.driver = sim.player.id;
+    car.health = 321;
+    car.car.steer = -0.5;
+    const parked = makeVehicle(9, 0, 0, 0, 0, 0, false);
     const snap = decodeSnapshot(
-      encodeSnapshot({ tick: 100, time: 1.5, ackCmd: 7, actors: [netActor(sim.player)], me: null, nades: { p: [], s: [], f: [] } }),
+      encodeSnapshot({
+        tick: 100,
+        time: 1.5,
+        ackCmd: 7,
+        actors: [netActor(sim.player)],
+        vehicles: [netVehicle(car), netVehicle(parked)],
+        me: null,
+        nades: { p: [], s: [], f: [] },
+      }),
     );
     expect(snap).toMatchObject({ tick: 100, time: 1.5, ackCmd: 7, me: null });
     expect(snap.actors[0]).toMatchObject({ id: sim.player.id, x: 12.5, health: 73, slot: 'secondary' });
+    expect(snap.vehicles).toHaveLength(2);
+    expect(snap.vehicles[0]).toMatchObject({ id: 3, paint: 4, driver: sim.player.id, health: 321, x: 10.25, flags: CarFlag.OnGround | CarFlag.Hatch });
+    expect(snap.vehicles[0].yaw).toBeCloseTo(1.25, 5);
+    expect(snap.vehicles[0].steer).toBeCloseTo(-0.5, 5);
+    expect(snap.vehicles[1]).toMatchObject({ id: 9, driver: -1, flags: CarFlag.OnGround });
   });
 });
 
@@ -271,6 +292,66 @@ describe('co-op over the network', () => {
     one.net.sendChat('  hello there ');
     run(server, [one, two], 2);
     expect(two.chat).toEqual(['A: hello there']);
+  });
+});
+
+describe('driving online', () => {
+  it('drives a car: predicted exactly by its driver, seen by everyone else', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'Driver');
+    const two = joinClient(server, 'Watcher');
+    run(server, [one, two], 48);
+    const host = server.sim.getActor(one.net.actorId)!;
+    teleport(host, 48.4, 0.05, 40);
+    run(server, [one, two], 16);
+    expect(one.me.move.pos.x).toBeCloseTo(48.4, 1);
+    expect(one.sim.vehicles).toHaveLength(1);
+
+    one.cmd.pressed = Buttons.USE;
+    run(server, [one, two], 1);
+    run(server, [one, two], 16);
+    const car = server.sim.vehicles[0];
+    expect(car.driver).toBe(host.id);
+    expect(host.vehicle).toBe(car.id);
+    expect(one.me.vehicle).toBe(car.id);
+
+    one.prediction!.corrections = 0;
+    const errors: number[] = [];
+    let i = 0;
+    run(server, [one, two], 256, () => {
+      one.cmd.forward = i < 180 ? 1 : -1;
+      one.cmd.side = i > 60 && i < 110 ? 0.6 : 0;
+      one.cmd.buttons = i > 150 && i < 170 ? Buttons.JUMP : 0;
+      i++;
+      const mine = one.predicted.get(server['conns'][0].ranSeq);
+      if (mine) errors.push(Math.hypot(mine[0] - host.move.pos.x, mine[1] - host.move.pos.y, mine[2] - host.move.pos.z));
+    });
+    expect(car.car.pos.z).toBeLessThan(25);
+    expect(errors.length).toBeGreaterThan(200);
+    expect(Math.max(...errors)).toBeLessThan(1e-3);
+    expect(one.prediction!.corrections).toBe(0);
+
+    // The other player sees the car driving (a little behind) with its driver in it.
+    const seen = two.sim.getVehicle(car.id)!;
+    expect(seen.driver).toBe(host.id);
+    expect(two.sim.getActor(host.id)!.vehicle).toBe(car.id);
+    expect(Math.hypot(seen.car.pos.x - car.car.pos.x, seen.car.pos.z - car.car.pos.z)).toBeLessThan(3);
+    // It's solid on their side too.
+    expect(two.sim.world.hasDynamic(car.id)).toBe(true);
+
+    // Stop and get out.
+    one.cmd.forward = 0;
+    one.cmd.side = 0;
+    one.cmd.buttons = Buttons.JUMP;
+    run(server, [one, two], 192);
+    one.cmd.buttons = 0;
+    one.cmd.pressed = Buttons.USE;
+    run(server, [one, two], 1);
+    run(server, [one, two], 16);
+    expect(host.vehicle).toBe(-1);
+    expect(car.driver).toBe(-1);
+    expect(one.me.vehicle).toBe(-1);
+    expect(Math.hypot(one.me.move.pos.x - host.move.pos.x, one.me.move.pos.z - host.move.pos.z)).toBeLessThan(0.05);
   });
 });
 

@@ -1,6 +1,7 @@
 import type { Rand } from '../../core/rng';
 import type { BrushWriter } from './BrushWriter';
 import type { DistrictParams } from './district';
+import type { CarStyle } from './streets';
 
 export interface Rect {
   x0: number;
@@ -83,6 +84,16 @@ export interface GenContext {
   interiors: Rect[];
   /** Perch points for overwatch bots (x, y, z). */
   perches: number[];
+  /** Driveable cars (chunk-local layout, as passed to carBrushes). */
+  vehicles: VehicleSpot[];
+}
+
+export interface VehicleSpot {
+  style: CarStyle;
+  alongX: boolean;
+  lane: number;
+  at: number;
+  y: number;
 }
 
 /** Subtract a set of holes from a rectangle, returning non-overlapping rectangles (grid decomposition). */

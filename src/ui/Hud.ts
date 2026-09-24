@@ -49,6 +49,11 @@ export class Hud {
   private nadeKey = '';
   private clockEl: HTMLDivElement;
   private clockKey = '';
+  private ammoBox: HTMLDivElement;
+  private carBox: HTMLDivElement;
+  private carSpeed: HTMLSpanElement;
+  private carBar: HTMLDivElement;
+  private carKey = '';
   private lastGap = -1;
   private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1, kits: -1, heal: -1 };
   private clock = 0;
@@ -74,6 +79,16 @@ export class Hud {
     this.weaponName = el('div.hud-weapon', { text: 'Glock-18' });
     this.nades = el('div.hud-nades');
     const ammoBox = el('div.hud-ammo-box', {}, [this.nades, this.weaponName, el('div', {}, [this.ammo, this.reserve])]);
+    this.ammoBox = ammoBox;
+    this.carSpeed = el('span.hud-ammo', { text: '0' });
+    this.carBar = el('div.car-bar-fill');
+    this.carBox = el('div.hud-ammo-box.hud-car', {}, [
+      el('div.hud-weapon', { text: 'Car' }),
+      el('div', {}, [this.carSpeed, el('span.hud-reserve', { text: 'km/h' })]),
+      el('div.car-bar', {}, [this.carBar]),
+      el('div.car-keys', {}, [el('kbd', { text: 'E' }), ' Get out  ', el('kbd', { text: 'Space' }), ' Handbrake']),
+    ]);
+    this.carBox.hidden = true;
     this.flashOverlay = el('div.flash-overlay');
     this.clockEl = el('div.hud-clock');
     this.hitMarker = el('div.hitmarker', {}, [0, 1, 2, 3].map((i) => el(`div.hm.hm-${i}`)));
@@ -101,6 +116,7 @@ export class Hud {
       this.arcs,
       vitals,
       ammoBox,
+      this.carBox,
       this.feed,
       this.center,
       this.compass,
@@ -176,6 +192,26 @@ export class Hud {
       l.clip = clip;
       l.res = reserve;
     }
+  }
+
+  /** While driving the ammo box becomes the car's speed and health; null hides it again. */
+  setDriving(car: { speed: number; health: number; smoking: boolean } | null): void {
+    const key = car ? `${Math.round(car.speed * 3.6)}|${Math.round(car.health * 100)}|${car.smoking}` : '';
+    if (key === this.carKey) return;
+    const was = this.carKey !== '';
+    this.carKey = key;
+    if (!car) {
+      this.carBox.hidden = true;
+      this.ammoBox.hidden = false;
+      return;
+    }
+    if (!was) {
+      this.carBox.hidden = false;
+      this.ammoBox.hidden = true;
+    }
+    this.carSpeed.textContent = String(Math.round(car.speed * 3.6));
+    this.carBar.style.transform = `scaleX(${Math.max(0, Math.min(1, car.health))})`;
+    this.carBar.classList.toggle('low', car.smoking);
   }
 
   /** Grenade belt above the ammo box: one chip per carried grenade, the selected type lit. */
