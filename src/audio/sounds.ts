@@ -51,7 +51,7 @@ export class SoundEvents {
         break;
       }
       case 'step': {
-        const name = sim.env.rain > 0.3 ? 'step_wet' : 'step';
+        const name = sim.env.rain > 0.3 || e.material === Material.Water ? 'step_wet' : 'step';
         // Metal (ladder rungs, fire escape grates) rings higher.
         const rate = e.material === Material.Metal ? 1.9 : 1;
         if (e.actorId === me) a.play(name, { volume: 0.18, reverb: 0.05, rate });

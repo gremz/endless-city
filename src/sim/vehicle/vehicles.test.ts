@@ -16,7 +16,7 @@ import { applyWorldSave, captureSave } from '../save';
 import { PickupManager } from '../Pickups';
 import { Simulation } from '../Simulation';
 import { CAR, carSpeed, copyCarState, forwardSpeed, makeCarState, stepCar, type CarInput, type CarState } from './carPhysics';
-import { enterableVehicle, EXIT_MAX_SPEED, VEHICLE_HEALTH } from './Vehicle';
+import { damageVehicle, enterableVehicle, enterVehicle, EXIT_MAX_SPEED, VEHICLE_HEALTH } from './Vehicle';
 import { Vehicles } from './Vehicles';
 
 const drive = (throttle: number, steer = 0, handbrake = false): CarInput => ({ throttle, steer, handbrake });
@@ -202,6 +202,7 @@ function press(sim: Simulation, button: number, cmd: UserCmd = makeCmd()): void 
 
 const gas = (forward = 1, side = 0): UserCmd => ({ ...makeCmd(), forward, side });
 
+
 describe('driving', () => {
   it('spawns the chunk’s car and lets a player get in with E', () => {
     const { sim, car } = setup();
@@ -361,3 +362,90 @@ function wallAt(x: number): Int32Array {
   w.box(x - 0.3, 0, 10, x, 3, 30, Material.Concrete, SOLID);
   return w.finish();
 }
+
+describe('passengers', () => {
+  /** Another player standing by the car. */
+  function rider(sim: Simulation, name: string, x = 21.4): ReturnType<Simulation['addPlayer']> {
+    const a = sim.addPlayer(name);
+    teleport(a, x, 0.05, 20);
+    return a;
+  }
+
+  it('fills the driver seat, then three passenger seats, then is full', () => {
+    const { sim, car } = setup();
+    const riders = [sim.player, rider(sim, 'B'), rider(sim, 'C'), rider(sim, 'D')];
+    for (const a of riders) enterVehicle(sim, a, car);
+    expect(car.driver).toBe(riders[0].id);
+    expect(car.passengers).toEqual([riders[1].id, riders[2].id, riders[3].id]);
+    for (const a of riders) expect(a.vehicle).toBe(car.id);
+    expect(enterableVehicle(sim, rider(sim, 'E'))).toBe(null);
+  });
+
+  it('carries passengers along in their own seats and lets them out on their side', () => {
+    const { sim, car } = setup();
+    const b = rider(sim, 'B');
+    enterVehicle(sim, sim.player, car);
+    enterVehicle(sim, b, car);
+    step(sim, 1.5, gas(1));
+    expect(car.car.pos.z).toBeLessThan(15);
+    const d = sim.player.move.pos;
+    const p = b.move.pos;
+    expect(Math.hypot(p.x - car.car.pos.x, p.z - car.car.pos.z)).toBeLessThan(1);
+    expect(Math.hypot(p.x - d.x, p.z - d.z)).toBeGreaterThan(0.5);
+    step(sim, 3, gas(-1));
+    // The passenger's E gets them out; the driver stays.
+    sim.step(new Map([[b.id, { ...makeCmd(), buttons: Buttons.USE, pressed: Buttons.USE }]]));
+    expect(b.vehicle).toBe(-1);
+    expect(car.passengers[0]).toBe(-1);
+    expect(car.driver).toBe(sim.player.id);
+    const right = Math.cos(car.car.yaw) * (p.x - car.car.pos.x) - Math.sin(car.car.yaw) * (p.z - car.car.pos.z);
+    expect(right).toBeGreaterThan(1);
+  });
+
+  it('keeps passengers seated when the driver gets out', () => {
+    const { sim, car } = setup();
+    const b = rider(sim, 'B');
+    enterVehicle(sim, sim.player, car);
+    enterVehicle(sim, b, car);
+    press(sim, Buttons.USE);
+    expect(car.driver).toBe(-1);
+    expect(car.passengers[0]).toBe(b.id);
+    step(sim, 0.5);
+    expect(b.vehicle).toBe(car.id);
+  });
+
+  it('frees the seat of a passenger who dies', () => {
+    const { sim, car } = setup();
+    const b = rider(sim, 'B');
+    enterVehicle(sim, sim.player, car);
+    enterVehicle(sim, b, car);
+    b.alive = false;
+    sim.step(makeCmd());
+    expect(car.passengers[0]).toBe(-1);
+  });
+
+  it('throws everyone clear when the car is destroyed', () => {
+    const { sim, car } = setup();
+    const b = rider(sim, 'B');
+    enterVehicle(sim, sim.player, car);
+    enterVehicle(sim, b, car);
+    damageVehicle(sim, car, VEHICLE_HEALTH + 1, -1);
+    expect(car.destroyed).toBe(true);
+    expect(car.driver).toBe(-1);
+    expect(car.passengers).toEqual([-1, -1, -1]);
+    expect(sim.player.vehicle).toBe(-1);
+    expect(b.vehicle).toBe(-1);
+    expect(sim.player.health).toBeLessThan(100);
+    expect(b.health).toBeLessThan(100);
+  });
+
+  it('drops everyone out of a car taken out of the world', () => {
+    const { sim, car } = setup();
+    const b = rider(sim, 'B');
+    enterVehicle(sim, sim.player, car);
+    enterVehicle(sim, b, car);
+    sim.removeVehicle(car);
+    expect(sim.player.vehicle).toBe(-1);
+    expect(b.vehicle).toBe(-1);
+  });
+});

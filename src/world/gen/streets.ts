@@ -27,8 +27,11 @@ export const LAMPS: readonly (readonly [number, number])[] = [
 /** Height of the lamp head (the light comes from just below it). */
 export const LAMP_Y = 5;
 
-/** Distance (m, horizontal) from a world point to the nearest street lamp. */
-export function nearestLampDist(x: number, z: number): number {
+/**
+ * Distance (m, horizontal) from a world point to the nearest street lamp. `stands` can rule out
+ * lamps that aren't there (chunk, lamp index).
+ */
+export function nearestLampDist(x: number, z: number, stands?: (cx: number, cz: number, i: number) => boolean): number {
   const cx = Math.floor(x / CHUNK);
   const cz = Math.floor(z / CHUNK);
   let best = Infinity;
@@ -36,7 +39,9 @@ export function nearestLampDist(x: number, z: number): number {
     for (let dx = -1; dx <= 1; dx++) {
       const ox = (cx + dx) * CHUNK;
       const oz = (cz + dz) * CHUNK;
-      for (const [lx, lz] of LAMPS) best = Math.min(best, Math.hypot(ox + lx - x, oz + lz - z));
+      LAMPS.forEach(([lx, lz], i) => {
+        if (!stands || stands(cx + dx, cz + dz, i)) best = Math.min(best, Math.hypot(ox + lx - x, oz + lz - z));
+      });
     }
   }
   return best;
@@ -85,9 +90,10 @@ export function buildStreets(ctx: GenContext): void {
 
 /**
  * Edge features on the roads between chunks. The shared edge hash picks the feature so both
- * neighbors agree; each chunk builds only the half on its own side.
+ * neighbors agree; each chunk builds only the half on its own side. `sides` (-Z, +Z, -X, +X)
+ * leaves out edges with no road (along the river).
  */
-function buildEdges(ctx: GenContext): void {
+export function buildEdges(ctx: GenContext, sides: readonly boolean[] = [true, true, true, true]): void {
   const { seed, cx, cz, w } = ctx;
   const C = CHUNK;
   // [hash, alongX (road runs along X), stripStart, stripEnd, sideSign]
@@ -97,12 +103,15 @@ function buildEdges(ctx: GenContext): void {
     [hash3(seed, cx, cz + 1, Salt.EdgeZ), true, C - ROAD, C], // +Z edge: road runs along X
     [hash3(seed, cx, cz, Salt.EdgeZ), true, 0, ROAD], // -Z edge
   ];
+  // Edge order here is +X, -X, +Z, -Z; `sides` is indexed -Z, +Z, -X, +X.
+  const sideOf = [3, 2, 1, 0];
   for (let e = 0; e < edges.length; e++) {
+    if (!sides[sideOf[e]]) continue;
     const [h, alongX, s0, s1] = edges[e];
     if (e === SPAWN_CAR_EDGE && ctx.district.id === District.Spawn) {
       // The spawn plaza always has a car ready on its own half of the -Z road.
       const r = sfc32(h ^ 0x5a17);
-      parkVehicle(ctx, rollCarStyle(r, 'intact'), alongX, s0 + 0.4, SPAWN_CAR_AT, 0);
+      parkVehicle(ctx, rollCarStyle(r, 'intact'), alongX, parkLane(s0 + s1 < C), SPAWN_CAR_AT, 0);
       continue;
     }
     const roll = h % 100;
@@ -110,17 +119,13 @@ function buildEdges(ctx: GenContext): void {
     // Shared position along the road, away from intersections.
     const along = 14 + (Math.floor(r() * 1000) % 34);
     const near = (s0 + s1) / 2 < C / 2;
-    if (roll < 58) continue;
-    if (roll < 75) {
-      // Road block of jersey barriers across the road with a gap on one side.
-      const gapInMyHalf = ((h >>> 8) & 1) === (near ? 1 : 0);
-      barrierLine(w, alongX, s0, s1, along, gapInMyHalf);
-    } else if (roll < 90) {
-      // Parked cars along my half of the road. Often one of them still runs.
+    if (roll < 75) continue;
+    if (roll < 90) {
+      // Parked cars against the curb on my half of the road. Often one of them still runs.
       const n = 2 + Math.floor(r() * 3);
       const dr = sfc32(h ^ 0x51ed);
       const driveable = dr() < DRIVEABLE_ROW_CHANCE ? Math.floor(dr() * n) : -1;
-      const lane = near ? s0 + 0.4 : s1 - 2.2;
+      const lane = parkLane(near);
       for (let i = 0; i < n; i++) {
         const t = 10 + i * 12 + Math.floor(r() * 5);
         if (t > C - 12) break;
@@ -136,6 +141,16 @@ function buildEdges(ctx: GenContext): void {
   }
 }
 
+/**
+ * Near side of a car parked against the curb, two wheels up on the sidewalk so it leaves the
+ * road clear. `near`: the road strip at the low edge of the chunk (its curb is at ROAD).
+ */
+function parkLane(near: boolean): number {
+  return near ? CURB_PARK : CHUNK - CURB_PARK - CAR_W;
+}
+/** Distance from the road's center line to a curb-parked car's near side. */
+const CURB_PARK = ROAD - 1.2;
+
 /** Chance a row of parked cars has one driveable car in it. */
 const DRIVEABLE_ROW_CHANCE = 0.75;
 /** Edge (index into buildEdges' list) and position of the spawn plaza's car. */
@@ -145,16 +160,6 @@ const SPAWN_CAR_AT = 27;
 /** A driveable car: a vehicle spawn instead of brushes. */
 export function parkVehicle(ctx: GenContext, style: CarStyle, alongX: boolean, lane: number, at: number, y: number): void {
   ctx.vehicles.push({ style, alongX, lane, at, y });
-}
-
-function barrierLine(w: BrushWriter, alongX: boolean, s0: number, s1: number, at: number, gap: boolean): void {
-  // Barriers are 0.6 thick, 0.81 tall; perpendicular to the road across my half.
-  const h = 0.81;
-  const a0 = s0 + (gap ? 0 : 0);
-  const a1 = gap ? s1 - 2.2 : s1;
-  if (a1 - a0 < 0.5) return;
-  if (alongX) w.box(at, 0, a0, at + 0.6, h, a1, Material.Concrete, SOLID, 210);
-  else w.box(a0, 0, at, a1, h, at + 0.6, Material.Concrete, SOLID, 210);
 }
 
 export const CAR_L = 4.3;

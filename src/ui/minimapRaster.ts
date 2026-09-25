@@ -19,6 +19,10 @@ const COLORS: Record<number, string> = {
   [Material.CarTrim]: '#262626',
   [Material.LampGlow]: '#d8d2bd',
   [Material.Glass]: '#9fb7c4',
+  [Material.Water]: '#2f5f7a',
+  [Material.Grass]: '#4d6b34',
+  [Material.Stone]: '#a9a49a',
+  [Material.CurtainWall]: '#4f6272',
 };
 
 /**
@@ -32,8 +36,11 @@ export function drawChunkTopdown(ctx: CanvasRenderingContext2D, d: ChunkData, px
   order.sort((x, y) => b[x + 4] - b[y + 4]);
   for (const o of order) {
     if (!(wordContents(b[o + 6]) & Contents.VISIBLE)) continue;
+    // Facade dressing and roof skins would hide the building colours.
+    const mat = wordMaterial(b[o + 6]);
+    if (mat === Material.Facade || mat === Material.RoofTar) continue;
     const h = b[o + 4] / 100;
-    ctx.fillStyle = COLORS[wordMaterial(b[o + 6])] ?? '#f0f';
+    ctx.fillStyle = COLORS[mat] ?? '#f0f';
     ctx.globalAlpha = 0.55 + Math.min(0.45, h / 20);
     ctx.fillRect(ox + (b[o] / 100) * px, oz + (b[o + 2] / 100) * px, ((b[o + 3] - b[o]) / 100) * px, ((b[o + 5] - b[o + 2]) / 100) * px);
   }

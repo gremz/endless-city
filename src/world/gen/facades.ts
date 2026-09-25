@@ -22,8 +22,12 @@ const ENTRY = 1.6;
 const FLIGHT_RUN = 4.2;
 const ARRIVAL = 0.9;
 const ESCAPE_LEN = ENTRY + FLIGHT_RUN + ARRIVAL;
+/** Open length at the top of a flight's inner rail. */
+const INNER_RAIL_GAP = 0.6;
 const MAX_BRIDGE_GAP = 4;
 const GRATE = SOLID | Contents.FLOOR;
+/** Metal palette index for the fire escape's dark weathered iron. */
+const IRON = 6;
 
 /** One wall of a building: outward side, plane coordinate and extent along the wall. */
 interface Wall {
@@ -113,7 +117,7 @@ function fireEscape(ctx: GenContext, r: Rand, b: BuildingInfo, aerial: Rect[]): 
     for (let f = 1; f < b.floors; f++) ys.push(lotY + f * FLOOR_H);
     ys.push(b.roofY - 0.3);
     const dir = wall.alongX ? Ramp.PosX : Ramp.PosZ;
-    const put = (d0: number, d1: number, p0: number, p1: number, yb: number, yt: number, contents: number, tint = 5) => {
+    const put = (d0: number, d1: number, p0: number, p1: number, yb: number, yt: number, contents: number, tint = IRON) => {
       const q = front(wall, d0, d1, p0, p1);
       w.box(q.x0, yb, q.z0, q.x1, yt, q.z1, Material.Metal, contents, tint);
     };
@@ -139,20 +143,34 @@ function fireEscape(ctx: GenContext, r: Rand, b: BuildingInfo, aerial: Rect[]): 
       }
       if (i + 1 < ys.length) {
         const q = front(wall, LANDING_D, depth, fl0, fl1);
-        w.openStairs(q.x0, y, q.z0, q.x1, ys[i + 1], q.z1, dir, Material.Metal, 5);
-        // Outer rail along the flight: an invisible panel, posts and a top bar.
-        put(depth - 0.05, depth, fl0, fl1, y, ys[i + 1] + 1, Contents.SOLID_PLAYER);
-        for (let p = fl0; p <= fl1 + 0.01; p += FLIGHT_RUN / 3) {
-          const t = (p - fl0) / FLIGHT_RUN;
-          const top = y + (ys[i + 1] - y) * t + 1;
-          put(depth - 0.05, depth, p - 0.03, p + 0.03, y + (ys[i + 1] - y) * t - 0.1, top, Contents.VISIBLE);
-        }
+        w.openStairs(q.x0, y, q.z0, q.x1, ys[i + 1], q.z1, dir, Material.Metal, IRON);
+        // Handrails on both sides of the flight: an invisible panel, posts and a sloped top bar
+        // (one short bar per tread), running `len` meters up from the bottom.
+        const rise = ys[i + 1] - y;
+        const flightRail = (d0: number, d1: number, len: number) => {
+          const h = (p: number) => y + (rise * (p - fl0)) / FLIGHT_RUN;
+          const end = fl0 + len;
+          put(d0, d1, fl0, end, y, h(end) + 1, Contents.SOLID_PLAYER);
+          for (let k = 0; k <= 3; k++) {
+            const p = fl0 + (len * k) / 3;
+            put(d0, d1, p - 0.03, p + 0.03, h(p) - 0.1, h(p) + 1, Contents.VISIBLE);
+          }
+          const n = Math.max(1, Math.round(len / 0.3));
+          for (let k = 0; k < n; k++) {
+            const top = h(fl0 + (len * (k + 0.5)) / n) + 1;
+            put(d0, d1, fl0 + (len * k) / n, fl0 + (len * (k + 1)) / n, top - 0.05, top, Contents.VISIBLE);
+          }
+        };
+        flightRail(depth - 0.05, depth, FLIGHT_RUN);
+        // The inner rail stops short of the top, where the flight is almost level with the
+        // landing above: a full-length panel would crowd the arrival platform out of the nav.
+        flightRail(LANDING_D, LANDING_D + 0.05, FLIGHT_RUN - INNER_RAIL_GAP);
       }
     });
     // The drop ladder hangs from level one's entry bay.
     const la = a0 + 0.9;
     const edge = wall.face + wall.out * depth;
-    w.ladder(wall.side, edge, la, lotY, ys[0]);
+    w.ladder(wall.side, edge, la, lotY, ys[0], IRON);
     ladderLink(ctx, wall, la, lotY, ys[0], edge, 1.1, 0.7);
     ctx.occ.mark(foot, Occ.Reserved);
     aerial.push(over);

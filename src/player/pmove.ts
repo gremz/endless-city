@@ -6,7 +6,7 @@
 import { HU } from '../core/config';
 import { anglesToForward, vec3, yawBasis, type Vec3 } from '../core/math';
 import { Buttons, type UserCmd } from '../input/UserCmd';
-import { MASK_LADDER, MASK_PLAYER } from '../physics/brush';
+import { MASK_LADDER, MASK_PLAYER, MASK_WATER } from '../physics/brush';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import { DIST_EPSILON, makeTrace, type TraceResult } from '../physics/trace';
 import { DUCK_MAXS, DUCK_MINS, MOVE, STAND_MAXS, STAND_MINS } from './movementConfig';
@@ -34,6 +34,8 @@ export interface MoveState {
   noclip: boolean;
   /** Touching a ladder this tick (derived from position each tick). */
   onLadder: boolean;
+  /** Waist-deep in water this tick (derived from position each tick). */
+  inWater: boolean;
   /** Seconds left in a mantle (0 = not mantling), and where it ends. */
   mantleT: number;
   mantleTo: Vec3;
@@ -55,6 +57,7 @@ export function makeMoveState(x = 0, y = 0, z = 0): MoveState {
     stuckEvents: 0,
     noclip: false,
     onLadder: false,
+    inWater: false,
     mantleT: 0,
     mantleTo: vec3(),
   };
@@ -85,6 +88,9 @@ const original = vec3();
 const primal = vec3();
 const newVel = vec3();
 const planes: Vec3[] = [vec3(), vec3(), vec3(), vec3(), vec3()];
+/** Probe for wading: a small box at waist height. */
+const WAIST_MINS = vec3(-0.1, 0.75, -0.1);
+const WAIST_MAXS = vec3(0.1, 0.85, 0.1);
 const MAX_CLIP_PLANES = 5;
 
 function trace(world: CollisionWorld, s: MoveState, start: Vec3, stop: Vec3, out: TraceResult = tr) {
@@ -151,6 +157,7 @@ export function currentMaxSpeed(s: MoveState, cmd: UserCmd): number {
     const t = s.tagTime / MOVE.tagRecovery;
     speed *= 1 - (1 - MOVE.tagMul) * t;
   }
+  if (s.inWater) speed *= MOVE.wadeMul;
   return speed;
 }
 
@@ -647,6 +654,7 @@ export function playerMove(
 
   unstick(s, world);
   updateDuck(s, world, cmd, dt);
+  s.inWater = world.testBox(tr2, s.pos, WAIST_MINS, WAIST_MAXS, MASK_WATER);
 
   s.onLadder = touchLadder(s, world);
   if (s.onLadder) {
@@ -671,7 +679,7 @@ export function playerMove(
   const wantJump =
     (cmd.pressed & Buttons.JUMP) !== 0 || (opts.autoBhop === true && (cmd.buttons & Buttons.JUMP) !== 0);
   if (wantJump && s.onGround) {
-    s.vel.y = MOVE.jumpSpeed;
+    s.vel.y = s.inWater ? MOVE.jumpSpeed * MOVE.wadeJumpMul : MOVE.jumpSpeed;
     s.onGround = false;
     s.jumped = true;
   }

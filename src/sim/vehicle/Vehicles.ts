@@ -13,8 +13,10 @@ import { CAR_HALF_L, CAR_HALF_W, carSpeed, footprintDistance } from './carPhysic
 import {
   coastVehicle,
   makeVehicle,
+  occupantIds,
   runOverDamage,
   syncVehicleBrushes,
+  seatActor,
   vehicleAtRest,
   VEHICLE_HEALTH,
   type Vehicle,
@@ -83,7 +85,7 @@ export class Vehicles implements SimSystem, StreamerListener {
     const sim = this.sim;
     for (let i = sim.vehicles.length - 1; i >= 0; i--) {
       const v = sim.vehicles[i];
-      if (v.driver >= 0 || keyAt(v) !== key) continue;
+      if (occupantIds(v).length || keyAt(v) !== key) continue;
       sim.removeVehicle(v);
       if (v.moved) this.sleep(v);
     }
@@ -126,11 +128,28 @@ export class Vehicles implements SimSystem, StreamerListener {
         const d = sim.getActor(v.driver);
         if (!d || !d.alive || d.vehicle !== v.id) v.driver = -1;
       }
+      for (let i = 0; i < v.passengers.length; i++) {
+        const pid = v.passengers[i];
+        if (pid >= 0) {
+          const p = sim.getActor(pid);
+          if (!p || !p.alive || p.vehicle !== v.id) v.passengers[i] = -1;
+        }
+      }
       if (v.moved && v.home && !this.taken.has(v.home)) this.taken.add(v.home);
       // The driver's command moved the car already; the others roll to a stop.
       if (v.driver < 0 && !vehicleAtRest(v)) coastVehicle(sim, v);
       if (carSpeed(v.car) > 1) this.runOver(v);
       syncVehicleBrushes(sim.world, v);
+
+      const driver = v.driver >= 0 ? sim.getActor(v.driver) : null;
+      if (driver && driver.vehicle === v.id) seatActor(driver, v, 0);
+      for (let i = 0; i < v.passengers.length; i++) {
+        const pid = v.passengers[i];
+        if (pid >= 0) {
+          const p = sim.getActor(pid);
+          if (p && p.vehicle === v.id) seatActor(p, v, i + 1);
+        }
+      }
     }
   }
 

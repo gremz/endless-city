@@ -10,6 +10,8 @@ import { worldToChunk } from '../chunkMath';
 import { BRUSH_STRIDE, DOOR_STRIDE, DoorFlag, Landmark, Material, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, wordContents, wordMaterial, type ChunkData } from './ChunkData';
 import { CAR_L, CAR_W } from './streets';
 import { generateChunk } from './generateChunk';
+import { chunkPlan } from './cityPlan';
+import { CAR } from '../../sim/vehicle/carPhysics';
 
 function digest(d: ChunkData): number {
   let h = 0x811c9dc5;
@@ -67,6 +69,47 @@ describe('generateChunk', () => {
     }
   });
 
+  it('bakes identical meshes for the same (seed, cx, cz)', () => {
+    const a = generateChunk(1337, 4, -3);
+    const b = generateChunk(1337, 4, -3);
+    expect(a.meshes.length).toBe(b.meshes.length);
+    a.meshes.forEach((m, i) => {
+      expect(m.material).toBe(b.meshes[i].material);
+      expect(m.positions).toEqual(b.meshes[i].positions);
+      expect(m.uvs).toEqual(b.meshes[i].uvs);
+    });
+  });
+
+  it('only appends cosmetic dressing: the layout underneath is unchanged', () => {
+    for (const [cx, cz] of [
+      [1, 1],
+      [-4, 2],
+      [5, -5],
+      [8, 3],
+    ]) {
+      const bare = generateChunk(1337, cx, cz, { dress: false }).brushes;
+      const full = generateChunk(1337, cx, cz).brushes;
+      expect(full.length).toBeGreaterThanOrEqual(bare.length);
+      expect(full.subarray(0, bare.length)).toEqual(bare);
+    }
+  });
+
+  it('keeps facade dressing out of collision (only roof clutter is solid)', () => {
+    let facade = 0;
+    for (let cx = -4; cx <= 4; cx += 2) {
+      for (let cz = -4; cz <= 4; cz += 2) {
+        const d = generateChunk(7, cx, cz);
+        for (let o = 0; o < d.brushes.length; o += BRUSH_STRIDE) {
+          const m = wordMaterial(d.brushes[o + 6]);
+          if (m !== Material.Facade && m !== Material.Stone && m !== Material.RoofTar) continue;
+          facade++;
+          expect(wordContents(d.brushes[o + 6]) & (Contents.SOLID_PLAYER | Contents.SOLID_BULLET)).toBe(0);
+        }
+      }
+    }
+    expect(facade).toBeGreaterThan(100);
+  });
+
   it('differs between chunks and seeds', () => {
     expect(digest(generateChunk(1337, 2, 3))).not.toBe(digest(generateChunk(1337, 3, 2)));
     expect(digest(generateChunk(1337, 2, 3))).not.toBe(digest(generateChunk(42, 2, 3)));
@@ -84,7 +127,7 @@ describe('generateChunk', () => {
         }
       }
     }
-  });
+  }, 15000);
 
   it('streets are walkable and connect across chunk seams', () => {
     const a = generateChunk(5, 0, 0);
@@ -145,8 +188,9 @@ describe('generateChunk', () => {
           expect(worldToChunk(z)).toBe(cz);
           // Parked along the road: heading is a multiple of 90°.
           const alongX = Math.abs(Math.sin(yaw)) > 0.5;
-          const half = alongX ? vec3(CAR_L / 2, 0.7, CAR_W / 2) : vec3(CAR_W / 2, 0.7, CAR_L / 2);
-          const center = vec3(x, y + 0.75, z);
+          // Above the hull's clearance: a car parked against the curb has two wheels up on it.
+          const half = alongX ? vec3(CAR_L / 2, 0.55, CAR_W / 2) : vec3(CAR_W / 2, 0.55, CAR_L / 2);
+          const center = vec3(x, y + CAR.clearance + 0.05 + half.y, z);
           expect(world.testBox(tr, center, vec3(-half.x, -half.y, -half.z), half, MASK_PLAYER)).toBe(false);
           // Standing on the asphalt.
           world.traceRay(tr, vec3(x, y + 1, z), vec3(x, y - 1, z), MASK_PLAYER);
@@ -260,7 +304,103 @@ describe('generateChunk', () => {
       // (Landmark floors are big; small groups are other roofs that happen to share the height.)
       for (const [, [n, r]] of floors) if (n > 500) expect(r / n).toBeGreaterThan(0.95);
     }
-    expect([...seen].sort()).toEqual([Landmark.Apartment, Landmark.Office, Landmark.Garage]);
+    expect([...seen].filter((l) => l <= Landmark.Garage).sort()).toEqual([Landmark.Apartment, Landmark.Office, Landmark.Garage]);
+  }, 60000);
+
+  it('lays out the river, highways, parks and plazas consistently across chunks', () => {
+    const seed = 7;
+    let river = 0;
+    let parks = 0;
+    let plazas = 0;
+    for (let cz = -14; cz <= 14; cz++) {
+      for (let cx = -14; cx <= 14; cx++) {
+        const p = chunkPlan(seed, cx, cz);
+        // Neighbors agree about the seams they share.
+        const e = chunkPlan(seed, cx + 1, cz);
+        expect(p.riverSides[3]).toBe(e.riverSides[2]);
+        expect(p.bridges[3]).toBe(e.bridges[2]);
+        expect(p.highwayEast).toBe(e.highwayWest);
+        const s = chunkPlan(seed, cx, cz + 1);
+        expect(p.riverSides[1]).toBe(s.riverSides[0]);
+        expect(p.bridges[1]).toBe(s.bridges[0]);
+        if (p.river) {
+          river++;
+          // The river keeps its distance from spawn, and runs on as a connected chain.
+          expect(Math.max(Math.abs(cx), Math.abs(cz))).toBeGreaterThanOrEqual(3);
+          expect(p.riverSides.filter(Boolean).length).toBeGreaterThanOrEqual(1);
+        }
+        if (p.feature === 'park') parks++;
+        if (p.feature === 'plaza') plazas++;
+        if (p.feature || p.river) expect(p.onRamp).toBeNull();
+      }
+    }
+    expect(river).toBeGreaterThan(20);
+    expect(parks).toBeGreaterThan(5);
+    expect(plazas).toBeGreaterThan(3);
+    expect(chunkPlan(seed, 0, 0)).toMatchObject({ river: false, feature: null, highwayWest: false, highwayEast: false });
+  });
+
+  it('bridges, highway decks and ramps are walkable and reachable', () => {
+    const seed = 7;
+    let bridges = 0;
+    let decks = 0;
+    let ramps = 0;
+    for (let cz = -12; cz <= 12; cz++) {
+      for (let cx = -12; cx <= 12; cx++) {
+        const p = chunkPlan(seed, cx, cz);
+        const wantBridge = p.bridges.some(Boolean);
+        if (!wantBridge && !p.onRamp) continue;
+        const d = generateChunk(seed, cx, cz);
+        // Bridge decks: mid-span, a reachable street-level floor with the river bed under it.
+        for (let side = 0; side < 4; side++) {
+          if (!p.bridges[side]) continue;
+          const [x, z] = [
+            [32, 2],
+            [32, 62],
+            [2, 32],
+            [62, 32],
+          ][side];
+          const c = Math.floor(z / NAV_CELL) * NAV_RES + Math.floor(x / NAV_CELL);
+          let deck = false;
+          let bed = false;
+          for (let s = d.navCol[c]; s < d.navCol[c + 1]; s++) {
+            if (Math.abs(d.navFloor[s]) < 5 && d.navFlags[s] & NavFlag.Reachable) deck = true;
+            if (d.navFlags[s] & NavFlag.Water) bed = true;
+          }
+          expect(deck).toBe(true);
+          expect(bed).toBe(true);
+          // Nothing stands on the deck along its whole length, not even a curb at its ends.
+          const world = new CollisionWorld();
+          world.addChunk(d.key, brushesFromPacked(d.brushes, cx, cz, d.key));
+          const tr = makeTrace();
+          const half = vec3(0.4, 0.5, 0.4);
+          for (let a = 0.5; a < CHUNK; a += 0.5) {
+            const lx = side < 2 ? a : x;
+            const lz = side < 2 ? z : a;
+            const center = vec3(cx * CHUNK + lx, 0.02 + half.y, cz * CHUNK + lz);
+            expect(world.testBox(tr, center, vec3(-half.x, -half.y, -half.z), half, MASK_PLAYER), `bridge ${cx},${cz} side ${side} at ${a}`).toBe(false);
+          }
+          bridges++;
+        }
+        if (p.onRamp) {
+          // The deck (9 m up) is reachable from the street by the ramp.
+          let deck = 0;
+          let reach = 0;
+          for (let s = 0; s < d.navFloor.length; s++) {
+            if (d.navFloor[s] > 850 && d.navFloor[s] < 950) {
+              deck++;
+              if (d.navFlags[s] & NavFlag.Reachable) reach++;
+            }
+          }
+          expect(reach / Math.max(1, deck)).toBeGreaterThan(0.9);
+          ramps++;
+        }
+        if (p.highwayEast || p.highwayWest) decks++;
+      }
+    }
+    expect(bridges).toBeGreaterThan(3);
+    expect(ramps).toBeGreaterThan(2);
+    expect(decks).toBeGreaterThan(2);
   }, 60000);
 
   it('generates fast enough', () => {

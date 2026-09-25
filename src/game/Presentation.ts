@@ -4,7 +4,13 @@ import { DEG, vec3 } from '../core/math';
 import type { Settings } from '../core/settings';
 import type { Input } from '../input/Input';
 import type { CameraController } from '../player/CameraController';
-import { BotRenderer } from '../render/BotRenderer';
+import { BotRenderer, type ActorRenderer } from '../render/BotRenderer';
+import { loadCharacterAsset } from '../render/characters/CharacterAssets';
+import { CharacterRenderer } from '../render/characters/CharacterRenderer';
+import type { BotGroup } from '../render/characters/characterSpec';
+import type { CharacterVariant } from '../render/characters/variants';
+import { CompositeActorRenderer } from '../render/CompositeActorRenderer';
+import { Team } from '../sim/Actor';
 import { GrenadeRenderer } from '../render/GrenadeRenderer';
 import { PickupRenderer } from '../render/PickupRenderer';
 import { Decals, MuzzleLight, Particles, Tracers } from '../render/fx/Effects';
@@ -24,6 +30,7 @@ import { carSpeed } from '../sim/vehicle/carPhysics';
 
 /** Kill feed names for deaths not caused by a weapon. */
 const NON_WEAPON_NAMES: Record<string, string> = { car: 'Car', fall: 'Fall' };
+import { Material } from '../world/gen/ChunkData';
 import { SMOKE_HEALTH, VEHICLE_HEALTH } from '../sim/vehicle/Vehicle';
 
 const NADE_LABELS: Record<string, string> = { hegrenade: 'HE', flashbang: 'FL', smokegrenade: 'SM', molotov: 'MO' };
@@ -37,7 +44,13 @@ export interface EventSink {
  * the viewmodel, bot models and HUD. Never writes into the simulation.
  */
 export class Presentation {
-  readonly bots: BotRenderer;
+  /** Box figures, or the animated characters once their models have loaded (and the setting allows). */
+  bots: ActorRenderer;
+  /** Loaded character models: bots, and players (other players, co-op allies). */
+  private assets: { bot: CharacterVariant[] | null; player: CharacterVariant[] | null } = { bot: null, player: null };
+  /** Which models `bots` currently draws with (null: box figures). */
+  private drawn = { bot: null as CharacterVariant[] | null, player: null as CharacterVariant[] | null };
+  private disposed = false;
   readonly pickupRenderer: PickupRenderer;
   /** Items lying in the world (set by the game when pickups exist). */
   pickups: readonly Pickup[] = [];
@@ -64,8 +77,12 @@ export class Presentation {
     private camCtl: CameraController,
     private input: Input,
     private settings: Settings,
+    /** Character models to load for bots (one per variant) and players; null draws box figures for them. */
+    characterUrls: { bots: { url: string; group?: BotGroup }[] | null; player: string | null },
   ) {
     this.bots = new BotRenderer(settings.shadows > 0);
+    if (characterUrls.bots) void this.loadCharacters('bot', characterUrls.bots);
+    if (characterUrls.player) void this.loadCharacters('player', [{ url: characterUrls.player }]);
     this.pickupRenderer = new PickupRenderer(settings.shadows > 0);
     this.grenades = new GrenadeRenderer(this.particles);
     const scene = renderer.scene;
@@ -80,8 +97,54 @@ export class Presentation {
     this.viewmodel.setFovFromHorizontal43(this.settings.viewmodelFov);
     this.baseFov = this.renderer.camera.fov;
     this.bots.setShadows(this.settings.shadows > 0);
+    this.useCharacters();
     this.pickupRenderer.setShadows(this.settings.shadows > 0);
     this.hud.applyCrosshairStyle();
+  }
+
+  /** Load every model of a kind; the ones that fail are left out (all failing: box figures). */
+  private async loadCharacters(kind: 'bot' | 'player', models: { url: string; group?: BotGroup }[]): Promise<void> {
+    const results = await Promise.allSettled(models.map((m) => loadCharacterAsset(m.url)));
+    const variants: CharacterVariant[] = [];
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') variants.push({ asset: r.value, group: models[i].group });
+      else console.info(`Character model ${models[i].url} not used (${(r.reason as Error).message}).`);
+    });
+    if (this.disposed) {
+      for (const v of variants) v.asset.dispose();
+      return;
+    }
+    if (!variants.length) {
+      console.info(`No ${kind} character models loaded; drawing box figures.`);
+      return;
+    }
+    this.assets[kind] = variants;
+    this.useCharacters();
+  }
+
+  /**
+   * Switch between the box figures and the loaded characters to match the setting. Players use
+   * the player model (or the bots' if it's missing); anyone without a model is a box figure.
+   */
+  private useCharacters(): void {
+    const detailed = this.settings.characters === 'detailed';
+    const bot = detailed ? this.assets.bot : null;
+    const player = detailed ? (this.assets.player ?? this.assets.bot) : null;
+    if (bot === this.drawn.bot && player === this.drawn.player) return;
+    this.drawn = { bot, player };
+    const scene = this.renderer.scene;
+    scene.remove(this.bots.root);
+    this.bots.dispose();
+    const shadows = this.settings.shadows > 0;
+    const make = (variants: CharacterVariant[] | null): ActorRenderer => (variants ? new CharacterRenderer(variants, this.renderer.camera, shadows) : new BotRenderer(shadows));
+    this.bots =
+      bot === player
+        ? make(bot)
+        : new CompositeActorRenderer([
+            { renderer: make(player), accept: (a) => a.team === Team.Player },
+            { renderer: make(bot), accept: () => true },
+          ]);
+    scene.add(this.bots.root);
   }
 
   /** Recompute base FOV after the renderer's FOV changed. */
@@ -114,8 +177,9 @@ export class Presentation {
           break;
         }
         case 'impact':
-          // No bullet holes on cars (they'd stay behind when the car drives off).
-          if (e.chunkKey >= 0) this.decals.add(e.pos, e.normal, e.chunkKey);
+          // No bullet holes on cars (they'd stay behind when the car drives off) or on window
+          // panes (any hit shatters them, which would leave the hole floating in the empty frame).
+          if (e.chunkKey >= 0 && e.material !== Material.Glass) this.decals.add(e.pos, e.normal, e.chunkKey);
           this.particles.impact(e.pos, e.normal, e.material);
           break;
         case 'hit': {
@@ -152,6 +216,9 @@ export class Presentation {
         }
         case 'land':
           if (e.actorId === player.id) this.viewmodel.onLand(e.speed);
+          break;
+        case 'step':
+          if (e.material === Material.Water) this.particles.splash(e.pos);
           break;
         case 'glass_break':
           this.particles.shards(e.pos);
@@ -194,6 +261,7 @@ export class Presentation {
           }
           break;
       }
+      this.bots.onEvent?.(e);
       for (const s of this.sinks) s.handle(e, sim);
     }
   }
@@ -262,7 +330,9 @@ export class Presentation {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.bots.dispose();
+    for (const v of [...(this.assets.bot ?? []), ...(this.assets.player ?? [])]) v.asset.dispose();
     this.pickupRenderer.dispose();
     this.grenades.dispose();
     this.viewmodel.dispose();

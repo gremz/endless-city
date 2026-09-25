@@ -10,7 +10,12 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "models:check": "node --import ./scripts/register-ts.mjs scripts/check-models.ts",
+    "models:placeholder": "node --import ./scripts/register-ts.mjs scripts/make-placeholder.ts",
+    "models:bots": "node --import ./scripts/register-ts.mjs scripts/make-bots.ts",
+    "models:player": "node --import ./scripts/register-ts.mjs scripts/make-player.ts",
+    "models:reference": "node --import ./scripts/register-ts.mjs scripts/hitbox-reference.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",

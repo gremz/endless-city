@@ -27,7 +27,7 @@ export function placePickups(r: Rand, nav: NavBake, cx: number, cz: number, hasE
     const j = (c - i) / N;
     if (i < 2 || j < 2 || i >= N - 2 || j >= N - 2) continue;
     const f = nav.flags[s];
-    if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & NavFlag.Street) continue;
+    if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & (NavFlag.Street | NavFlag.Water)) continue;
     let score = r();
     if (isSpawn) {
       const d = Math.hypot((i + 0.5) * NAV_CELL - SPAWN_X, (j + 0.5) * NAV_CELL - SPAWN_Z);

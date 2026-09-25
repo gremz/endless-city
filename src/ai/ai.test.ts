@@ -504,6 +504,38 @@ describe('co-op', () => {
     expect(p2.money - start2).toBe(Math.min(bonus + kills * def.killReward, 16000 - start2));
   });
 
+  it('an area whose remaining bots have nowhere hidden to appear counts as cleared', () => {
+    // A wall hides one slot from the player; the other is in plain sight. Two bots, one wave of one.
+    const { sim, data } = flatWorld([[0, 0, 20, 30, 4, 20.5]]);
+    data.hasEncounter = true;
+    data.spawns = new Float32Array([10, 0.02, 45, 60, 0.02, 30]);
+    const streamer = { resident: new Map([[data.key, { data, visible: true }]]), getChunk: () => data } as unknown as WorldStreamer;
+    const enc = new EncounterManager(sim, streamer);
+    sim.systems.push(enc);
+    const p = sim.player;
+    teleport(p, 10, 0.02, 5);
+    const idle = makeCmd();
+    for (let i = 0; i < 32; i++) sim.step(idle);
+    expect(enc.aliveCount).toBe(1);
+    const bot = enc.bots[0];
+    bot.actor.health = 1;
+    bot.actor.armor = 0;
+    sim.onHit({ attacker: p, victim: bot.actor, def: WEAPONS.ak47, group: 0, distance: 5, damageScale: 1, penetrated: false, pos: bot.actor.move.pos });
+    expect(enc.isCleared(data.key)).toBe(false);
+    // Standing in the open where both slots are in sight: the second bot can never come in.
+    teleport(p, 50, 0.02, 40);
+    p.health = 100000;
+    const until = (t: number) => {
+      while (sim.time < t) sim.step(idle);
+    };
+    until(sim.time + 5);
+    expect(enc.aliveCount).toBe(0);
+    expect(enc.isCleared(data.key)).toBe(false);
+    until(sim.time + 12);
+    expect(enc.isCleared(data.key)).toBe(true);
+    expect(enc.summaries().find((e) => e.key === data.key)?.cleared).toBe(true);
+  });
+
   it('squads only forget and heal once every player is down', () => {
     const { sim, data } = flatWorld([[0, 0, 20, 64, 4, 20.5]]);
     data.hasEncounter = true;

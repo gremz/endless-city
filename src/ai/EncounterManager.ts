@@ -25,6 +25,10 @@ export function hearingRadius(kind: SoundEventKind, radius: number, rain: number
 
 const ACTIVATE_DIST = 90;
 const MIN_SPAWN_DIST = 25;
+/** Reinforcements (the rest of a squad after a wave is wiped) may appear closer, still out of sight. */
+const MIN_REINFORCE_DIST = 12;
+/** A player inside the area this long with nowhere hidden left to bring the rest in: it counts as cleared. */
+const REINFORCE_GIVE_UP = 15;
 const MAX_BOTS = 16;
 const DESPAWN_UNSEEN = 10;
 const BODY_TIME = 12;
@@ -50,6 +54,8 @@ interface EncounterState {
   spawnedOnce: boolean;
   /** Squad in the field on the host (online clients, which run no bots). */
   remoteActive?: boolean;
+  /** When bringing in reinforcements first failed with a player inside the area. */
+  stalledSince?: number;
 }
 
 /** An encounter area for maps and radars. */
@@ -170,7 +176,14 @@ export class EncounterManager implements SimSystem {
       const czw = (d.cz + 0.5) * CHUNK;
       if (!alive.some((p) => Math.hypot(cxw - p.move.pos.x, czw - p.move.pos.z) <= ACTIVATE_DIST)) continue;
       if (this.aliveCount >= MAX_BOTS) break;
-      this.spawnSquad(st, d, key);
+      if (this.spawnSquad(st, d, key)) {
+        st.stalledSince = undefined;
+      } else if (st.spawnedOnce && alive.some((p) => worldToChunk(p.move.pos.x) === d.cx && worldToChunk(p.move.pos.z) === d.cz)) {
+        // The rest of the squad has nowhere hidden to come from while a player holds the area:
+        // don't leave the map showing enemies that never turn up.
+        st.stalledSince ??= sim.time;
+        if (sim.time - st.stalledSince > REINFORCE_GIVE_UP) this.clear(st);
+      }
     }
     // Despawn squads every player has left far behind.
     for (const st of this.states.values()) {
@@ -183,7 +196,8 @@ export class EncounterManager implements SimSystem {
     }
   }
 
-  private spawnSquad(st: EncounterState, d: ChunkData, key: number): void {
+  /** Returns false if nobody could be placed (every slot in sight or too close). */
+  private spawnSquad(st: EncounterState, d: ChunkData, key: number): boolean {
     const sim = this.sim;
     const skill = skillFor(st.level);
     const r = sfc32(hash3(sim.params.seed, d.cx, d.cz, Salt.Names) ^ (st.spawnedOnce ? 0x55 : 0));
@@ -191,9 +205,10 @@ export class EncounterManager implements SimSystem {
       .filter((p) => p.alive)
       .map((p) => vec3(p.move.pos.x, p.move.pos.y + eyeHeight(p.move), p.move.pos.z));
     // Slots out of every player's sight and not too close to anyone.
+    const minDist = st.spawnedOnce ? MIN_REINFORCE_DIST : MIN_SPAWN_DIST;
     const hidden = (s: Vec3): boolean => {
       for (const eye of eyes) {
-        if (Math.hypot(s.x - eye.x, s.z - eye.z) < MIN_SPAWN_DIST) return false;
+        if (Math.hypot(s.x - eye.x, s.z - eye.z) < minDist) return false;
         this.sim.world.traceRay(this.tr, eye, vec3(s.x, s.y + 1.6, s.z), MASK_SHOT);
         if (this.tr.fraction >= 0.999) return false;
       }
@@ -211,7 +226,7 @@ export class EncounterManager implements SimSystem {
     }
     const wantOverwatch = skill.overwatch && perches.length > 0 && st.remaining > 1;
     const riflemen = Math.min(st.remaining - (wantOverwatch ? 1 : 0), slots.length, MAX_BOTS - this.aliveCount);
-    if (riflemen <= 0) return; // try again next time (players may be looking at every slot)
+    if (riflemen <= 0) return false; // try again next time (players may be looking at every slot)
 
     const squad: Squad = {
       id: this.squadIds++,
@@ -256,6 +271,7 @@ export class EncounterManager implements SimSystem {
     st.remaining -= squad.members.length;
     st.squad = squad;
     st.spawnedOnce = true;
+    return true;
   }
 
   private despawnSquad(st: EncounterState): void {
@@ -308,8 +324,13 @@ export class EncounterManager implements SimSystem {
       if (st) st.squad = null;
       return;
     }
+    this.clear(st);
+  }
+
+  private clear(st: EncounterState): void {
     st.cleared = true;
     st.squad = null;
+    st.remaining = 0;
     this.sim.cleared.add(st.key);
     const bonus = 500 + 200 * st.level;
     // Everyone on the team gets the bonus, wherever they are.

@@ -9,7 +9,16 @@ import {
   type MeshData,
 } from './ChunkData';
 
-/** Texture repeat size in meters per material (all divide the 64 m chunk so seams line up). 0 = per-face box UVs. */
+/** UV mode: each face picks one cell of the 4 x 4 facade atlas (cell = brush tint). */
+export const TILE_ATLAS = -1;
+/** UV mode: tiles along the wall every CURTAIN_TILE meters, stretched over the brush height. */
+export const TILE_STRETCH_V = -2;
+const CURTAIN_TILE = 12.8;
+
+/**
+ * Texture repeat size in meters per material (all divide the 64 m chunk so seams line up).
+ * 0 = per-face box UVs; negative = one of the TILE_* modes.
+ */
 export const MATERIAL_TILE: Record<number, number> = {
   [Material.Concrete]: 4,
   [Material.Plaster]: 4,
@@ -27,6 +36,12 @@ export const MATERIAL_TILE: Record<number, number> = {
   [Material.CarTrim]: 0,
   [Material.LampGlow]: 0,
   [Material.Glass]: 0,
+  [Material.Water]: 8,
+  [Material.Grass]: 4,
+  [Material.Stone]: 4,
+  [Material.RoofTar]: 4,
+  [Material.Facade]: TILE_ATLAS,
+  [Material.CurtainWall]: TILE_STRETCH_V,
 };
 
 type Rgb = readonly [number, number, number];
@@ -39,6 +54,8 @@ const METAL_PALETTE: readonly Rgb[] = [
   [0.78, 0.44, 0.1],
   [0.55, 0.55, 0.52],
   [0.36, 0.2, 0.36],
+  // Dark weathered iron (fire escapes): not picked by the random container tints above.
+  [0.21, 0.19, 0.17],
 ];
 
 /** Car paint colors, weighted towards the whites, silvers and blacks of a real street. */
@@ -106,6 +123,31 @@ const CAR_TRIM_PALETTE: readonly Rgb[] = [
 
 const NEUTRAL: readonly Rgb[] = [[1, 1, 1]];
 
+/** Render colours of plaster (the texture is near-white): cream, ochre, salmon, blue, sage... */
+const PLASTER_PALETTE: readonly Rgb[] = [
+  [0.98, 0.9, 0.74],
+  [0.93, 0.74, 0.46],
+  [0.95, 0.7, 0.6],
+  [0.72, 0.82, 0.88],
+  [0.76, 0.82, 0.66],
+  [0.95, 0.94, 0.9],
+  [0.85, 0.55, 0.42],
+  [0.82, 0.82, 0.8],
+];
+
+/** Brick colours (the texture is a light warm clay): reds, brown, buff, sooty. */
+const BRICK_PALETTE: readonly Rgb[] = [
+  [0.95, 0.62, 0.5],
+  [0.72, 0.5, 0.42],
+  [1, 0.92, 0.72],
+  [0.52, 0.44, 0.4],
+  [1, 0.7, 0.52],
+  [0.82, 0.47, 0.38],
+];
+
+/** Palettes whose colour is also shaded by the tint's high bits (per-building variation). */
+const SHADED = new Set<number>([Material.Plaster, Material.Brick]);
+
 /** Materials whose color comes from a palette indexed by brush tint. */
 const PALETTES: Record<number, readonly Rgb[]> = {
   [Material.Metal]: METAL_PALETTE,
@@ -114,10 +156,26 @@ const PALETTES: Record<number, readonly Rgb[]> = {
   [Material.CarGlass]: CAR_GLASS_PALETTE,
   [Material.CarWheel]: NEUTRAL,
   [Material.LampGlow]: NEUTRAL,
+  [Material.Water]: NEUTRAL,
+  [Material.Facade]: NEUTRAL,
+  [Material.CurtainWall]: NEUTRAL,
+  [Material.Plaster]: PLASTER_PALETTE,
+  [Material.Brick]: BRICK_PALETTE,
 };
 
 /** Materials that skip ground-contact AO (small floating details; shading is in the texture). */
-const NO_AO = new Set<number>([Material.CarPaint, Material.CarGlass, Material.CarWheel, Material.CarTrim, Material.LampGlow]);
+const NO_AO = new Set<number>([
+  Material.CarPaint,
+  Material.CarGlass,
+  Material.CarWheel,
+  Material.CarTrim,
+  Material.LampGlow,
+  Material.Water,
+  Material.Facade,
+  Material.CurtainWall,
+  Material.Stone,
+  Material.RoofTar,
+]);
 
 /** Height over which the fake ground-contact AO fades out. */
 const AO_HEIGHT = 1.2;
@@ -153,6 +211,7 @@ interface BrushInfo {
   z1: number;
   material: number;
   tile: number;
+  tint: number;
   ao: boolean;
   r: number;
   g: number;
@@ -188,7 +247,37 @@ function emit(
     bld.nrm.push(Math.round(nx * 127), Math.round(ny * 127), Math.round(nz * 127));
     let u: number;
     let v: number;
-    if (tile === 0) {
+    if (tile === TILE_ATLAS) {
+      // Box mapping into one atlas cell, flipped where needed so text reads left to right
+      // from outside every face.
+      let a: number;
+      let b: number;
+      if (ay >= ax && ay >= az) {
+        a = (x - x0) / (x1 - x0);
+        b = (z - z0) / (z1 - z0);
+      } else if (ax >= az) {
+        a = (z - z0) / (z1 - z0);
+        b = (y - y0) / (y1 - y0);
+        if (nx > 0) a = 1 - a;
+      } else {
+        a = (x - x0) / (x1 - x0);
+        b = (y - y0) / (y1 - y0);
+        if (nz < 0) a = 1 - a;
+      }
+      const cell = info.tint & 15;
+      u = ((cell & 3) + 0.01 + a * 0.98) / 4;
+      v = (3 - (cell >> 2) + 0.01 + b * 0.98) / 4;
+    } else if (tile === TILE_STRETCH_V) {
+      // Offset along the wall by tint so stacked floors don't repeat the same lit offices.
+      const off = (info.tint * 0.37) % 1;
+      if (ay >= ax && ay >= az) {
+        u = x / CURTAIN_TILE;
+        v = z / CURTAIN_TILE;
+      } else {
+        u = (ax >= az ? z : x) / CURTAIN_TILE + off;
+        v = (y - y0) / (y1 - y0);
+      }
+    } else if (tile === 0) {
       // Box mapping: each face spans the full texture.
       if (ay >= ax && ay >= az) {
         u = (x - x0) / (x1 - x0);
@@ -274,7 +363,7 @@ function emitSide(
 export function bakeMeshes(brushes: Int32Array): MeshData[] {
   const builders: (Builder | null)[] = new Array(MATERIAL_COUNT).fill(null);
   const n = brushes.length / BRUSH_STRIDE;
-  const info: BrushInfo = { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0, material: 0, tile: 1, ao: true, r: 1, g: 1, b: 1 };
+  const info: BrushInfo = { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0, material: 0, tile: 1, tint: 0, ao: true, r: 1, g: 1, b: 1 };
 
   for (let i = 0; i < n; i++) {
     const o = i * BRUSH_STRIDE;
@@ -291,13 +380,15 @@ export function bakeMeshes(brushes: Int32Array): MeshData[] {
     info.z1 = brushes[o + 5] / 100;
     info.material = material;
     info.tile = MATERIAL_TILE[material] ?? 2;
+    info.tint = tint;
     info.ao = !NO_AO.has(material);
     const palette = PALETTES[material];
     if (palette) {
       const c = palette[tint % palette.length];
-      info.r = c[0];
-      info.g = c[1];
-      info.b = c[2];
+      const k = SHADED.has(material) ? 0.86 + 0.14 * (((tint >> 3) & 15) / 15) : 1;
+      info.r = c[0] * k;
+      info.g = c[1] * k;
+      info.b = c[2] * k;
     } else {
       const v = 0.84 + 0.16 * (tint / 255);
       const warm = ((tint * 7) % 11) / 11 - 0.5;

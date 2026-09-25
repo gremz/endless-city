@@ -143,9 +143,11 @@ class Columns {
 export function bakeNav(packed: Int32Array, ladders: readonly number[] = []): NavBake {
   const n = packed.length / BRUSH_STRIDE;
   const brushes: B[] = [];
+  const water: number[] = [];
   for (let i = 0; i < n; i++) {
     const o = i * BRUSH_STRIDE;
     const c = wordContents(packed[o + 6]);
+    if (c & Contents.WATER) water.push(o);
     // Glass blocks walking until it's broken.
     if ((c & (Contents.SOLID_PLAYER | Contents.GLASS)) === 0) continue;
     brushes.push({
@@ -263,6 +265,17 @@ export function bakeNav(packed: Int32Array, ladders: readonly number[] = []): Na
     }
   }
 
+  // Water: the surface height per column, for spans that are wading ground.
+  const waterTop = new Float32Array(NN).fill(-Infinity);
+  for (const o of water) {
+    const top = packed[o + 4] / 100;
+    for (let j = lo(packed[o + 2] / 100); j <= hi(packed[o + 5] / 100); j++) {
+      for (let i = lo(packed[o] / 100); i <= hi(packed[o + 3] / 100); i++) {
+        if (top > waterTop[j * N + i]) waterTop[j * N + i] = top;
+      }
+    }
+  }
+
   // Compact: keep walkable spans only.
   const col = new Uint16Array(NN + 1);
   let kept = 0;
@@ -291,6 +304,7 @@ export function bakeNav(packed: Int32Array, ladders: readonly number[] = []): Na
         let fl: number = NavFlag.Walkable;
         if (indoor[s]) fl |= NavFlag.Indoor;
         if (street) fl |= NavFlag.Street;
+        if (spanF[s] < waterTop[c] - 0.3) fl |= NavFlag.Water;
         flags[o] = fl;
         spanCol[o] = c;
         o++;

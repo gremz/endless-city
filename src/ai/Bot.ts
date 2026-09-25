@@ -11,6 +11,7 @@ import type { Simulation } from '../sim/Simulation';
 import { activeItem, grenadeTotal, syncGrenade } from '../weapons/Inventory';
 import type { GrenadeId } from '../weapons/weaponDefs';
 import { nearestLampDist } from '../world/gen/streets';
+import { lampStands } from '../world/gen/cityFeatures';
 import { visibilityAt } from '../sim/Environment';
 import { getPattern, patternAt } from '../weapons/sprayPatterns';
 import { updateWeapon } from '../weapons/WeaponSystem';
@@ -307,7 +308,7 @@ export class Bot {
     // Darkness and fog shorten how far the bot can make you out; a flashlight gives you away.
     const env = sim.env;
     const dark = env.darkness > 0.05 || env.fog > 0.05;
-    const vis = dark ? visibilityAt(env, nearestLampDist(p.move.pos.x, p.move.pos.z), p.flashlight) : 1;
+    const vis = dark ? visibilityAt(env, nearestLampDist(p.move.pos.x, p.move.pos.z, this.lampStands(sim.params.seed)), p.flashlight) : 1;
     if (dist > this.skill.visionRange * vis) return -1;
     // Field of view against the current view direction (very close = always noticed).
     const ang = Math.atan2(-dx, -dz);
@@ -860,6 +861,18 @@ export class Bot {
     cmd.side = 0;
     cmd.buttons &= ~(Buttons.ATTACK | Buttons.ATTACK2 | Buttons.DUCK | Buttons.JUMP);
     cmd.pressed &= ~(Buttons.ATTACK | Buttons.ATTACK2 | Buttons.JUMP);
+  }
+
+  private lampSeed = NaN;
+  private lampFilter: ((cx: number, cz: number, i: number) => boolean) | undefined;
+
+  /** Which street lamps exist (none stand in the river). */
+  private lampStands(seed: number): (cx: number, cz: number, i: number) => boolean {
+    if (seed !== this.lampSeed || !this.lampFilter) {
+      this.lampSeed = seed;
+      this.lampFilter = (cx, cz, i) => lampStands(seed, cx, cz, i);
+    }
+    return this.lampFilter;
   }
 
   // -------------------------------------------------------------- grenades

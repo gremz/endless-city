@@ -61,7 +61,9 @@ import { BreakablesRenderer } from '../render/BreakablesRenderer';
 import { carSpeed, forwardSpeed } from '../sim/vehicle/carPhysics';
 import { enterableVehicle } from '../sim/vehicle/Vehicle';
 import { Vehicles } from '../sim/vehicle/Vehicles';
+import { lampStands } from '../world/gen/cityFeatures';
 import { CHASE_PITCH_MAX, CHASE_PITCH_MIN } from '../player/CameraController';
+import { botModelUrls, characterUrl, PLAYER_FILE } from '../render/characters/characterSpec';
 
 type State = 'menu' | 'playing' | 'paused' | 'map';
 
@@ -233,10 +235,15 @@ export class Game {
       onClose: () => this.closeMap(),
     });
     this.streamer.addListener(this.worldMap);
-    this.presentation = new Presentation(this.renderer, this.hud, this.camCtl, this.input, this.settings);
+    const charUrls = {
+      bots: botModelUrls(params.charModel, import.meta.env.BASE_URL),
+      player: characterUrl(params.playerModel, import.meta.env.BASE_URL, PLAYER_FILE),
+    };
+    this.presentation = new Presentation(this.renderer, this.hud, this.camCtl, this.input, this.settings, charUrls);
     this.presentation.pickups = this.pickups.items;
     this.presentation.localId = this.me.id;
     this.atmosphere = new Atmosphere(this.renderer, this.materials);
+    if (params.world === 'city') this.atmosphere.lampStands = (cx, cz, i) => lampStands(params.seed, cx, cz, i);
     this.atmosphere.lampsEnabled = params.world === 'city';
     this.atmosphere.onLightning = (delay, strength) => this.sounds.thunder(delay, strength);
     this.weather = new Weather((x, z) => this.roofAt(x, z), this.presentation.particles);
@@ -688,6 +695,7 @@ export class Game {
     const env = this.sim.env;
     this.vehicleRenderer.update(this.sim.vehicles, alpha, this.sim.time, frameMs / 1000, car?.id ?? -1, env.darkness);
     this.breakables.update(this.sim, this.sim.time + alpha * this.sim.dt);
+    this.materials.animate(performance.now() / 1000);
     this.atmosphere.update(env, frameMs / 1000, cam, p.alive && p.flashlight && !car);
     this.presentation.setWorldLight(this.atmosphere.viewmodelLight, env.daylight);
     this.presentation.torches = this.botTorches(env.darkness);

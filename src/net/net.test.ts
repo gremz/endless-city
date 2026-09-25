@@ -372,7 +372,40 @@ describe('driving online', () => {
     expect(one.me.vehicle).toBe(-1);
     expect(Math.hypot(one.me.move.pos.x - host.move.pos.x, one.me.move.pos.z - host.move.pos.z)).toBeLessThan(0.05);
   });
+  it('carries a passenger, who stays in the car on their own screen', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'Driver');
+    const two = joinClient(server, 'Passenger');
+    run(server, [one, two], 48);
+    const driver = server.sim.getActor(one.net.actorId)!;
+    const rider = server.sim.getActor(two.net.actorId)!;
+    teleport(driver, 48.4, 0.05, 40);
+    teleport(rider, 51.6, 0.05, 40);
+    run(server, [one, two], 16);
+    one.cmd.pressed = Buttons.USE;
+    run(server, [one, two], 1);
+    two.cmd.pressed = Buttons.USE;
+    run(server, [one, two], 1);
+    run(server, [one, two], 16);
+    const car = server.sim.vehicles[0];
+    expect(car.driver).toBe(driver.id);
+    expect(car.passengers[0]).toBe(rider.id);
+    expect(two.me.vehicle).toBe(car.id);
+    expect(two.sim.getVehicle(car.id)!.passengers[0]).toBe(rider.id);
+    expect(one.sim.getActor(rider.id)!.vehicle).toBe(car.id);
+
+    run(server, [one, two], 128, () => {
+      one.cmd.forward = 1;
+    });
+    expect(Math.hypot(car.car.pos.x - 50, car.car.pos.z - 40)).toBeGreaterThan(10);
+    // Still aboard on the passenger's side, riding along near the host's car.
+    expect(two.me.vehicle).toBe(car.id);
+    expect(rider.vehicle).toBe(car.id);
+    const seen = two.sim.getVehicle(car.id)!;
+    expect(Math.hypot(two.me.move.pos.x - seen.car.pos.x, two.me.move.pos.z - seen.car.pos.z)).toBeLessThan(1.5);
+  });
 });
+
 
 describe('prediction and lag compensation', () => {
   it('predicts its own movement exactly', () => {

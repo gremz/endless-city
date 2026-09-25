@@ -76,6 +76,11 @@ export interface BuildingInfo {
   cap: Rect;
   /** Wall sides with doors (0 = -Z, 1 = +Z, 2 = -X, 3 = +X). */
   doorSides: number[];
+  /** Solid blocks only: wall material and tint, wall top, and whether it is a glazed tower. */
+  mat?: number;
+  tint?: number;
+  wallTop?: number;
+  tower?: boolean;
 }
 
 export interface GenContext {
@@ -108,6 +113,11 @@ export interface GenContext {
   doorLeaves: number[];
   /** Brush indices of window panes. */
   glass: number[];
+  /**
+   * Window openings to trim with sills and lintels (buildingDetail): alongX (0/1), a, b along the
+   * wall, c0, c1 across it, sill y, head y.
+   */
+  trims: number[];
   /** Ladder nav links: bottom x, y, z, top x, y, z (local meters), then the ladder's outward normal nx, nz. */
   ladders: number[];
 }

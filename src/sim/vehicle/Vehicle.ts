@@ -46,6 +46,8 @@ export interface Vehicle {
   burnUntil: number;
   /** Actor id of the driver, or -1. */
   driver: number;
+  /** Actor ids of passengers, or -1. */
+  passengers: [number, number, number];
   /** Last actor to drive it (credited when it rolls into someone on its own). */
   lastDriver: number;
   lastAttacker: number;
@@ -73,6 +75,7 @@ export function makeVehicle(id: number, x: number, y: number, z: number, yaw: nu
     destroyed: false,
     burnUntil: -1,
     driver: -1,
+    passengers: [-1, -1, -1],
     lastDriver: -1,
     lastAttacker: -1,
     moved: false,
@@ -148,7 +151,7 @@ export function enterableVehicle(sim: Simulation, p: Actor): Vehicle | null {
   let bestD = ENTER_REACH;
   const pos = p.move.pos;
   for (const v of sim.vehicles) {
-    if (v.destroyed || v.driver >= 0) continue;
+    if (v.destroyed || (v.driver >= 0 && v.passengers.every((id) => id >= 0))) continue;
     const dy = pos.y - v.car.pos.y;
     if (dy < -0.8 || dy > 1.6) continue;
     const d = footprintDistance(v.car, pos.x, pos.z);
@@ -160,7 +163,19 @@ export function enterableVehicle(sim: Simulation, p: Actor): Vehicle | null {
   return best;
 }
 
-/** E: get into the nearest car, or out of the one you're driving. */
+/** Which seat an actor has in a car: 0 driver, 1-3 passengers, -1 not in it. */
+export function seatOf(v: Vehicle, id: number): number {
+  if (v.driver === id) return 0;
+  const i = v.passengers.indexOf(id);
+  return i < 0 ? -1 : i + 1;
+}
+
+/** Everyone in a car, driver first. */
+export function occupantIds(v: Vehicle): number[] {
+  return [v.driver, ...v.passengers].filter((id) => id >= 0);
+}
+
+/** E: get into the nearest car, or out of the one you're in. */
 export function useVehicle(sim: Simulation, p: Actor): void {
   const cur = p.vehicle >= 0 ? sim.getVehicle(p.vehicle) : undefined;
   if (cur) {
@@ -173,8 +188,14 @@ export function useVehicle(sim: Simulation, p: Actor): void {
 
 export function enterVehicle(sim: Simulation, p: Actor, v: Vehicle): void {
   p.vehicle = v.id;
-  v.driver = p.id;
-  v.lastDriver = p.id;
+  let seat = 0;
+  if (v.driver < 0) {
+    v.driver = p.id;
+    v.lastDriver = p.id;
+  } else {
+    seat = v.passengers.findIndex((id) => id < 0) + 1;
+    v.passengers[seat - 1] = p.id;
+  }
   v.moved = true;
   // Hands on the wheel: no healing, reloading, scoping or grenade in hand.
   if (p.healEnd >= 0) {
@@ -186,7 +207,7 @@ export function enterVehicle(sim: Simulation, p: Actor, v: Vehicle): void {
   w.scope = 0;
   w.rescopeAt = -1;
   w.pinPulled = false;
-  seatActor(p, v);
+  seatActor(p, v, seat);
   storePrev(p);
   sim.events.push({ type: 'car_door', actorId: p.id, vehicleId: v.id, pos: vec3(v.car.pos.x, v.car.pos.y + 0.8, v.car.pos.z), enter: true });
 }
@@ -217,9 +238,11 @@ export function exitVehicle(sim: Simulation, p: Actor, v: Vehicle, force: boolea
   }
   // The car's own boxes count: nobody gets out inside the door.
   syncVehicleBrushes(sim.world, v);
+  // Out your own side: passengers on the right try the right door first.
+  const flip = SEATS[Math.max(0, seatOf(v, p.id))][1] > 0;
   let found = false;
   for (const [s, t, y] of EXITS) {
-    carPoint(c, s, t, y, spot);
+    carPoint(c, s, flip ? -t : t, y, spot);
     if (sim.world.testBox(tr, spot, STAND_MINS, STAND_MAXS, MASK_PLAYER)) continue;
     found = true;
     break;
@@ -246,24 +269,30 @@ export function exitVehicle(sim: Simulation, p: Actor, v: Vehicle, force: boolea
   m.onGround = false;
   storePrev(p);
   p.vehicle = -1;
-  v.driver = -1;
+  const seat = seatOf(v, p.id);
+  if (seat === 0) v.driver = -1;
+  else if (seat > 0) v.passengers[seat - 1] = -1;
   if (p.alive) equipSlot(p, p.inv.active, sim);
   sim.events.push({ type: 'car_door', actorId: p.id, vehicleId: v.id, pos: vec3(c.pos.x, c.pos.y + 0.8, c.pos.z), enter: false });
   return true;
 }
 
-/** Driver's seat (left front) in car space, and how high the seated hull's feet are. */
-const SEAT_S = -0.15;
-const SEAT_T = -0.42;
-const SEAT_Y = 0.1;
+/** Seats in car space (driver, front right, rear left, rear right), and height. */
+const SEATS: readonly (readonly [number, number, number])[] = [
+  [-0.15, -0.42, 0.1], // driver
+  [-0.15, 0.42, 0.1],  // passenger 1
+  [-1.2, -0.42, 0.1],  // passenger 2
+  [-1.2, 0.42, 0.1],   // passenger 3
+];
 
 /**
- * Pin the driver to the seat. They're crouched there, so their head sits at the side window
+ * Pin the actor to their seat. They're crouched there, so their head sits at the side window
  * where it can be seen and shot.
  */
-export function seatActor(p: Actor, v: Vehicle): void {
+export function seatActor(p: Actor, v: Vehicle, seatIndex = 0): void {
   const m = p.move;
-  carPoint(v.car, SEAT_S, SEAT_T, SEAT_Y, m.pos);
+  const [s, t, y] = SEATS[seatIndex] || SEATS[0];
+  carPoint(v.car, s, t, y, m.pos);
   m.vel.x = v.car.vel.x;
   m.vel.y = v.car.vel.y;
   m.vel.z = v.car.vel.z;
@@ -285,7 +314,7 @@ export function driveVehicle(sim: Simulation, p: Actor, v: Vehicle, cmd: UserCmd
   input.handbrake = v.destroyed || (cmd.buttons & Buttons.JUMP) !== 0;
   const impact = stepCar(v.car, input, sim.world, sim.dt, v.id);
   if (impact > 0) crashed(sim, v, impact, p.id);
-  seatActor(p, v);
+  seatActor(p, v, 0);
   const speed = carSpeed(v.car);
   if (speed > 1 && sim.time >= v.noiseAt) {
     v.noiseAt = sim.time + 0.4;
@@ -326,7 +355,7 @@ export function damageVehicle(sim: Simulation, v: Vehicle, amount: number, attac
   if (v.health <= 0) destroyVehicle(sim, v);
 }
 
-/** Burn a car out: the driver is thrown clear and hurt, and the wreck burns for a while. */
+/** Burn a car out: everyone inside is thrown clear and hurt, and the wreck burns for a while. */
 export function destroyVehicle(sim: Simulation, v: Vehicle): void {
   v.health = 0;
   v.destroyed = true;
@@ -336,22 +365,25 @@ export function destroyVehicle(sim: Simulation, v: Vehicle): void {
   c.vel.z *= 0.3;
   const pos = vec3(c.pos.x, c.pos.y + 0.5, c.pos.z);
   const attacker = sim.getActor(v.lastAttacker) ?? null;
-  const driver = v.driver >= 0 ? sim.getActor(v.driver) : undefined;
-  if (driver) {
-    exitVehicle(sim, driver, v, true);
-    const by = attacker && attacker !== driver && sim.canHit(attacker, driver) ? attacker : driver;
+  const occupants = occupantIds(v)
+    .map((id) => sim.getActor(id))
+    .filter((a): a is Actor => !!a);
+
+  for (const occ of occupants) {
+    exitVehicle(sim, occ, v, true);
+    const by = attacker && attacker !== occ && sim.canHit(attacker, occ) ? attacker : occ;
     sim.onHit({
       attacker: by,
-      victim: driver,
+      victim: occ,
       def: { ...CAR_HIT, damage: WRECK_INJURY },
       group: HitGroup.Chest,
       distance: 0,
       damageScale: 1,
       penetrated: false,
-      pos: vec3(driver.move.pos.x, driver.move.pos.y + 1, driver.move.pos.z),
+      pos: vec3(occ.move.pos.x, occ.move.pos.y + 1, occ.move.pos.z),
     });
   }
-  const owner = attacker ?? driver ?? sim.getActor(v.lastDriver) ?? null;
+  const owner = attacker ?? occupants[0] ?? sim.getActor(v.lastDriver) ?? null;
   if (owner) sim.grenades.ignite(vec3(c.pos.x, c.pos.y + 0.05, c.pos.z), owner, BURN_TIME, 2.6);
   sim.events.push({ type: 'nade_detonate', kind: 'hegrenade', pos, airburst: false, normal: null, chunkKey: -1 });
   sim.events.push({ type: 'sound', pos, radius: 80, kind: 'grenade', sourceId: owner?.id ?? -1 });
@@ -365,4 +397,3 @@ export const RUN_OVER_SPEED = 4;
 export function runOverDamage(speed: number): number {
   return speed < RUN_OVER_SPEED ? 0 : (speed - 3) * 12;
 }
-

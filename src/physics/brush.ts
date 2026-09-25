@@ -21,6 +21,8 @@ export const Contents = {
    * that faces away from the wall.
    */
   LADDER: 32,
+  /** Water volume (not solid): wading slows you down. */
+  WATER: 64,
   /**
    * Breakable glass: blocks movement (it's in MASK_PLAYER) but not sight. Bullets and grenades
    * break it and fly on.
@@ -32,6 +34,7 @@ export const SOLID = Contents.SOLID_PLAYER | Contents.SOLID_BULLET | Contents.VI
 export const MASK_PLAYER = Contents.SOLID_PLAYER | Contents.GLASS;
 export const MASK_SHOT = Contents.SOLID_BULLET;
 export const MASK_LADDER = Contents.LADDER;
+export const MASK_WATER = Contents.WATER;
 export const MASK_SHOT_GLASS = Contents.SOLID_BULLET | Contents.GLASS;
 
 /** Dynamic brush owners from here up are doors (below are vehicles). */

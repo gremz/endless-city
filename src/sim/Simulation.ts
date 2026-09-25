@@ -22,7 +22,7 @@ import { DoorSystem } from './Doors';
 import { GlassSystem } from './Glass';
 import { GrenadeSystem } from './Grenades';
 import { updateHeal } from './medkit';
-import { damageVehicle, driveVehicle, exitVehicle, storeVehiclePrev, useVehicle, type Vehicle } from './vehicle/Vehicle';
+import { damageVehicle, driveVehicle, exitVehicle, storeVehiclePrev, useVehicle, occupantIds, seatActor, seatOf, type Vehicle } from './vehicle/Vehicle';
 
 export interface SimOptions {
   autoBhop: boolean;
@@ -159,17 +159,20 @@ export class Simulation implements WeaponContext {
     this.vehicles.push(v);
   }
 
-  /** Take a car out of the world (its driver, if any, is left standing where they sat). */
+  /** Take a car out of the world (anyone in it is left standing where they sat). */
   removeVehicle(v: Vehicle): void {
     const i = this.vehicles.indexOf(v);
     if (i >= 0) this.vehicles.splice(i, 1);
     this.world.clearDynamic(v.id);
-    const d = v.driver >= 0 ? this.getActor(v.driver) : undefined;
-    if (d && d.vehicle === v.id) d.vehicle = -1;
+    for (const id of occupantIds(v)) {
+      const a = this.getActor(id);
+      if (a && a.vehicle === v.id) a.vehicle = -1;
+    }
     v.driver = -1;
+    v.passengers.fill(-1);
   }
 
-  /** The car an actor is driving. */
+  /** The car an actor is in (driving or riding). */
   vehicleOf(a: Actor): Vehicle | undefined {
     return a.vehicle >= 0 ? this.getVehicle(a.vehicle) : undefined;
   }
@@ -268,9 +271,11 @@ export class Simulation implements WeaponContext {
     }
     const car = this.vehicleOf(p);
     if (car) {
-      // Driving: the car moves, the driver rides along with their guns put away.
-      driveVehicle(this, p, car, cmd);
-      return;
+      // Driving: the car moves, the driver rides along with their guns put away. Passengers just ride.
+      const seat = seatOf(car, p.id);
+      if (seat === 0) driveVehicle(this, p, car, cmd);
+      else if (seat > 0) seatActor(p, car, seat);
+      if (seat >= 0) return;
     }
     p.vehicle = -1;
     const wasGround = p.move.onGround;

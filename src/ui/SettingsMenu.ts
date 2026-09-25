@@ -109,6 +109,10 @@ export class SettingsMenu {
         [2048, 'High'],
       ]),
       this.slider('Render scale', 'renderScale', 0.5, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this.select('Characters', 'characters', [
+        ['detailed', 'Detailed'],
+        ['simple', 'Simple'],
+      ]),
       this.select('Rain particles', 'rainParticles', [
         [0, 'Off'],
         [0.5, 'Low'],

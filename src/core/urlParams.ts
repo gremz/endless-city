@@ -20,6 +20,14 @@ export interface GameParams {
   hour: number | null;
   /** Fixed weather, or null for the seeded forecast. */
   weather: WeatherKind | null;
+  /**
+   * Bot model override (local only): 'placeholder' for the generated stand-in, a bot id
+   * ('gang_biker'), 'soldier', 'none' for the box figures, or a path under the site root; the one
+   * model is used for every bot. Null loads the gang and terrorist models.
+   */
+  charModel: string | null;
+  /** Same for the player character (`?playermodel=`); null loads the generated SWAT. */
+  playerModel: string | null;
 }
 
 const WEATHERS: readonly WeatherKind[] = ['clear', 'overcast', 'rain', 'fog', 'storm'];
@@ -54,5 +62,7 @@ export function parseParams(search: string, randomSeed: number): GameParams {
     tickRate: Number.isFinite(tickRate) && tickRate >= 8 && tickRate <= 256 ? tickRate : 64,
     hour: Number.isFinite(hour) ? ((hour % 24) + 24) % 24 : null,
     weather: weatherRaw && WEATHERS.includes(weatherRaw) ? weatherRaw : null,
+    charModel: q.get('charmodel') || null,
+    playerModel: q.get('playermodel') || null,
   };
 }

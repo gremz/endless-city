@@ -24,6 +24,8 @@ export interface PathOptions {
   maxExpansions?: number;
 }
 
+/** Extra cost of wading a cell (bots take a bridge when there is one). */
+const WATER_COST = 3;
 /** Cost of stepping into a hazard cell: high enough to go around, low enough to walk out of one. */
 const HAZARD_COST = 40;
 type CellTest = ((gx: number, gz: number) => boolean) | undefined;
@@ -261,6 +263,7 @@ export class AStar {
         decode(ni);
         let cost = COST[d];
         if (nflags & NavFlag.NearWall) cost += 0.4;
+        if (nflags & NavFlag.Water) cost += WATER_COST;
         if (opts.extraCost) cost += opts.extraCost(nx, nz);
         if (opts.hazard?.(nx, nz)) cost += HAZARD_COST;
         const ng = g[cur] + cost;

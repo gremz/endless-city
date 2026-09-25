@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Endless City – character viewer</title>
+    <style>
+      body { margin: 0; background: #16181b; color: #ddd; font: 13px system-ui, sans-serif; overflow: hidden; }
+      [hidden] { display: none !important; }
+      #view { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; }
+      #panel {
+        position: fixed; top: 8px; left: 8px; bottom: 8px; width: 290px; overflow-y: auto;
+        background: rgba(20, 22, 26, 0.88); border: 1px solid #333; border-radius: 6px; padding: 10px 12px;
+      }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8b95a1; margin: 14px 0 6px; }
+      label { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+      label > span:first-child { width: 78px; flex: none; color: #aab; }
+      input[type='range'] { flex: 1; min-width: 0; }
+      input[type='text'], select { flex: 1; min-width: 0; background: #22262b; color: #ddd; border: 1px solid #3a3f46; border-radius: 3px; padding: 2px 4px; }
+      output { width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: #cfd6de; }
+      button { background: #2b3138; color: #ddd; border: 1px solid #454c55; border-radius: 3px; padding: 3px 8px; cursor: pointer; }
+      button:hover { background: #353c45; }
+      .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+      #report { white-space: pre-wrap; font: 11px ui-monospace, monospace; color: #b8c0c8; }
+      #report .err { color: #ff8a80; }
+      #report .warn { color: #ffd180; }
+      #weights { font: 11px ui-monospace, monospace; color: #9fb3c8; white-space: pre; }
+      .hint { color: #7c8792; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="panel">
+      <h1>Character viewer</h1>
+      <label><span>Model</span>
+        <select id="model">
+          <option value="">soldier.glb</option>
+          <option value="player">player.glb (SWAT)</option>
+          <option value="placeholder">placeholder.glb</option>
+          <option value="custom">other path…</option>
+        </select>
+      </label>
+      <label id="customRow" hidden><span>Path</span><input id="custom" type="text" placeholder="models/characters/mine.glb" /></label>
+      <div class="row"><button id="reload">Reload</button><span class="hint">re-export, then Reload</span></div>
+
+      <h2>Mode</h2>
+      <label><span>Drive by</span>
+        <select id="mode">
+          <option value="game">game logic (as in play)</option>
+          <option value="clip">single clip</option>
+        </select>
+      </label>
+      <label id="clipRow" hidden><span>Clip</span><select id="clip"></select></label>
+
+      <h2>Actor</h2>
+      <label><span>Speed m/s</span><input id="speed" type="range" min="0" max="8" step="0.05" value="0" /><output id="speedOut"></output></label>
+      <label><span>Direction°</span><input id="dir" type="range" min="-180" max="180" step="5" value="0" /><output id="dirOut"></output></label>
+      <label><span>Crouch</span><input id="crouch" type="range" min="0" max="1" step="0.05" value="0" /><output id="crouchOut"></output></label>
+      <label><span>Aim pitch°</span><input id="pitch" type="range" min="-60" max="60" step="1" value="0" /><output id="pitchOut"></output></label>
+      <label><span>Playback ×</span><input id="rate" type="range" min="0" max="2" step="0.05" value="1" /><output id="rateOut"></output></label>
+      <label><span>Airborne</span><input id="air" type="checkbox" /></label>
+      <label><span>Weapon</span><select id="weapon"></select></label>
+      <label><span>Look</span>
+        <select id="look">
+          <option value="bot">bot</option>
+          <option value="elite">elite (armour + helmet)</option>
+          <option value="ally">ally (co-op)</option>
+          <option value="dummy">range dummy</option>
+        </select>
+      </label>
+      <label><span>Helmet</span><input id="helmet" type="checkbox" /></label>
+      <label><span>Vest</span><input id="vest" type="checkbox" /></label>
+      <label><span>Flashlight</span><input id="torch" type="checkbox" /></label>
+      <div class="row">
+        <button data-overlay="shot">Shoot</button>
+        <button data-overlay="reload">Reload</button>
+        <button data-overlay="nade_throw">Throw</button>
+        <button data-overlay="hit">Hit</button>
+        <button id="die">Die</button>
+      </div>
+
+      <h2>Show</h2>
+      <label><span>Hitboxes</span><input id="hitboxes" type="checkbox" checked /></label>
+      <label><span>Collision</span><input id="hull" type="checkbox" /></label>
+      <label><span>Follow</span><input id="follow" type="checkbox" checked /></label>
+      <div id="weights"></div>
+
+      <h2>File check</h2>
+      <div id="report">loading…</div>
+    </div>
+    <script type="module" src="/src/devtools/modelViewer.ts"></script>
+  </body>
+</html>

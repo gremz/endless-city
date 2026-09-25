@@ -389,3 +389,28 @@ describe('pmove mantling', () => {
     expect(s.pos.y).toBeLessThan(0.1);
   });
 });
+
+describe('pmove wading', () => {
+  it('is slower and jumps lower waist-deep in water', () => {
+    const water = { min: [-50, 0, -50] as [number, number, number], max: [50, 1.2, 50] as [number, number, number], contents: Contents.WATER };
+    const dry = worldFrom([FLOOR]);
+    const wet = worldFrom([FLOOR, water]);
+    const top = (w: typeof dry) => {
+      const s = makeMoveState(0, 0.01, 0);
+      settle(s, w);
+      const cmd = makeCmd();
+      cmd.forward = 1;
+      run(s, w, cmd, 128);
+      const speed = toHU(length2D(s.vel));
+      cmd.pressed = Buttons.JUMP;
+      let peak = 0;
+      run(s, w, cmd, 64, () => (peak = Math.max(peak, s.pos.y)));
+      return { speed, peak, inWater: s.inWater };
+    };
+    const a = top(dry);
+    const b = top(wet);
+    expect(b.inWater).toBe(true);
+    expect(b.speed).toBeLessThan(a.speed * 0.6);
+    expect(b.peak).toBeLessThan(a.peak * 0.5);
+  });
+});

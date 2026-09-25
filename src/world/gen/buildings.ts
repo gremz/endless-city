@@ -44,6 +44,8 @@ export function wall(
   contents: number = SOLID,
   /** Brush indices of the panes put into glazed openings are pushed here. */
   panes: number[] | null = null,
+  /** Window openings are recorded here for sills and lintels (GenContext.trims). */
+  trims: number[] | null = null,
 ): void {
   const put = (s0: number, s1: number, yb: number, yt: number) => {
     if (s1 - s0 < 0.01 || yt - yb < 0.01) return;
@@ -51,6 +53,7 @@ export function wall(
     else w.box(c0, yb, s0, c1, yt, s1, mat, contents, tint);
   };
   const mid = (c0 + c1) / 2;
+  if (trims) for (const o of openings) if (o.bottom > 0.3) trims.push(alongX ? 1 : 0, o.a, o.b, c0, c1, y0 + o.bottom, y0 + o.top);
   for (const o of openings) {
     if (!o.glass || !panes) continue;
     const g0 = mid - PANE_T / 2;
@@ -129,9 +132,9 @@ export function lockDoor(ctx: GenContext, at: number): void {
 }
 
 /** Record the roof cap just written (the last brush) for the rooftop pass. */
-function roof(ctx: GenContext, kind: BuildingInfo['kind'], fp: Rect, floors: number, roofY: number, overhang: number, doorSides: number[]): void {
+function roof(ctx: GenContext, kind: BuildingInfo['kind'], fp: Rect, floors: number, roofY: number, overhang: number, doorSides: number[], extra?: Partial<BuildingInfo>): void {
   const cap = rect(fp.x0 - overhang, fp.z0 - overhang, fp.x1 + overhang, fp.z1 + overhang);
-  ctx.buildings.push({ kind, fp, floors, roofY, capBrush: ctx.w.count - 1, cap, doorSides });
+  ctx.buildings.push({ kind, fp, floors, roofY, capBrush: ctx.w.count - 1, cap, doorSides, ...extra });
 }
 
 export function buildBuilding(ctx: GenContext, parcel: Rect): boolean {
@@ -156,15 +159,15 @@ function solidBlock(ctx: GenContext, fp: Rect, floors: number, mat: number, tint
   const height = Math.max(3.2, floors * FLOOR_H);
   const downtown = ctx.district.id === District.Downtown;
   if (downtown && floors >= 3) {
-    // Tower: alternating wall bands and recessed window bands.
+    // Tower: a spandrel band per floor under a recessed ribbon of curtain-wall glazing.
     w.box(fp.x0, lotY, fp.z0, fp.x1, lotY + FLOOR_H, fp.z1, mat, SOLID, tint);
     for (let f = 1; f < floors; f++) {
       const y = lotY + f * FLOOR_H;
-      w.box(fp.x0 + 0.15, y, fp.z0 + 0.15, fp.x1 - 0.15, y + 1.3, fp.z1 - 0.15, Material.Metal, SOLID, 1);
-      w.box(fp.x0, y + 1.3, fp.z0, fp.x1, y + FLOOR_H, fp.z1, mat, SOLID, tint);
+      w.box(fp.x0, y, fp.z0, fp.x1, y + 1.0, fp.z1, mat, SOLID, tint);
+      w.box(fp.x0 + 0.15, y + 1.0, fp.z0 + 0.15, fp.x1 - 0.15, y + FLOOR_H, fp.z1 - 0.15, Material.CurtainWall, SOLID, f * 41);
     }
     w.box(fp.x0 - 0.1, lotY + height, fp.z0 - 0.1, fp.x1 + 0.1, lotY + height + 0.5, fp.z1 + 0.1, mat, SOLID, tint);
-    roof(ctx, 'block', fp, floors, lotY + height + 0.5, 0.1, []);
+    roof(ctx, 'block', fp, floors, lotY + height + 0.5, 0.1, [], { mat, tint, wallTop: lotY + height, tower: true });
   } else {
     w.box(fp.x0, lotY, fp.z0, fp.x1, lotY + height, fp.z1, mat, SOLID, tint);
     // Floor-line ledges (above head height, so they never block walking).
@@ -174,7 +177,7 @@ function solidBlock(ctx: GenContext, fp: Rect, floors: number, mat: number, tint
     }
     // Parapet cap.
     w.box(fp.x0 - 0.1, lotY + height, fp.z0 - 0.1, fp.x1 + 0.1, lotY + height + 0.3, fp.z1 + 0.1, mat, SOLID, Math.max(0, tint - 40));
-    roof(ctx, 'block', fp, floors, lotY + height + 0.3, 0.1, []);
+    roof(ctx, 'block', fp, floors, lotY + height + 0.3, 0.1, [], { mat, tint, wallTop: lotY + height });
   }
   // Rooftop box (AC unit / stair house).
   if (r() < 0.6 && rw(fp) > 4 && rd(fp) > 4) {
@@ -225,7 +228,7 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
       if (ctx.rb() < 0.65) leaves.push(doorLeaf(ctx, px, pz, s.alongX, -(nx + nz), DOOR_W, DOOR_H, 0));
     }
     const ops = wallOpenings(r, s.a0, s.a1, door, true, 1.0, 2.0, ctx.rb);
-    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, groundH, ops, mat, tint, SOLID, ctx.glass);
+    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, groundH, ops, mat, tint, SOLID, ctx.glass, ctx.trims);
   }
   // With another way in, one door may be locked (bots and players can breach it).
   if (leaves.length >= 2 && ctx.rb() < 0.35) lockDoor(ctx, leaves[Math.floor(ctx.rb() * leaves.length)]);
@@ -274,7 +277,7 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   const upperH = 3.0;
   for (const s of sides) {
     const ops = wallOpenings(r, s.a0, s.a1, null, true, 0.9, 2.1, ctx.rb);
-    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, upperY, upperH, ops, mat, tint, SOLID, ctx.glass);
+    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, upperY, upperH, ops, mat, tint, SOLID, ctx.glass, ctx.trims);
   }
   const roofY = upperY + upperH;
   w.box(fp.x0, roofY, fp.z0, fp.x1, roofY + SLAB_T, fp.z1, mat, SOLID, Math.max(0, tint - 30));

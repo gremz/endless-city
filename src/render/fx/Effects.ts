@@ -206,6 +206,12 @@ const IMPACT_COLORS: Record<number, [number, number, number]> = {
   [Material.CarWheel]: [0.18, 0.18, 0.18],
   [Material.CarTrim]: [0.4, 0.4, 0.4],
   [Material.Glass]: [0.8, 0.92, 1],
+  [Material.Water]: [0.7, 0.8, 0.85],
+  [Material.Grass]: [0.3, 0.42, 0.18],
+  [Material.Stone]: [0.72, 0.7, 0.66],
+  [Material.RoofTar]: [0.3, 0.3, 0.3],
+  [Material.Facade]: [0.8, 0.92, 1],
+  [Material.CurtainWall]: [0.8, 0.92, 1],
 };
 
 /** Impact dust, sparks and blood: one Points object with CPU-simulated particles. */

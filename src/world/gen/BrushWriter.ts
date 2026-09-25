@@ -1,10 +1,16 @@
 import { Contents, Ramp, SOLID, type RampDir } from '../../physics/brush';
 import { BRUSH_STRIDE, Material, packBrushWord, wordContents, wordMaterial, wordRamp } from './ChunkData';
 
+/** Spatial index: GRID x GRID cells of GRID_CM centimeters over the chunk. */
+const GRID = 16;
+const GRID_CM = 400;
+
 /** Growable brush buffer. Inputs are chunk-local meters, stored as integer centimeters. */
 export class BrushWriter {
   private data: Int32Array;
   count = 0;
+  /** Optional spatial index for overlap queries: brush indices per GRID x GRID cell (see indexed). */
+  private cells: number[][] | null = null;
 
   constructor(capacity = 512) {
     this.data = new Int32Array(capacity * BRUSH_STRIDE);
@@ -45,7 +51,27 @@ export class BrushWriter {
     d[o + 5] = bz;
     d[o + 6] = packBrushWord(ramp, material, contents);
     d[o + 7] = tint & 255;
+    if (this.cells) this.addToCells(this.count);
     this.count++;
+  }
+
+  /** Start keeping a spatial index, so many overlap queries on a full chunk stay cheap. */
+  indexed(): void {
+    if (this.cells) return;
+    this.cells = Array.from({ length: GRID * GRID }, () => []);
+    for (let i = 0; i < this.count; i++) this.addToCells(i);
+  }
+
+  private cellRange(x0: number, z0: number, x1: number, z1: number): [number, number, number, number] {
+    const c = (v: number) => Math.min(GRID - 1, Math.max(0, Math.floor(v / GRID_CM)));
+    return [c(x0), c(z0), c(x1), c(z1)];
+  }
+
+  private addToCells(i: number): void {
+    const o = i * BRUSH_STRIDE;
+    const d = this.data;
+    const [i0, j0, i1, j1] = this.cellRange(d[o], d[o + 2], d[o + 3] - 1, d[o + 5] - 1);
+    for (let j = j0; j <= j1; j++) for (let k = i0; k <= i1; k++) this.cells![j * GRID + k].push(i);
   }
 
   /** Wedge rising towards `dir` from y0 to y1. */
@@ -191,21 +217,65 @@ export class BrushWriter {
    * overhangs), the climbable volume in front of it, and visible rails and rungs. `side` is the
    * wall's outward direction (0 = -Z, 1 = +Z, 2 = -X, 3 = +X), `face` the wall plane coordinate,
    * `a` the ladder's center along the wall. The volume reaches 1 m above `top` so climbers get
-   * carried over the edge.
+   * carried over the edge. `tint` is the metal palette index.
    */
-  ladder(side: number, face: number, a: number, y0: number, top: number): void {
+  ladder(side: number, face: number, a: number, y0: number, top: number, tint = 4): void {
     const out = side === 0 || side === 2 ? -1 : 1;
     const alongX = side <= 1;
     const put = (d0: number, d1: number, a0: number, a1: number, yb: number, yt: number, contents: number) => {
       const c0 = face + out * d0;
       const c1 = face + out * d1;
-      if (alongX) this.box(a0, yb, c0, a1, yt, c1, Material.Metal, contents, 4);
-      else this.box(c0, yb, a0, c1, yt, a1, Material.Metal, contents, 4);
+      if (alongX) this.box(a0, yb, c0, a1, yt, c1, Material.Metal, contents, tint);
+      else this.box(c0, yb, a0, c1, yt, a1, Material.Metal, contents, tint);
     };
     put(0, 0.15, a - 0.4, a + 0.4, y0, top, Contents.SOLID_PLAYER);
     put(0.15, 0.45, a - 0.4, a + 0.4, y0, top + 1, Contents.LADDER);
     for (const r of [-0.37, 0.31]) put(0.15, 0.21, a + r, a + r + 0.06, y0, top + 0.9, Contents.VISIBLE);
     for (let y = y0 + 0.3; y < top + 0.05; y += 0.3) put(0.16, 0.2, a - 0.31, a + 0.31, y - 0.04, y, Contents.VISIBLE);
+  }
+
+  /**
+   * Visit every brush overlapping the open box (touching faces don't count), with its bounds in
+   * meters. Return true from `fn` to stop early; returns whether it stopped.
+   */
+  forOverlaps(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, fn: (bx0: number, bz0: number, bx1: number, bz1: number) => boolean | void): boolean {
+    const ax = Math.round(x0 * 100);
+    const ay = Math.round(y0 * 100);
+    const az = Math.round(z0 * 100);
+    const bx = Math.round(x1 * 100);
+    const by = Math.round(y1 * 100);
+    const bz = Math.round(z1 * 100);
+    const d = this.data;
+    const test = (i: number) => {
+      const o = i * BRUSH_STRIDE;
+      if (d[o] >= bx || d[o + 3] <= ax || d[o + 1] >= by || d[o + 4] <= ay || d[o + 2] >= bz || d[o + 5] <= az) return false;
+      if (wordContents(d[o + 6]) === 0) return false;
+      return fn(d[o] / 100, d[o + 2] / 100, d[o + 3] / 100, d[o + 5] / 100) === true;
+    };
+    if (!this.cells) {
+      for (let i = 0; i < this.count; i++) if (test(i)) return true;
+      return false;
+    }
+    // A brush spanning several cells is listed in each: visit it once.
+    const [i0, j0, i1, j1] = this.cellRange(ax, az, bx - 1, bz - 1);
+    const seen = i0 === i1 && j0 === j1 ? null : new Set<number>();
+    for (let j = j0; j <= j1; j++) {
+      for (let k = i0; k <= i1; k++) {
+        for (const i of this.cells[j * GRID + k]) {
+          if (seen) {
+            if (seen.has(i)) continue;
+            seen.add(i);
+          }
+          if (test(i)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Whether any brush overlaps the open box. */
+  overlaps(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean {
+    return this.forOverlaps(x0, y0, z0, x1, y1, z1, () => true);
   }
 
   /** OR contents bits into brush i (e.g. making a roof walkable once it gets an access route). */

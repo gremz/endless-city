@@ -8,7 +8,7 @@ import type { Simulation } from '../sim/Simulation';
 import type { Vehicle } from '../sim/vehicle/Vehicle';
 import { makeInventory, makeItem, syncGrenade, type Inventory } from '../weapons/Inventory';
 import { WEAPONS } from '../weapons/weaponDefs';
-import { makeVehicle, storeVehiclePrev, syncVehicleBrushes } from '../sim/vehicle/Vehicle';
+import { makeVehicle, occupantIds, storeVehiclePrev, syncVehicleBrushes } from '../sim/vehicle/Vehicle';
 import { CarFlag, Flag, fromNetPickup, type NetActor, type NetInv, type NetVehicle, type PrivateState, type ServerMsg, type Snapshot } from './protocol';
 
 /** Other actors are drawn this far in the past, between two snapshots that already arrived. */
@@ -162,7 +162,7 @@ export class Mirror {
   private applyVehicles(s: Snapshot): void {
     const sim = this.sim;
     const me = sim.getActor(this.localId);
-    const mine = this.predicted && me ? me.vehicle : -1;
+    const mine = this.predicted && me ? drivenBy(sim, me) : -1;
     const seen = this.seenCars;
     seen.clear();
     for (const nv of s.vehicles) {
@@ -184,8 +184,10 @@ export class Mirror {
     }
     for (const a of sim.actors) a.vehicle = -1;
     for (const v of sim.vehicles) {
-      const d = v.driver >= 0 ? sim.getActor(v.driver) : undefined;
-      if (d) d.vehicle = v.id;
+      for (const id of occupantIds(v)) {
+        const a = sim.getActor(id);
+        if (a) a.vehicle = v.id;
+      }
     }
   }
 
@@ -213,7 +215,7 @@ export class Mirror {
       a.move.duckAmount = p.duck;
     }
     const me = sim.getActor(this.localId);
-    const mine = this.predicted && me ? me.vehicle : -1;
+    const mine = this.predicted && me ? drivenBy(sim, me) : -1;
     for (const v of sim.vehicles) {
       if (v.id !== mine) {
         const list = this.carSamples.get(v.id);
@@ -349,6 +351,9 @@ function applyVehicle(v: Vehicle, n: NetVehicle): void {
   v.destroyed = !!(n.flags & CarFlag.Destroyed);
   v.health = n.health;
   v.driver = n.driver;
+  v.passengers[0] = n.passengers[0];
+  v.passengers[1] = n.passengers[1];
+  v.passengers[2] = n.passengers[2];
   v.burnUntil = n.burnUntil;
 }
 
@@ -400,4 +405,10 @@ export function unpackInv(n: NetInv): Inventory {
   inv.active = n.a;
   if (!inv[inv.active]) inv.active = inv.primary ? 'primary' : inv.secondary ? 'secondary' : 'knife';
   return inv;
+}
+
+/** The car an actor is driving (the one their own prediction moves), or -1. */
+function drivenBy(sim: Simulation, a: Actor): number {
+  const v = sim.vehicleOf(a);
+  return v && v.driver === a.id ? v.id : -1;
 }

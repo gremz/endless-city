@@ -111,6 +111,9 @@ export class Atmosphere {
     scene.add(this.flashlight, this.flashlight.target);
   }
 
+  /** Which street lamps exist (the city sets it: none stand in the river). */
+  lampStands: ((cx: number, cz: number, i: number) => boolean) | null = null;
+
   update(env: Env, frameDt: number, camera: THREE.PerspectiveCamera, flashlightOn: boolean): void {
     this.clock += frameDt;
     const r = this.renderer;
@@ -215,6 +218,7 @@ export class Atmosphere {
       glass.emissive.set('#ffd9a0');
       glass.emissiveIntensity = 0.15 + level * 1.4;
     }
+    this.materials?.setNightGlow(level);
     const cam = camera.position;
     const ccx = Math.floor(cam.x / CHUNK);
     const ccz = Math.floor(cam.z / CHUNK);
@@ -226,7 +230,9 @@ export class Atmosphere {
         for (let dx = -GLOW_RANGE; dx <= GLOW_RANGE; dx++) {
           const ox = (ccx + dx) * CHUNK;
           const oz = (ccz + dz) * CHUNK;
-          for (const [lx, lz] of LAMPS) {
+          for (let li = 0; li < LAMPS.length; li++) {
+            if (this.lampStands && !this.lampStands(ccx + dx, ccz + dz, li)) continue;
+            const [lx, lz] = LAMPS[li];
             const x = ox + lx;
             const z = oz + lz;
             this.m.compose(this.v.set(x, 0.16, z), this.q, this.s.set(9, 9, 1));

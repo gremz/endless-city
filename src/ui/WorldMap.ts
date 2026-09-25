@@ -6,6 +6,7 @@ import { LOT0 } from '../world/gen/streets';
 import type { StreamerListener } from '../world/WorldStreamer';
 import { el } from './dom';
 import { drawAlly, drawStash } from './Minimap';
+import { chunkPlan, type ChunkPlan } from '../world/gen/cityPlan';
 import { drawChunkTopdown } from './minimapRaster';
 
 /** Resolution of the cached per-chunk bitmaps (px per meter). */
@@ -66,6 +67,7 @@ export class WorldMap implements StreamerListener {
   readonly explored = new Set<number>();
   private bitmaps = new Map<number, HTMLCanvasElement>();
   private districts = new Map<number, number>();
+  private plans = new Map<number, ChunkPlan>();
   private view: WorldMapView | null = null;
   private cx = 0;
   private cz = 0;
@@ -222,6 +224,17 @@ export class WorldMap implements StreamerListener {
     return d;
   }
 
+  private planOf(cx: number, cz: number): ChunkPlan {
+    const key = chunkKey(cx, cz);
+    let p = this.plans.get(key);
+    if (!p) {
+      p = chunkPlan(this.opts.seed, cx, cz);
+      if (this.plans.size > 20000) this.plans.clear();
+      this.plans.set(key, p);
+    }
+    return p;
+  }
+
   private toWorld(clientX: number, clientY: number): [number, number] {
     const r = this.canvas.getBoundingClientRect();
     return [this.cx + (clientX - r.left - r.width / 2) / this.scale, this.cz + (clientY - r.top - r.height / 2) / this.scale];
@@ -267,7 +280,9 @@ export class WorldMap implements StreamerListener {
             : this.explored.has(key)
               ? 'explored'
               : 'unexplored';
-    this.hover.textContent = `Cursor: ${DISTRICT_NAMES[this.districtOf(cx, cz)]} · level ${this.opts.levelAt(cx, cz)} · ${status}`;
+    const plan = this.planOf(cx, cz);
+    const place = plan.river ? 'River' : plan.feature === 'park' ? 'Park' : plan.feature === 'plaza' ? 'Plaza' : DISTRICT_NAMES[this.districtOf(cx, cz)];
+    this.hover.textContent = `Cursor: ${place} · level ${this.opts.levelAt(cx, cz)} · ${status}`;
   }
 
   private requestDraw(): void {
@@ -316,8 +331,21 @@ export class WorldMap implements StreamerListener {
           continue;
         }
         ctx.globalAlpha = explored ? 0.8 : 0.3;
-        ctx.fillStyle = DISTRICT_COLORS[this.districtOf(cx, cz)];
-        ctx.fillRect(cx * CHUNK + LOT0, cz * CHUNK + LOT0, inner, inner);
+        const plan = this.planOf(cx, cz);
+        if (plan.river) {
+          // The river shows even where you haven't been.
+          ctx.globalAlpha = explored ? 0.9 : 0.6;
+          ctx.fillStyle = '#2f6f96';
+          ctx.fillRect(cx * CHUNK, cz * CHUNK, CHUNK, CHUNK);
+        } else {
+          ctx.fillStyle = plan.feature === 'park' ? '#4f7a3a' : plan.feature === 'plaza' ? '#b9b2a2' : DISTRICT_COLORS[this.districtOf(cx, cz)];
+          ctx.fillRect(cx * CHUNK + LOT0, cz * CHUNK + LOT0, inner, inner);
+        }
+        if (plan.highwayWest) {
+          ctx.globalAlpha = explored ? 0.8 : 0.45;
+          ctx.fillStyle = '#9a9a92';
+          ctx.fillRect(cx * CHUNK - 4, cz * CHUNK, 8, CHUNK);
+        }
       }
     }
     ctx.globalAlpha = 1;

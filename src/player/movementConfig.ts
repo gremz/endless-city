@@ -43,6 +43,9 @@ export const MOVE = {
   /** Pull-up speeds: up, then over the edge. */
   mantleUpSpeed: 4.5,
   mantleOverSpeed: 3,
+  /** Wading waist-deep: speed and jump multipliers. */
+  wadeMul: 0.55,
+  wadeJumpMul: 0.6,
   /** Landing speed above which a fall hurts, and the speed that kills (CS: 580 / 1024 HU/s). */
   safeFallSpeed: 580 * HU,
   fatalFallSpeed: 1024 * HU,

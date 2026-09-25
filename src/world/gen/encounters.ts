@@ -35,7 +35,7 @@ export function placeEncounters(
     const j = (c - i) / N;
     if (i < 2 || j < 2 || i >= N - 2 || j >= N - 2) continue;
     const f = nav.flags[s];
-    if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & NavFlag.Street) continue;
+    if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & (NavFlag.Street | NavFlag.Water)) continue;
     let score = r();
     if (f & NavFlag.CoverFull) score += 2;
     else if (f & NavFlag.CoverHalf) score += 1.5;

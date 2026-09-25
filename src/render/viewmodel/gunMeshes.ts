@@ -13,6 +13,8 @@ export interface GunModel {
   muzzle: THREE.Vector3;
   /** Where the viewmodel sits relative to the camera. */
   offset: THREE.Vector3;
+  /** Extra resting rotation (x, y, z) of the viewmodel, for items not held like a gun. */
+  tilt?: readonly [number, number, number];
   /** Left hand grip point (model space), or null for one-handed. */
   leftHand: THREE.Vector3 | null;
 }
@@ -90,6 +92,62 @@ function grenadeModel(parts: Part[]): GunModel {
   };
 }
 
+/** Cylinder along Z with an oval cross-section (x and y radii r*sx, r*sy). */
+function oval(r: number, len: number, sx: number, sy: number, x: number, y: number, z: number, color: string, seg = 12): Part {
+  const g = new THREE.CylinderGeometry(r, r, len, seg);
+  g.rotateX(Math.PI / 2);
+  g.scale(sx, sy, 1);
+  g.translate(x, y, z);
+  return colorize(g, color);
+}
+
+/**
+ * Combat knife blade from the guard (z = -0.052) forwards: a straight spine dropping into a clip
+ * point, an edge that sweeps up to meet it, and a wedge cross-section (flat sides down to the
+ * grind line, then a bright bevel to the edge). Returns the flats, bevels and spine as parts.
+ */
+function knifeBlade(): Part[] {
+  const z0 = -0.052;
+  const len = 0.168;
+  const us = [0, 0.08, 0.25, 0.45, 0.55, 0.64, 0.72, 0.8, 0.87, 0.93, 0.97, 1];
+  const st = us.map((u) => {
+    const spine = u < 0.62 ? 0.012 : 0.012 - 0.0105 * ((u - 0.62) / 0.38) ** 1.2;
+    const k = u < 0.5 ? 0 : (u - 0.5) / 0.5;
+    const edge = -0.0165 + 0.018 * (1 - Math.sqrt(Math.max(0, 1 - k * k)));
+    const grind = edge + (spine - edge) * 0.42;
+    const t = 0.0026 * (1 - 0.55 * u);
+    return { z: z0 - u * len, spine, edge, grind, t };
+  });
+  const flats: number[] = [];
+  const bevels: number[] = [];
+  const spines: number[] = [];
+  const quad = (out: number[], a: number[], b: number[], c: number[], d: number[]) => out.push(...a, ...b, ...c, ...a, ...c, ...d);
+  for (let i = 0; i < st.length - 1; i++) {
+    const p = st[i];
+    const q = st[i + 1];
+    for (const side of [-1, 1]) {
+      // Wind so the faces point outwards on both sides.
+      const w = (out: number[], a: number[], b: number[], c: number[], d: number[]) => (side > 0 ? quad(out, a, b, c, d) : quad(out, a, d, c, b));
+      w(flats, [side * p.t, p.grind, p.z], [side * q.t, q.grind, q.z], [side * q.t, q.spine, q.z], [side * p.t, p.spine, p.z]);
+      w(bevels, [0, p.edge, p.z], [0, q.edge, q.z], [side * q.t, q.grind, q.z], [side * p.t, p.grind, p.z]);
+    }
+    quad(spines, [-p.t, p.spine, p.z], [p.t, p.spine, p.z], [q.t, q.spine, q.z], [-q.t, q.spine, q.z]);
+  }
+  // Back face against the guard.
+  const b = st[0];
+  quad(flats, [-b.t, b.spine, b.z], [b.t, b.spine, b.z], [b.t, b.grind, b.z], [-b.t, b.grind, b.z]);
+  flats.push(-b.t, b.grind, b.z, b.t, b.grind, b.z, 0, b.edge, b.z);
+  const part = (pos: number[], color: string) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    // Unused, but the other parts have it and merging needs matching attributes.
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2));
+    g.computeVertexNormals();
+    return colorize(g, color);
+  };
+  return [part(flats, '#a9afb5'), part(bevels, '#dde2e6'), part(spines, '#7d8288')];
+}
+
 function build(parts: Part[]): THREE.BufferGeometry {
   const g = mergeGeometries(parts, false)!;
   for (const p of parts) p.dispose();
@@ -106,13 +164,18 @@ const BAKELITE = '#5e2c12';
 const MODELS: Record<WeaponId, () => GunModel> = {
   knife: () => ({
     geometry: build([
-      box(0.028, 0.034, 0.12, 0, 0, 0.02, POLYMER),
-      box(0.05, 0.012, 0.012, 0, 0, -0.045, METAL_LIGHT),
-      box(0.006, 0.032, 0.17, 0, 0.004, -0.13, '#b9bec4'),
-      box(0.004, 0.012, 0.05, 0, 0.022, -0.2, '#d8dde2', 0.5),
+      ...knifeBlade(),
+      // Oval guard, taller than wide.
+      oval(0.022, 0.009, 0.5, 1.15, 0, -0.002, -0.047, METAL),
+      // Ribbed grip tapering towards the pommel, then the pommel cap.
+      ...[0, 1, 2, 3, 4, 5, 6].map((i) => oval(i % 2 ? 0.0128 : 0.0142 - i * 0.0003, 0.016, 0.72, 1, 0, -0.004 - i * 0.0006, -0.034 + i * 0.016, i % 2 ? '#1c1d1f' : '#2b2c2f')),
+      oval(0.0145, 0.01, 0.75, 1, 0, -0.0085, 0.076, METAL),
+      ball(0.0115, 0, -0.0085, 0.081, METAL_LIGHT, 0.9),
     ]),
     muzzle: new THREE.Vector3(0, 0, -0.22),
-    offset: new THREE.Vector3(0.16, -0.16, -0.3),
+    offset: new THREE.Vector3(0.15, -0.12, -0.28),
+    // Held up with the point angled in towards the crosshair.
+    tilt: [0.3, 0.3, -0.35],
     leftHand: null,
   }),
   glock: () => ({

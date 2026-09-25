@@ -25,9 +25,38 @@ export const Material = {
   LampGlow: 14,
   /** Window panes (drawn by the glass renderer, not baked into chunk meshes). */
   Glass: 15,
+  /** Water surfaces (transparent, drifting). */
+  Water: 16,
+  Grass: 17,
+  /** Ashlar stone: plinths, quoins, cornices, sills. */
+  Stone: 18,
+  /** Flat-roof membrane (a thin visual skin over the roof cap). */
+  RoofTar: 19,
+  /** Facade atlas (tint = FacadeCell): window panels, shopfronts, signs, awnings, rooftop kit. */
+  Facade: 20,
+  /** Tower glazing: tiled along the wall, stretched over the brush height. */
+  CurtainWall: 21,
 } as const;
 export type MaterialId = (typeof Material)[keyof typeof Material];
-export const MATERIAL_COUNT = 16;
+export const MATERIAL_COUNT = 22;
+
+/** Cells of the facade atlas, chosen by the tint of a Material.Facade brush. */
+export const FacadeCell = {
+  Window: 0,
+  WindowBlinds: 1,
+  WindowCurtains: 2,
+  WindowShutters: 3,
+  WindowLitWarm: 4,
+  WindowLitCool: 5,
+  Shop: 6,
+  ShopLit: 7,
+  /** Four shop signs (authored for a 5:1 board), 8..11. */
+  Sign: 8,
+  AwningRed: 12,
+  AwningGreen: 13,
+  Grille: 14,
+  Shutter: 15,
+} as const;
 
 /** Packed word layout: bits 0-2 ramp, 3-7 material, 8-15 contents. */
 export const packBrushWord = (ramp: number, material: number, contents: number) =>
@@ -45,8 +74,8 @@ export interface MeshData {
   indices: Uint32Array;
 }
 
-export const Landmark = { None: 0, Apartment: 1, Office: 2, Garage: 3 } as const;
-export const LANDMARK_NAMES = ['', 'Apartments', 'Offices', 'Parking garage'] as const;
+export const Landmark = { None: 0, Apartment: 1, Office: 2, Garage: 3, Park: 4, Plaza: 5, River: 6 } as const;
+export const LANDMARK_NAMES = ['', 'Apartments', 'Offices', 'Parking garage', 'Park', 'Plaza', 'River'] as const;
 
 export const District = { Spawn: 0, Industrial: 1, Oldtown: 2, Downtown: 3, Gym: 4 } as const;
 export type DistrictId = (typeof District)[keyof typeof District];
@@ -64,6 +93,8 @@ export const NavFlag = {
   CoverFull: 16,
   Indoor: 32,
   Street: 64,
+  /** Under water (wading: slow, so bots avoid it). */
+  Water: 128,
 } as const;
 
 export interface ChunkData {

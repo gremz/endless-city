@@ -109,14 +109,14 @@ class Frame {
   wallU(u0: number, u1: number, v0: number, v1: number, y: number, h: number, ops: Opening[], mat: number, tint: number, contents = SOLID): void {
     const off = this.au(0);
     const shifted = ops.map((o) => ({ ...o, a: o.a + off, b: o.b + off }));
-    wall(this.ctx.w, !this.swap, this.au(u0), this.au(u1), this.av(v0), this.av(v1), y, h, shifted, mat, tint, contents, this.ctx.glass);
+    wall(this.ctx.w, !this.swap, this.au(u0), this.au(u1), this.av(v0), this.av(v1), y, h, shifted, mat, tint, contents, this.ctx.glass, contents === SOLID ? this.ctx.trims : null);
   }
 
   /** A wall running along v (at u in [u0, u1]) with openings in v coordinates. */
   wallV(v0: number, v1: number, u0: number, u1: number, y: number, h: number, ops: Opening[], mat: number, tint: number, contents = SOLID): void {
     const off = this.av(0);
     const shifted = ops.map((o) => ({ ...o, a: o.a + off, b: o.b + off }));
-    wall(this.ctx.w, this.swap, this.av(v0), this.av(v1), this.au(u0), this.au(u1), y, h, shifted, mat, tint, contents, this.ctx.glass);
+    wall(this.ctx.w, this.swap, this.av(v0), this.av(v1), this.au(u0), this.au(u1), y, h, shifted, mat, tint, contents, this.ctx.glass, contents === SOLID ? this.ctx.trims : null);
   }
 
   /** Door leaf in a wall along u (spanning u) or along v, centered at (u, v). */

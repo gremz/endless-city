@@ -188,9 +188,9 @@ export class Viewmodel {
     let px = model.offset.x + bobX + this.swayX * 0.3;
     let py = model.offset.y + bobY - this.landDip - this.swayY * 0.3;
     let pz = model.offset.z + this.kick;
-    let rx = this.kickRot + this.swayY;
-    let ry = this.swayX;
-    let rz = 0;
+    let rx = this.kickRot + this.swayY + (model.tilt?.[0] ?? 0);
+    let ry = this.swayX + (model.tilt?.[1] ?? 0);
+    let rz = model.tilt?.[2] ?? 0;
 
     // Deploy: raise from below.
     const deployStart = w.deployEnd - def.deployTime;

@@ -5,11 +5,14 @@ import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
 import { buildBuilding, buildCourtyard } from './buildings';
 import { buildRooftops } from './facades';
+import { dressBuildings } from './buildingDetail';
+import { buildHighway, buildPark, buildPlaza, buildRiver, rampSite } from './cityFeatures';
+import { chunkPlan } from './cityPlan';
 import { buildLandmark, LANDMARK_IDS, LANDMARK_SIZE, pickLandmark, type LandmarkKind } from './landmarks';
 import { District, DOOR_STRIDE, Landmark, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
 import { districtFor, levelFor } from './district';
 import { placeEncounters } from './encounters';
-import { Occupancy, rect, rd, rw, subtractRects, type GenContext, type Rect, type VehicleSpot } from './genContext';
+import { Occ, Occupancy, rect, rd, rw, subtractRects, type GenContext, type Rect, type VehicleSpot } from './genContext';
 import { splitLot, typeParcels, type Parcel } from './lots';
 import { bakeMeshes } from './meshBake';
 import { bakeNav } from './navBake';
@@ -36,9 +39,10 @@ function lotHeight(seed: number, cx: number, cz: number, district: number): numb
  * Generate one city chunk: pure and deterministic in (seed, cx, cz). Runs in a worker or on
  * the main thread; returns transferable typed arrays.
  */
-export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
+export function generateChunk(seed: number, cx: number, cz: number, opts: { dress?: boolean } = {}): ChunkData {
   const t0 = performance.now();
   const district = districtFor(seed, cx, cz);
+  const plan = chunkPlan(seed, cx, cz);
   const level = levelFor(cx, cz);
   const ctx: GenContext = {
     seed,
@@ -50,7 +54,8 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     rb: sfc32(hash3(seed, cx, cz, Salt.Breakables)),
     district,
     level,
-    lotY: lotHeight(seed, cx, cz, district.id),
+    // Rivers, parks and plazas sit at street level.
+    lotY: plan.river || plan.feature ? CURB : lotHeight(seed, cx, cz, district.id),
     occ: new Occupancy(),
     doors: [],
     open: [],
@@ -61,22 +66,39 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     ladders: [],
     doorLeaves: [],
     glass: [],
+    trims: [],
   };
 
-  buildStreets(ctx);
-  const keep = buildLot(ctx);
   const lot = rect(LOT0, LOT0, LOT1, LOT1);
+  const cr = sfc32(hash3(seed, cx, cz, Salt.City));
 
   let kind: LandmarkKind | null = null;
   let placed: { site: Rect; front: 0 | 1 } | null = null;
-  if (district.id === District.Spawn) {
+  if (plan.river) {
+    buildRiver(ctx, plan, cr);
+  } else if (district.id === District.Spawn) {
+    buildStreets(ctx);
+    buildLot(ctx);
     buildSpawnPlaza(ctx, lot);
+  } else if (plan.feature) {
+    buildStreets(ctx);
+    if (plan.feature === 'park') buildPark(ctx, lot, cr);
+    else buildPlaza(ctx, lot, cr);
+    buildRooftops(ctx, sfc32(hash3(seed, cx, cz, Salt.Facades)));
+    if (plan.feature === 'plaza') scatterProps(ctx, lot, 0.35, ['barriers', 'sandbags']);
   } else {
-    // Landmark chunks set aside a big site along one street for their landmark building first.
+    buildStreets(ctx);
+    const keep = buildLot(ctx);
+    // A highway on-ramp, then a landmark building, get their sites before the lot is split.
+    const ramp = rampSite(plan);
+    if (ramp) {
+      keep.push(ramp);
+      ctx.occ.mark(ramp, Occ.Reserved);
+    }
     const lr = sfc32(hash3(seed, cx, cz, Salt.Landmark));
-    kind = pickLandmark(district.id, lr());
+    kind = ramp ? null : pickLandmark(district.id, lr());
     placed = kind ? placeLandmark(lr, kind, lot, keep) : null;
-    const regions = placed ? subtractRects(lot, [placed.site]) : [lot];
+    const regions = subtractRects(lot, [...(placed ? [placed.site] : []), ...(ramp ? [ramp] : [])]);
     const parcels: Parcel[] = [];
     const alleys: Rect[] = [];
     for (const reg of regions) {
@@ -122,7 +144,10 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     for (const a of alleys) scatterProps(ctx, a, 0.8, ['crates', 'dumpsters']);
     for (const i of ctx.interiors) scatterProps(ctx, i, 1.5, ['crates']);
   }
+  if (plan.highwayWest || plan.highwayEast) buildHighway(ctx, plan, cr);
 
+  // Facade dressing and roof clutter last, so it can fit around everything else.
+  if (!plan.river && opts.dress !== false) dressBuildings(ctx, sfc32(hash3(seed, cx, cz, Salt.Detail)));
   const brushes = ctx.w.finish();
   const meshes = bakeMeshes(brushes);
   // Bots path around the parked driveable cars as if they were part of the city.
@@ -140,7 +165,7 @@ export function generateChunk(seed: number, cx: number, cz: number): ChunkData {
     brushes,
     meshes,
     district: district.id,
-    landmark: placed && kind ? LANDMARK_IDS[kind] : Landmark.None,
+    landmark: placed && kind ? LANDMARK_IDS[kind] : plan.river ? Landmark.River : plan.feature === 'park' ? Landmark.Park : plan.feature === 'plaza' ? Landmark.Plaza : Landmark.None,
     level,
     navCol: nav.col,
     navFloor: nav.floor,

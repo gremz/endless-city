@@ -1,7 +1,23 @@
 import * as THREE from 'three';
+import type { SimEvent } from '../core/events';
 import { lerp } from '../core/math';
 import { bodyScale, STAND_BOXES } from '../ai/hitboxes';
 import { Team, type Actor } from '../sim/Actor';
+import { BOX_LOOKS as LOOKS } from './characters/characterSpec';
+
+/** Draws every actor but the local player: the box figures here, or the imported characters. */
+export interface ActorRenderer {
+  readonly root: THREE.Group;
+  /**
+   * Rebuild the actors for this frame. `torches` are actors carrying a lit flashlight;
+   * `torchLevel` (0..1) is how dark it is.
+   */
+  update(actors: readonly Actor[], playerId: number, alpha: number, time: number, frameDt: number, torches?: ReadonlySet<number>, torchLevel?: number): void;
+  /** Sim events (shots, reloads, hits...) for reactions. */
+  onEvent?(e: SimEvent): void;
+  setShadows(on: boolean): void;
+  dispose(): void;
+}
 
 const MAX = 48;
 /** Part index → palette index. */
@@ -13,20 +29,11 @@ interface PartDef {
   color: THREE.ColorRepresentation;
 }
 
-/** Palettes per look: [head, torso, stomach, legs, arms, gun]. */
-const LOOKS: Record<string, string[]> = {
-  bot: ['#3b3530', '#4a4f3a', '#3f4234', '#5c5140', '#4a4f3a', '#1d1d1d'],
-  dummy: ['#c9b48a', '#b89c6a', '#a88d5f', '#8f7a55', '#b89c6a', '#1d1d1d'],
-  elite: ['#26282b', '#2b3036', '#25292e', '#383c42', '#2b3036', '#141414'],
-  /** Other players (co-op). */
-  ally: ['#2f3f52', '#35577a', '#2f4a66', '#3a4f63', '#35577a', '#1d1d1d'],
-};
-
 /**
  * Draws every non-player actor with a handful of InstancedMeshes (one per body part).
  * Proportions come from the hitboxes, so the model matches what bullets hit.
  */
-export class BotRenderer {
+export class BotRenderer implements ActorRenderer {
   readonly root = new THREE.Group();
   private meshes: THREE.InstancedMesh[] = [];
   private parts: PartDef[] = [];

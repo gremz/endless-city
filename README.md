@@ -12,7 +12,7 @@ sounds and music are all generated in code.
 ```bash
 npm install
 npm run dev        # http://localhost:5173 (also reachable from Windows when running in WSL)
-npm run test:run   # unit tests (movement, weapons, cars, generation, nav, bots, co-op networking, boundaries)
+npm run test:run   # unit tests (movement, weapons, cars, generation, nav, bots, co-op networking, characters, boundaries)
 npm run build      # type-check + production build to dist/
 ```
 
@@ -34,10 +34,14 @@ If `localhost` doesn't reach WSL from Windows, use the Network URL that Vite pri
 | `?join=CODE` | Join a co-op game (this is what invite links are) |
 | `?netsim=120,5` | Co-op testing: simulate a 120 ms round trip with 5% packet loss on your connection |
 | `?peerdebug=3` | Log WebRTC signalling (PeerJS) to the console |
+| `?charmodel=placeholder` | Character model to draw bots with: `placeholder` (the generated stand-in), `none` (box figures) or a `.glb` path |
 
 `/gen.html?seed=…` shows a top-down map of the generator output: layouts, nav reachability,
 spawn slots and perches. Where a column has several floors, the floor picker chooses which
 one the nav overlay shows (top, ground, or upper floors only).
+
+`/models.html` previews a character model the way the game drives it (see
+[Character models](#character-models)).
 
 ## Controls
 
@@ -88,6 +92,21 @@ and open all the way up:
 
 Bots spawn and fight on every floor, and snipers take the upper windows and the roofs.
 `gen.html` labels the chunks that have one.
+
+## River, highways, parks and plazas
+
+- **The river** winds through the city a few blocks from spawn. Its banks are embankment
+  streets with a railing along the water, and most of the streets that cross it do so on
+  bridges (there's always one within a couple of blocks). The water is about waist-deep: you
+  can wade across, slowly, splashing as you go and barely able to jump. Stairs lead back up the
+  embankment, and bots only wade if there's no bridge nearby.
+- **Elevated highways** run north–south above some streets, 9 m up on pillars. On-ramps climb
+  up from the blocks beside them, so you can drive or walk up. The deck makes a long firing
+  line with abandoned cars for cover.
+- **Parks** have lawns and paths, trees whose crowns block sight and shots, hedges to crouch
+  behind, a fountain and a bandstand with a ladder up to its roof. **Plazas** are paved squares
+  with a monument or big fountain, raised planters, kiosks and a colonnade.
+- The city map (M) shows the river, parks, plazas and highways even where you haven't been.
 
 ## Doors and glass
 
@@ -220,6 +239,27 @@ their browser and friends join with a room code.
 It all goes through WebRTC. The free PeerJS broker only introduces players to each other, and
 its default STUN/TURN servers get most home networks connected. The debug overlay (F3) shows
 round-trip time, traffic and prediction corrections.
+
+## Character models
+
+Bots and co-op players can be drawn with an animated character made in Blender, exported to
+`public/models/characters/soldier.glb`. The file contract (scale, bone and clip names, sockets,
+materials, budgets and export settings) is in [art/characters/README.md](art/characters/README.md).
+Until that file exists, or if it fails to load, the game draws the box figures. You can also pick
+them under Settings → Graphics → Characters.
+
+```bash
+npm run models:check        # validate soldier.glb (or any .glb given as an argument) against the spec
+npm run models:reference    # write art/characters/hitbox_reference.obj to model around
+npm run models:placeholder  # regenerate the stand-in (public/models/characters/placeholder.glb)
+```
+
+The placeholder is a jointed box soldier that follows the spec exactly. Open it with
+`?charmodel=placeholder`, or import it into Blender to see the rig names and socket axes. In
+game, each character is a pooled skinned clone. Walk, run and crouch cycles share one phase
+matched to ground speed, aim pitch bends the spine, the game's own gun models sit in the weapon
+socket, and shots, reloads, throws and hits play as additive upper-body overlays. Characters off
+screen aren't animated, and far ones update every third frame.
 
 ## How it works
 

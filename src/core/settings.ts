@@ -26,6 +26,8 @@ export interface Settings {
   weather: 'dynamic' | 'clear';
   /** Rain streak amount (0 off, 0.5 low, 1 high). */
   rainParticles: number;
+  /** Animated character models when available, or the simple box figures. */
+  characters: 'detailed' | 'simple';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -50,6 +52,7 @@ export const DEFAULT_SETTINGS: Settings = {
   timeOfDay: 'cycle',
   weather: 'dynamic',
   rainParticles: 1,
+  characters: 'detailed',
 };
 
 /** Allowed values for the settings that are really enums (stored as strings or numbers). */
@@ -58,6 +61,7 @@ const CHOICES: Partial<Record<keyof Settings, readonly unknown[]>> = {
   timeOfDay: ['cycle', 'day', 'night'],
   weather: ['dynamic', 'clear'],
   rainParticles: [0, 0.5, 1],
+  characters: ['detailed', 'simple'],
 };
 
 const KEY = 'owcs.settings.v1';
