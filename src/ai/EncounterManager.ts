@@ -14,6 +14,7 @@ import type { ChunkData } from '../world/gen/ChunkData';
 import { SPAWN_DROP } from '../world/gen/pickups';
 import type { WorldStreamer } from '../world/WorldStreamer';
 import { pickAmbushSlots, pickHostageSpot } from './ambush';
+import { bark } from './barks';
 import { Bot, TargetHistory, type BotContext, type BotRole, type Squad } from './Bot';
 import { BOT_NAMES, skillFor, weaponFor, type BotSkill } from './difficulty';
 import { driveHostage, EXECUTE_FUSE, FUSE_RANGE, LAST_WORDS, makeHostage, PLEA_GAP, RESCUE_REWARD, say, WARN_TIME, type Hostage } from './hostage';
@@ -48,6 +49,8 @@ const OPENING_SKILL: BotSkill = {
 };
 const DESPAWN_UNSEEN = 10;
 const BODY_TIME = 12;
+/** A squadmate further away than this (m) doesn't see a bot go down. */
+const MOURN_RANGE = 30;
 
 /** An encounter area as stored in a save: squads in progress are saved as their survivors. */
 export interface SavedEncounter {
@@ -418,6 +421,8 @@ export class EncounterManager implements SimSystem {
       const bot = this.makeBot(st, squad, patrol, r, pos, 'anchor', { inv, skill: OPENING_SKILL, yaw, idleYaw, keepLoot: true });
       if (hostage && i < 2) {
         bot.scene = { hostage, role: i === 0 ? 'gunman' : 'shover' };
+        // The pair have their own voices and lines (see hostage.ts), for the whole fight.
+        bot.barks.voice = null;
         if (i === 0) hostage.gunmanId = bot.actor.id;
         else hostage.shoverId = bot.actor.id;
         bot.lookYaw = bot.aimYaw = yaw;
@@ -503,6 +508,7 @@ export class EncounterManager implements SimSystem {
     if (victimBot) {
       // A fall isn't an attack.
       if (info.attacker !== info.victim) victimBot.onDamaged(info.attacker, sim.time);
+      if (!killed) bark(sim, victimBot, 'hurt');
       // The rest of the squad hears about it quickly.
       for (const m of victimBot.squad.members) {
         if (m !== victimBot && m.actor.alive) m.awareness = Math.max(m.awareness, 0.5);
@@ -515,10 +521,33 @@ export class EncounterManager implements SimSystem {
           const reward = Math.round(info.def.killReward * (night ? 1.25 : 1));
           sim.economy.add(info.attacker, reward, night ? 'kill (night bonus)' : 'kill');
         }
+        this.mourn(victimBot);
         this.checkCleared(victimBot.squad);
       }
     }
-    if (info.victim.team === Team.Player && killed && !info.victim.captive) this.onPlayerDeath(info.victim);
+    if (info.victim.team === Team.Player && killed && !info.victim.captive) {
+      const killer = this.bots.find((b) => b.actor === info.attacker);
+      if (killer) bark(sim, killer, 'kill');
+      this.onPlayerDeath(info.victim);
+    }
+  }
+
+  /** A bot just died: the nearest squadmate who saw it calls it out (or realises they're alone). */
+  private mourn(dead: Bot): void {
+    const at = dead.actor.move.pos;
+    let near: Bot | null = null;
+    let nearD = MOURN_RANGE;
+    let alive = 0;
+    for (const m of dead.squad.members) {
+      if (!m.actor.alive) continue;
+      alive++;
+      const d = Math.hypot(m.actor.move.pos.x - at.x, m.actor.move.pos.z - at.z);
+      if (d < nearD) {
+        nearD = d;
+        near = m;
+      }
+    }
+    if (near) bark(this.sim, near, alive === 1 ? 'lastAlive' : 'manDown');
   }
 
   private checkCleared(sq: Squad): void {

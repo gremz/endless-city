@@ -7,3 +7,4 @@ coverage/
 .voices/
 public/voice/audition/
 scripts/__pycache__/
+*:Zone.Identifier

@@ -1,4 +1,4 @@
-import { VOICE_LINES, VOICES, voiceFile, type VoiceDef, type VoiceId } from '../ai/voiceLines';
+import { isBarkVoice, isRecorded, VOICE_LINES, VOICES, voiceFile, type VoiceDef, type VoiceId } from '../ai/voiceLines';
 
 /**
  * Dev page (/voices.html): play every generated voice line, and compare the candidate voices
@@ -112,8 +112,10 @@ function renderLines(): void {
   for (const l of VOICE_LINES) {
     const tr = el('tr');
     const td = el('td');
-    td.append(playButton(`${base}${voiceFile(l.id)}`));
-    tr.append(td, el('td', VOICES[l.voice].name, 'who'), el('td', l.cue), el('td', l.text, 'text'));
+    // Not recorded yet: nothing to play.
+    if (isRecorded(l)) td.append(playButton(`${base}${voiceFile(l.id)}`));
+    else td.textContent = '–';
+    tr.append(td, el('td', isBarkVoice(l.voice) ? l.voice : VOICES[l.voice].name, 'who'), el('td', l.cue), el('td', l.text, 'text'));
     table.append(tr);
   }
 }

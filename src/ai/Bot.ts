@@ -7,7 +7,7 @@ import { makeTrace } from '../physics/trace';
 import { eyeHeight, playerMove } from '../player/pmove';
 import { STAND_MAXS, STAND_MINS } from '../player/movementConfig';
 import type { Actor } from '../sim/Actor';
-import { flashAmount, simulateThrow, throwOrigin, throwVelocity } from '../sim/Grenades';
+import { flashAmount, simulateThrow, throwOrigin, throwVelocity, type Projectile } from '../sim/Grenades';
 import type { Simulation } from '../sim/Simulation';
 import { activeItem, grenadeTotal, syncGrenade } from '../weapons/Inventory';
 import type { GrenadeId } from '../weapons/weaponDefs';
@@ -17,6 +17,7 @@ import { visibilityAt } from '../sim/Environment';
 import { getPattern, patternAt } from '../weapons/sprayPatterns';
 import { updateWeapon } from '../weapons/WeaponSystem';
 import type { BotSkill } from './difficulty';
+import { bark, CONTACT_GAP, idleChatter, makeBotBarks, squadBarks, type BotBarks, type SquadBarks } from './barks';
 import { say, type Hostage } from './hostage';
 import { bodyScale } from './hitboxes';
 import type { AStar, PathPoint } from './nav/astar';
@@ -42,6 +43,8 @@ export interface Squad {
   lastSeen: number;
   /** Earliest time the squad throws its next grenade (one at a time, spaced out). */
   nextNadeAt?: number;
+  /** Who's talking and what's been said (see barks.ts; made on first use). */
+  barks?: SquadBarks;
 }
 
 /** A grenade throw being carried out: switch to it, aim, pull the pin, release. */
@@ -189,6 +192,11 @@ export class Bot {
   private campAnchor: Vec3 | null = null;
   private campSince = 0;
 
+  // Voice.
+  readonly barks: BotBarks;
+  private wasBlind = false;
+  private dodging = false;
+
   constructor(
     readonly actor: Actor,
     readonly skill: BotSkill,
@@ -199,6 +207,7 @@ export class Bot {
     seed: number,
   ) {
     this.r = sfc32(hash3(seed, actor.id, squad.id, Salt.Bot));
+    this.barks = makeBotBarks(actor, seed);
     this.aimYaw = this.lookYaw = actor.yaw;
     this.thinkPhase = actor.id & 3;
     if (role === 'overwatch') this.state = 'overwatch';
@@ -374,6 +383,13 @@ export class Bot {
     const hp = a.health;
     const alive = this.squad.members.filter((m) => m.actor.alive).length;
 
+    // First sight of a player in a while: the squad hears about it out loud.
+    const talk = squadBarks(this.squad);
+    if (this.visible && this.awareness >= 1) {
+      if (now - talk.contactAt > CONTACT_GAP) bark(sim, this, 'spotted');
+      talk.contactAt = now;
+    }
+
     if (this.state === 'overwatch') {
       if (lowAmmo && !this.visible) this.cmd.pressed |= Buttons.RELOAD;
       return;
@@ -382,21 +398,39 @@ export class Bot {
     if (this.visible && this.awareness >= 1) {
       if (this.state !== 'engage' && this.state !== 'cover') this.setState('engage', now);
       if (this.state === 'engage') {
-        if (hp < 25 && alive > 1 && now - this.stateSince > 1.5) this.setState('retreat', now);
-        else if ((hp < 50 || lowAmmo) && now - this.stateSince > 1.2 && now > this.coverUntil) this.setState('cover', now);
+        if (hp < 25 && alive > 1 && now - this.stateSince > 1.5) {
+          this.setState('retreat', now);
+          bark(sim, this, 'retreat');
+        } else if ((hp < 50 || lowAmmo) && now - this.stateSince > 1.2 && now > this.coverUntil) {
+          this.setState('cover', now);
+          bark(sim, this, 'cover');
+        }
       }
       return;
+    }
+
+    // The player's gone to ground where they were last seen: goad them out.
+    if ((this.state === 'engage' || this.state === 'cover') && now - this.campSince > 4 && now - this.squad.lastKnownTime < 3) {
+      bark(sim, this, 'taunt');
     }
 
     switch (this.state) {
       case 'idle':
       case 'patrol':
-        if (this.awareness >= 0.3 && this.lastKnown) this.setState('alert', now);
+        if (this.awareness >= 0.3 && this.lastKnown) {
+          this.setState('alert', now);
+          bark(sim, this, 'suspicious');
+        } else if (!this.scene) idleChatter(sim, this);
         break;
       case 'engage':
         if (now - this.lastSeen > 1.5) {
-          if (this.role === 'flanker' && this.skill.canFlank && alive >= 3 && this.lastKnown) this.setState('flank', now);
-          else this.setState('alert', now);
+          if (this.role === 'flanker' && this.skill.canFlank && alive >= 3 && this.lastKnown) {
+            this.setState('flank', now);
+            bark(sim, this, 'flank');
+          } else {
+            this.setState('alert', now);
+            bark(sim, this, 'lost');
+          }
         }
         break;
       case 'cover':
@@ -406,6 +440,7 @@ export class Bot {
         if (now - Math.max(this.lastSeen, this.heardAt, this.squad.lastKnownTime) > 15) {
           this.awareness = 0.2;
           this.setState(this.role === 'patroller' ? 'patrol' : 'idle', now);
+          bark(sim, this, 'giveUp');
         }
         break;
       case 'flank':
@@ -704,6 +739,8 @@ export class Bot {
       if (this.cover && g.inFire(this.cover.x, this.cover.y, this.cover.z, 0.5)) this.cover = null;
     }
     const blind = flashAmount(a, now) > BLIND;
+    if (blind && !this.wasBlind) bark(sim, this, 'blinded');
+    this.wasBlind = blind;
     if (this.throwPlan && !(blind && this.throwPlan.pinAt < 0)) {
       if (this.executeThrow(ctx, now, dt)) {
         this.finishTick(ctx);
@@ -885,6 +922,11 @@ export class Bot {
       walk = false;
       crouch = false;
     }
+    // A live grenade from the other side lands close: shout about it (whether or not we can dodge).
+    const nade = fire ? null : this.skill.level >= 5 ? (danger as Projectile | null) : g.dangerNear(m.x, m.z, 4);
+    const incoming = !!nade && nade.owner.team !== a.team;
+    if (incoming && !this.dodging) bark(sim, this, 'incoming');
+    this.dodging = incoming;
 
     // Unstick: slide sideways relative to the intended direction.
     if (now < this.unstickUntil && (move.x || move.z)) {
@@ -970,7 +1012,10 @@ export class Bot {
     a.pitch = cmd.pitch;
     playerMove(a.move, cmd, sim.world, sim.dt);
     sim.fallDamage(a);
+    const wasReloading = a.wpn.reloadEnd >= 0;
     updateWeapon(a, cmd, sim);
+    // Mid-fight, a reload gets called out.
+    if (!wasReloading && a.wpn.reloadEnd >= 0 && sim.time - squadBarks(this.squad).contactAt < 5) bark(sim, this, 'reload');
     sim.footsteps(a);
     cmd.pressed = 0;
     this.publishState(sim);
@@ -1101,6 +1146,7 @@ export class Bot {
     const cmd = this.cmd;
     if (plan.thrownAt < 0 && inv.nades[plan.kind] < plan.count) {
       plan.thrownAt = now;
+      bark(ctx.sim, this, 'throw');
       if (plan.kind === 'flashbang') {
         this.lookAwayUntil = now + 1.9;
         this.lookAwayYaw = plan.yaw + Math.PI;

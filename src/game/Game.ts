@@ -42,7 +42,7 @@ import { WorkerChunkSource } from '../world/WorkerChunkSource';
 import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
 import { EncounterManager } from '../ai/EncounterManager';
-import { lineSeconds, VOICE_BY_ID, VOICE_LINES, VOICES, voiceFile } from '../ai/voiceLines';
+import { isBarkVoice, isRecorded, lineSeconds, VOICE_BY_ID, VOICE_LINES, VOICES, voiceFile } from '../ai/voiceLines';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SoundEvents } from '../audio/sounds';
 import { buy, buyZoneStatus, engagedNear, OUT_OF_COMBAT, priceOf, recommendUpgrade, unavailableReason, type BuyItem } from '../sim/buy';
@@ -596,7 +596,7 @@ export class Game {
     void this.audio.unlock();
     if (!this.voicesLoaded) {
       this.voicesLoaded = true;
-      this.audio.loadClips(VOICE_LINES.map((l) => ({ name: l.id, url: `${import.meta.env.BASE_URL}${voiceFile(l.id)}` })));
+      this.audio.loadClips(VOICE_LINES.filter(isRecorded).map((l) => ({ name: l.id, url: `${import.meta.env.BASE_URL}${voiceFile(l.id)}` })));
     }
     if (fullscreen && !document.fullscreenElement) {
       try {
@@ -1052,8 +1052,10 @@ export class Game {
     const a = this.sim.getActor(actorId);
     if (!line || !a) return;
     const p = this.me.move.pos;
-    if (Math.hypot(a.move.pos.x - p.x, a.move.pos.z - p.z) > CAPTION_RANGE) return;
-    this.hud.caption(VOICES[line.voice].name, line.text, lineSeconds(line) + 1.2);
+    // Squad barks: from closer by, under the bot's own name.
+    const squad = isBarkVoice(line.voice);
+    if (Math.hypot(a.move.pos.x - p.x, a.move.pos.z - p.z) > (squad ? BARK_CAPTION_RANGE : CAPTION_RANGE)) return;
+    this.hud.caption(squad ? a.name : VOICES[line.voice].name, line.text, lineSeconds(line) + 1.2);
   }
 
   /** Height of the first surface below the open sky at (x, z), or -Infinity over nothing. */
@@ -1175,6 +1177,8 @@ export class Game {
 const TIPS_KEY = 'endless-city.tips';
 /** Spoken lines further away than this (m) aren't captioned. */
 const CAPTION_RANGE = 70;
+/** Squad barks further away than this (m) aren't captioned. */
+const BARK_CAPTION_RANGE = 30;
 
 /** Tips already shown in this browser. */
 function loadTips(): Set<TipId> {

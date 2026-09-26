@@ -5,8 +5,8 @@ procedurally generated city. Clear bot squads to earn money, buy better guns, an
 from spawn, where the bots get sharper. Play alone or co-op with up to three friends.
 
 Built with Vite, TypeScript and three.js. Textures, gun models, sounds and music are all
-generated in code. The only recorded audio is a handful of voice lines, generated offline with
-Piper (see [Voice lines](#voice-lines)).
+generated in code. The only recorded audio is the voice lines, made in ElevenLabs (see
+[Voice lines](#voice-lines)).
 
 ## Run
 
@@ -298,26 +298,39 @@ screen aren't animated, and far ones update every third frame.
 
 ## Voice lines
 
-The opening scene's spoken lines are text-to-speech clips made with
-[Piper](https://github.com/OHF-Voice/piper1-gpl), a local neural TTS. The lines, and which
-Piper voice says each one (with pace and pitch), are in `src/ai/voiceLines.ts`. After editing
-them, regenerate the clips:
+Bots speak. The opening scene has its own lines. Squads outside it bark in a fight: spotting you,
+reloading, throwing, a squadmate going down, taunting you while you hide. They also chat idly,
+which you can overhear while sneaking up. Unarmoured bots use the gang's two voices, armoured ones
+the terrorist cell's. Both voices in a faction say the same lines.
+
+The lines, the voices and how to design each one are in `src/ai/voiceLines.ts`. When each bark
+fires, and how often, is in `src/ai/barks.ts`. The clips are recorded in
+[ElevenLabs](https://elevenlabs.io/):
+
+```bash
+npm run voices -- --sheet [gang1 ...]   # lines still to record (id, tab, text), by voice
+# save each clip as public/voice/<id>.mp3, then:
+npm run voices -- --measure             # write every clip's length to src/ai/voiceDurations.ts
+```
+
+The game only loads clips listed in `voiceDurations.ts`. A line without a clip shows its caption
+with no sound. The bots use the lengths to space lines out: one squad member talks at a time,
+unless something more urgent (a grenade) cuts in. The host decides who speaks and when. Everyone
+hears it positionally and sees a caption: within 70 m for the scene, and within 30 m (under the
+bot's name) for barks. `/voices.html` on the dev server plays every recorded line.
+
+A voice can also be generated locally with [Piper](https://github.com/OHF-Voice/piper1-gpl), a
+neural TTS, by giving it `source: 'piper'` settings in `VOICES`:
 
 ```bash
 pip install piper-tts soundfile pyworld   # once (PYTHON=... picks the interpreter)
-npm run voices                            # all lines, or: npm run voices shover_taunt_1 ...
+npm run voices                            # the Piper voices' lines, or: npm run voices <line-id> ...
 npm run voices -- --audition [officer]    # candidate voices (gang, officer), to compare on /voices.html
 ```
 
 Pitch and formant changes go through the WORLD vocoder (`pyworld`), so a lowered voice keeps its
-character instead of sounding like slowed tape. `/voices.html` on the dev server plays every line
-and the audition clips, either dry or as heard in game from 45 m. Its "use for…" buttons copy a
-voice's settings to paste into `VOICES`.
-
-This downloads the voices into `.voices/` on first use (about 60–120 MB each, not committed). It
-writes `public/voice/<id>.mp3` and records each clip's length in `src/ai/voiceDurations.ts`,
-which the bots use to space lines out. The host decides who speaks and when. Everyone hears it
-positionally and sees a caption if they're within 70 m. A missing clip leaves just the caption.
+character instead of sounding like slowed tape. This downloads the voices into `.voices/` on first
+use (about 60–120 MB each, not committed).
 
 ## How it works
 

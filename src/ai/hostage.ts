@@ -15,7 +15,7 @@ export const RESCUE_REWARD = 400;
 /** The gunman's warning comes this long before he fires (the objective turns urgent too). */
 export const WARN_TIME = 12;
 /** His last words, this long before the shot. */
-export const LAST_WORDS = 1.4;
+export const LAST_WORDS = 3;
 /** Seconds between the officer's pleas. */
 export const PLEA_GAP = 12;
 /** A beat between one line ending and the next starting. */

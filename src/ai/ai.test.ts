@@ -22,6 +22,7 @@ import { SPAWN_DROP } from '../world/gen/pickups';
 import { Bot, TargetHistory, type BotContext, type Squad } from './Bot';
 import { skillFor } from './difficulty';
 import { EncounterManager, hearingRadius } from './EncounterManager';
+import { BARK_RANGE, bark } from './barks';
 import { VOICE_BY_ID } from './voiceLines';
 import { AStar, smooth } from './nav/astar';
 import { NavGrid, toCell } from './nav/NavGrid';
@@ -166,8 +167,8 @@ describe('difficulty', () => {
   });
 });
 
-function makeBot(sim: Simulation, x: number, z: number, yaw: number, level = 5) {
-  const squad: Squad = {
+function makeBot(sim: Simulation, x: number, z: number, yaw: number, level = 5, shared?: Squad) {
+  const squad: Squad = shared ?? {
     id: 1,
     chunkKey: chunkKey(0, 0),
     homeCx: 0,
@@ -180,6 +181,7 @@ function makeBot(sim: Simulation, x: number, z: number, yaw: number, level = 5) 
   };
   const a = makeActor(sim.newActorId(), 'Bot', Team.Bots, x, 0.02, z);
   a.inv = makeInventory('glock', 'ak47');
+  a.armor = skillFor(level).armor;
   a.yaw = yaw;
   teleport(a, x, 0.02, z);
   sim.addActor(a);
@@ -199,6 +201,68 @@ function runBots(sim: Simulation, bots: Bot[], seconds: number) {
     for (const b of bots) b.update(ctx);
   }
 }
+
+describe('barks', () => {
+  /** Run the bots, collecting every line they say. */
+  function listen(sim: Simulation, bots: Bot[], seconds: number, heard: { actorId: number; line: string }[]) {
+    const histories = new Map(sim.players.map((p) => [p.id, new TargetHistory()]));
+    const ctx: BotContext = { sim, astar: new AStar(sim.nav), histories, pathBudget: 2 };
+    const idle = makeCmd();
+    for (let i = 0; i < seconds * 64; i++) {
+      ctx.pathBudget = 2;
+      sim.step(idle);
+      for (const p of sim.players) histories.get(p.id)!.record(p, sim.tick);
+      for (const b of bots) b.update(ctx);
+      for (const e of sim.events.drain()) if (e.type === 'voice') heard.push({ actorId: e.actorId, line: e.line });
+    }
+  }
+
+  it('armoured bots sound like the cell, the rest like the gang', () => {
+    const { sim } = flatWorld();
+    expect(makeBot(sim, 10, 10, 0, 1).barks.voice).toMatch(/^gang/);
+    expect(makeBot(sim, 12, 10, 0, 5).barks.voice).toMatch(/^cell/);
+  });
+
+  it('a squad shouts once on spotting the player', () => {
+    const { sim } = flatWorld();
+    teleport(sim.player, 32, 0.02, 20);
+    const a = makeBot(sim, 30, 38, 0);
+    const b = makeBot(sim, 34, 38, 0, 5, a.squad);
+    a.squad.members.push(b);
+    const heard: { actorId: number; line: string }[] = [];
+    listen(sim, [a, b], 2, heard);
+    const spotted = heard.filter((h) => VOICE_BY_ID.get(h.line)?.cue === 'spotted');
+    expect(spotted).toHaveLength(1);
+    const speaker = [a, b].find((x) => x.actor.id === spotted[0].actorId)!;
+    expect(VOICE_BY_ID.get(spotted[0].line)!.voice).toBe(speaker.barks.voice);
+  });
+
+  it('one at a time, unless something more urgent cuts in', () => {
+    const { sim } = flatWorld();
+    teleport(sim.player, 32, 0.02, 20);
+    const a = makeBot(sim, 30, 30, 0);
+    const b = makeBot(sim, 34, 30, 0, 5, a.squad);
+    a.squad.members.push(b);
+    expect(bark(sim, a, 'spotted')).toBe(true);
+    expect(bark(sim, b, 'blinded')).toBe(false);
+    expect(bark(sim, b, 'incoming')).toBe(true);
+    // Once they're done, the next line goes round to the next one.
+    sim.time += 10;
+    expect(bark(sim, a, 'manDown')).toBe(true);
+    expect(sim.events.drain().filter((e) => e.type === 'voice').map((e) => (e as { line: string }).line)).toEqual([
+      `${a.barks.voice}_spotted_1`,
+      `${b.barks.voice}_incoming_1`,
+      `${a.barks.voice}_manDown_1`,
+    ]);
+  });
+
+  it('nobody barks with no player in earshot', () => {
+    const { sim } = flatWorld();
+    teleport(sim.player, 2, 0.02, 2);
+    const a = makeBot(sim, 2 + BARK_RANGE + 1, 2, 0);
+    expect(bark(sim, a, 'manDown')).toBe(false);
+  });
+});
 
 describe('bots', () => {
   it('spot, react to and shoot a visible player', () => {
