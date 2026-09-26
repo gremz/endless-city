@@ -1,6 +1,7 @@
 import { HitGroup } from '../ai/hitboxes';
 import type { SimEvent } from '../core/events';
 import { vec3, type Vec3 } from '../core/math';
+import { eyeHeight } from '../player/pmove';
 import type { Simulation } from '../sim/Simulation';
 import { Material } from '../world/gen/ChunkData';
 import { WEAPONS, type WeaponId } from '../weapons/weaponDefs';
@@ -48,6 +49,15 @@ export class SoundEvents {
         if (!def) return;
         if (e.shooterId === me) a.play(def.sound, { volume: 0.55, reverb: 0.3 });
         else a.play(def.sound, { pos: e.from, volume: 1.4, reverb: 0.45 }, L);
+        break;
+      }
+      case 'voice': {
+        const speaker = sim.getActor(e.actorId);
+        if (!speaker) break;
+        const m = speaker.move.pos;
+        const mouth = { x: m.x, y: m.y + eyeHeight(speaker.move), z: m.z };
+        // Voices carry: the opening's scene is heard from the drop-in point, ~45 m away.
+        a.play(e.line, { pos: mouth, volume: 1.6, reverb: 0.2, refDistance: 14 }, L);
         break;
       }
       case 'step': {

@@ -3,8 +3,10 @@ import { TICK } from '../core/config';
 import { vec3 } from '../core/math';
 import { parseParams } from '../core/urlParams';
 import { makeCmd } from '../input/UserCmd';
-import { Contents, Ramp, SOLID } from '../physics/brush';
+import { Contents, MASK_SHOT, Ramp, SOLID } from '../physics/brush';
+import { makeTrace } from '../physics/trace';
 import { makeActor, Team, teleport } from '../sim/Actor';
+import { PickupManager } from '../sim/Pickups';
 import { Simulation } from '../sim/Simulation';
 import { addGrenades, makeInventory } from '../weapons/Inventory';
 import { brushesFromPacked } from '../world/chunkBrushes';
@@ -14,10 +16,13 @@ import { WEAPONS } from '../weapons/weaponDefs';
 import { BrushWriter } from '../world/gen/BrushWriter';
 import { Material, NAV_RES, type ChunkData } from '../world/gen/ChunkData';
 import { bakeNav } from '../world/gen/navBake';
+import { OPENING_CHUNK } from '../world/gen/encounters';
 import { generateChunk } from '../world/gen/generateChunk';
+import { SPAWN_DROP } from '../world/gen/pickups';
 import { Bot, TargetHistory, type BotContext, type Squad } from './Bot';
 import { skillFor } from './difficulty';
 import { EncounterManager, hearingRadius } from './EncounterManager';
+import { VOICE_BY_ID } from './voiceLines';
 import { AStar, smooth } from './nav/astar';
 import { NavGrid, toCell } from './nav/NavGrid';
 
@@ -565,5 +570,194 @@ describe('co-op', () => {
     kill(p2);
     expect(bot.awareness).toBe(0);
     expect(bot.actor.health).toBe(100);
+  });
+});
+
+describe('opening ambush', () => {
+  /** The 3×3 chunks around spawn plus the row beyond the opening chunk, generated and loaded. */
+  function openingCity(seed: number) {
+    const sim = new Simulation(parseParams(`?seed=${seed}`, seed), { autoBhop: false }, TICK);
+    const resident = new Map<number, { data: ChunkData; visible: boolean }>();
+    for (let cz = -1; cz <= 2; cz++) {
+      for (let cx = -1; cx <= 1; cx++) {
+        const c = generateChunk(sim.params.seed, cx, cz);
+        sim.world.addChunk(c.key, brushesFromPacked(c.brushes, c.cx, c.cz, c.key));
+        sim.nav.onChunkLoaded(c);
+        sim.doors.onChunkLoaded(c);
+        sim.glass.onChunkLoaded(c);
+        resident.set(c.key, { data: c, visible: true });
+      }
+    }
+    const streamer = {
+      resident,
+      getChunk: (cx: number, cz: number) => resident.get(chunkKey(cx, cz))?.data,
+    } as unknown as WorldStreamer;
+    const enc = new EncounterManager(sim, streamer);
+    const pickups = new PickupManager(sim);
+    sim.systems.push(enc, pickups);
+    const p = sim.player;
+    teleport(p, SPAWN_DROP.x, sim.findFloor(SPAWN_DROP.x, SPAWN_DROP.z, 20), SPAWN_DROP.z);
+    p.yaw = Math.PI;
+    return { sim, enc, pickups, p, opening: resident.get(chunkKey(OPENING_CHUNK.cx, OPENING_CHUNK.cz))!.data };
+  }
+
+  for (const seed of [1, 7, 1337, 2024, 90210]) {
+    it(`puts an unaware pair (one MP9, one knife) in view of the drop-in point (seed ${seed})`, () => {
+      const { sim, enc, pickups, p, opening } = openingCity(seed);
+      expect(opening.opening && opening.hasEncounter).toBe(true);
+      const idle = makeCmd();
+      for (let i = 0; i < 32; i++) sim.step(idle);
+      expect(enc.bots.length).toBe(2);
+      const eye = vec3(p.move.pos.x, p.move.pos.y + 1.6, p.move.pos.z);
+      const tr = makeTrace();
+      expect(enc.bots.map((b) => b.actor.inv.primary?.def.id ?? 'knife').sort()).toEqual(['knife', 'mp9']);
+      for (const b of enc.bots) {
+        const a = b.actor;
+        expect(a.inv.secondary).toBeNull();
+        expect(b.skill.reaction).toBeGreaterThan(skillFor(0).reaction);
+        expect(b.state).toBe('idle');
+        expect(b.awareness).toBe(0);
+        const dx = a.move.pos.x - eye.x;
+        const dz = a.move.pos.z - eye.z;
+        expect(Math.hypot(dx, dz)).toBeGreaterThan(20);
+        // Looking away from the plaza, or at the hostage (the shover, from the side).
+        if (b.scene?.role === 'shover') continue;
+        const away = Math.atan2(-dx, -dz);
+        let off = a.yaw - away;
+        while (off > Math.PI) off -= Math.PI * 2;
+        while (off < -Math.PI) off += Math.PI * 2;
+        // The gunman may stand side-on to the hostage, but never facing the plaza.
+        expect(Math.abs(off)).toBeLessThan(b.scene ? (110 * Math.PI) / 180 : Math.PI / 3);
+        sim.world.traceRay(tr, eye, vec3(a.move.pos.x, a.move.pos.y + 1.2, a.move.pos.z), MASK_SHOT);
+        expect(tr.fraction).toBeGreaterThan(0.999);
+      }
+      // A captured officer kneels between them, in view, on the players' side but not a player.
+      const h = enc.hostage!;
+      expect(h).toBeTruthy();
+      expect(h.actor.captive && h.actor.team === Team.Player).toBe(true);
+      expect(sim.players).not.toContain(h.actor);
+      expect(h.actor.move.ducked).toBe(true);
+      sim.world.traceRay(tr, eye, vec3(h.actor.move.pos.x, h.actor.move.pos.y + 0.9, h.actor.move.pos.z), MASK_SHOT);
+      expect(tr.fraction).toBeGreaterThan(0.999);
+      expect(enc.bots.map((b) => b.scene?.role).sort()).toEqual(['gunman', 'shover']);
+      expect(enc.bots.find((b) => b.scene?.role === 'gunman')!.actor.inv.primary?.def.id).toBe('mp9');
+      // The fuse is lit: the player is in range.
+      expect(h.executeAt).toBeGreaterThan(0);
+      // Standing still at the drop-in for a while doesn't give you away.
+      for (let i = 0; i < 64 * 5; i++) sim.step(idle);
+      for (const b of enc.bots) expect(b.state).toBe('idle');
+      // Nobody but his executioner can hurt him: not the player, not the shover's swings.
+      expect(h.actor.health).toBe(100);
+      expect(sim.canHit(p, h.actor)).toBe(false);
+      expect(sim.canHit(enc.bots[0].actor, h.actor)).toBe(false);
+      // Taking the pair out frees him (below), paying a rescue reward.
+      const money = p.money;
+
+      // The MP9 stays on the ground; nothing else drops.
+      for (const b of [...enc.bots]) {
+        b.actor.health = 1;
+        sim.onHit({ attacker: p, victim: b.actor, def: WEAPONS.glock, group: 0, distance: 30, damageScale: 1, penetrated: false, pos: b.actor.move.pos });
+      }
+      expect(enc.isCleared(opening.key)).toBe(true);
+      sim.step(idle);
+      expect(h.phase).toBe('freed');
+      expect(h.actor.alive).toBe(true);
+      expect(p.money).toBeGreaterThan(money);
+      sim.events.drain();
+      for (let i = 0; i < 128; i++) sim.step(idle);
+      expect(sim.events.drain().some((e) => e.type === 'voice' && e.line === 'officer_thanks_1' && e.actorId === h.actor.id)).toBe(true);
+      expect(h.actor.move.ducked).toBe(false);
+      const guns = pickups.items.filter((it) => it.item.kind === 'weapon');
+      expect(guns.map((it) => it.item.kind === 'weapon' && it.item.weapon)).toEqual(['mp9']);
+      expect(guns[0].expiresAt).toBe(Infinity);
+    });
+  }
+
+  for (const seed of [1, 7, 1337, 2024, 90210]) {
+    it(`shoots the hostage when the fuse runs out, and the pair stay unaware (seed ${seed})`, () => {
+      const { sim, enc } = openingCity(seed);
+      const idle = makeCmd();
+      const kinds: string[] = [];
+      const lines: string[] = [];
+      const hear = () => {
+        for (const e of sim.events.drain()) {
+          kinds.push(e.type === 'captive' ? `captive:${e.phase}` : e.type);
+          if (e.type === 'voice') lines.push(e.line);
+        }
+      };
+      for (let i = 0; i < 32; i++) sim.step(idle);
+      const h = enc.hostage!;
+      const due = h.executeAt;
+      while (sim.time < due - 0.5) {
+        sim.step(idle);
+        hear();
+      }
+      expect(h.actor.alive).toBe(true);
+      // The scene talks: taunts and pleas, the gunman's warning and his last words, in that order.
+      expect(lines.some((l) => l.startsWith('shover_taunt'))).toBe(true);
+      expect(lines.some((l) => l.startsWith('officer_plead'))).toBe(true);
+      expect(lines.slice(-2)).toEqual(['gunman_warn_1', 'gunman_execute_1']);
+      for (const l of lines) expect(VOICE_BY_ID.has(l)).toBe(true);
+      while (sim.time < due + 3) {
+        sim.step(idle);
+        hear();
+      }
+      // And the shover gloats.
+      expect(lines.at(-1)).toBe('shover_after_1');
+      expect(h.actor.alive).toBe(false);
+      expect(h.phase).toBe('executed');
+      expect(kinds).toContain('captive:executed');
+      expect(kinds).toContain('kill');
+      for (const b of enc.bots) {
+        expect(b.state).toBe('idle');
+        expect(b.scene).toBeNull();
+      }
+      // The body's cleared away with nothing dropped.
+      while (sim.time < due + 16) sim.step(idle);
+      expect(enc.hostage).toBeNull();
+      expect(sim.actors.some((a) => a.captive)).toBe(false);
+    });
+  }
+
+  it('a bot that notices the player drops its part in the scene, and the hostage stays safe', () => {
+    const { sim, enc, p } = openingCity(7);
+    const idle = makeCmd();
+    for (let i = 0; i < 32; i++) sim.step(idle);
+    const h = enc.hostage!;
+    const gunman = enc.bots.find((b) => b.scene?.role === 'gunman')!;
+    sim.events.drain();
+    gunman.onDamaged(p, sim.time);
+    for (let i = 0; i < 8; i++) sim.step(idle);
+    expect(gunman.scene).toBeNull();
+    // He shouts, even if someone else was talking.
+    expect(sim.events.drain().some((e) => e.type === 'voice' && e.line === 'gunman_spotted_1')).toBe(true);
+    // Long past the fuse: the gunman went after the player instead.
+    h.executeAt = sim.time;
+    for (let i = 0; i < 64 * 2; i++) sim.step(idle);
+    expect(h.actor.alive).toBe(true);
+  });
+
+  it('only the opening chunk near spawn has bots', () => {
+    for (const seed of [1, 7, 1337]) {
+      for (let cz = -1; cz <= 1; cz++) {
+        for (let cx = -1; cx <= 1; cx++) {
+          const d = generateChunk(seed, cx, cz);
+          expect(d.hasEncounter).toBe(cx === OPENING_CHUNK.cx && cz === OPENING_CHUNK.cz);
+        }
+      }
+    }
+  });
+});
+
+describe('bots with only a knife', () => {
+  it('run at the player and stab once in reach', () => {
+    const { sim } = flatWorld();
+    teleport(sim.player, 32, 0.02, 20);
+    const bot = makeBot(sim, 32, 34, 0, 0);
+    bot.actor.inv = makeInventory(null);
+    runBots(sim, [bot], 6);
+    const d = Math.hypot(bot.actor.move.pos.x - 32, bot.actor.move.pos.z - 20);
+    expect(d).toBeLessThan(2.5);
+    expect(sim.player.health).toBeLessThan(100);
   });
 });

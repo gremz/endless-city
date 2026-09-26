@@ -1,19 +1,22 @@
 import { CHUNK } from '../core/config';
 import type { SoundEventKind } from '../core/events';
 import { vec3, type Vec3 } from '../core/math';
-import { hash3, Salt, sfc32 } from '../core/rng';
+import { hash3, Salt, sfc32, type Rand } from '../core/rng';
 import { MASK_SHOT } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
 import { eyeHeight } from '../player/pmove';
 import { makeActor, Team, teleport, type Actor } from '../sim/Actor';
 import type { Simulation, SimSystem } from '../sim/Simulation';
-import { addGrenades, makeInventory } from '../weapons/Inventory';
+import { addGrenades, makeInventory, type Inventory } from '../weapons/Inventory';
 import type { HitInfo } from '../weapons/WeaponSystem';
 import { chunkDist, chunkKey, keyToCoords, worldToChunk } from '../world/chunkMath';
 import type { ChunkData } from '../world/gen/ChunkData';
+import { SPAWN_DROP } from '../world/gen/pickups';
 import type { WorldStreamer } from '../world/WorldStreamer';
+import { pickAmbushSlots, pickHostageSpot } from './ambush';
 import { Bot, TargetHistory, type BotContext, type BotRole, type Squad } from './Bot';
-import { BOT_NAMES, skillFor, weaponFor } from './difficulty';
+import { BOT_NAMES, skillFor, weaponFor, type BotSkill } from './difficulty';
+import { driveHostage, EXECUTE_FUSE, FUSE_RANGE, LAST_WORDS, makeHostage, PLEA_GAP, RESCUE_REWARD, say, WARN_TIME, type Hostage } from './hostage';
 import { AStar } from './nav/astar';
 
 /** How far a sound carries: rain drowns out footsteps and quieter noises (not gunfire). */
@@ -30,6 +33,19 @@ const MIN_REINFORCE_DIST = 12;
 /** A player inside the area this long with nowhere hidden left to bring the rest in: it counts as cleared. */
 const REINFORCE_GIVE_UP = 15;
 const MAX_BOTS = 16;
+/** Bots in the opening ambush (plus one per extra co-op player). */
+const OPENING_SQUAD = 2;
+/** Below the easiest level: slow to react, wild aim, no headshots, no recoil control. */
+const OPENING_SKILL: BotSkill = {
+  ...skillFor(0),
+  reaction: 1.1,
+  aimError: 9,
+  focusTime: 2.5,
+  headChance: 0,
+  turnRate: 120,
+  recoilComp: 0,
+  awareness: 1,
+};
 const DESPAWN_UNSEEN = 10;
 const BODY_TIME = 12;
 
@@ -78,6 +94,8 @@ export class EncounterManager implements SimSystem {
   private tr = makeTrace();
   private squadIds = 1;
   private deadBodies: { bot: Bot; at: number }[] = [];
+  /** The opening's captured officer, while he's around. */
+  hostage: Hostage | null = null;
   enabled = true;
 
   constructor(
@@ -111,7 +129,9 @@ export class EncounterManager implements SimSystem {
         level: this.levelOf(d),
         cleared: this.sim.cleared.has(d.key),
         // One more bot per extra player (up to two): co-op fights stay fights.
-        remaining: skill.squadSize + (skill.overwatch && d.perches.length ? 1 : 0) + Math.min(2, Math.max(0, this.sim.players.length - 1)),
+        remaining:
+          (d.opening ? OPENING_SQUAD : skill.squadSize + (skill.overwatch && d.perches.length ? 1 : 0)) +
+          Math.min(2, Math.max(0, this.sim.players.length - 1)),
         squad: null,
         spawnedOnce: false,
       };
@@ -131,6 +151,7 @@ export class EncounterManager implements SimSystem {
     }
     this.ctx.pathBudget = 2;
     if (this.enabled && (sim.tick & 15) === 0) this.manage();
+    if (this.hostage) this.updateHostage();
     for (const b of this.bots) b.update(this.ctx);
     // Hearing: this tick's sounds made by players.
     const sounds = sim.events.tickSounds;
@@ -153,6 +174,101 @@ export class EncounterManager implements SimSystem {
         this.deadBodies.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * The hostage scene: light the fuse once a player is near enough to watch, free him once the
+   * pair holding him are down, and clear him away with the bodies.
+   */
+  private updateHostage(): void {
+    const sim = this.sim;
+    const h = this.hostage!;
+    const a = h.actor;
+    const pos = a.move.pos;
+    let nearest: Actor | null = null;
+    let best = Infinity;
+    for (const p of sim.players) {
+      if (!p.alive) continue;
+      const d = Math.hypot(p.move.pos.x - pos.x, p.move.pos.z - pos.z);
+      if (d < best) {
+        best = d;
+        nearest = p;
+      }
+    }
+    if (h.phase === 'held') {
+      if (!a.alive) {
+        h.phase = 'executed';
+        a.diedAt = sim.time;
+        h.afterAt = sim.time + 1.2;
+        this.hostageEvent();
+      } else {
+        if (h.executeAt < 0 && best <= FUSE_RANGE) {
+          h.executeAt = sim.time + EXECUTE_FUSE;
+          h.pleaAt = sim.time + 8;
+          this.hostageEvent();
+        }
+        // Everyone in his area down: he's free.
+        if (!this.bots.some((b) => b.actor.alive && b.squad.chunkKey === h.chunkKey)) this.freeHostage();
+        else if (h.executeAt >= 0) this.sceneLines(h);
+      }
+    }
+    // The shover gloats over the body (if he's still standing around), the officer says thanks.
+    if (h.afterAt >= 0 && sim.time >= h.afterAt) {
+      h.afterAt = -1;
+      const shover = this.castBot(h.shoverId);
+      if (shover?.state === 'idle') say(sim, h, shover.actor, 'shover', 'after', true);
+    }
+    if (h.thanksAt >= 0 && sim.time >= h.thanksAt) {
+      h.thanksAt = -1;
+      say(sim, h, a, 'officer', 'thanks', true);
+    }
+    const face = nearest ? Math.atan2(-(nearest.move.pos.x - pos.x), -(nearest.move.pos.z - pos.z)) : null;
+    driveHostage(sim, h, face);
+    if (h.phase === 'executed' && sim.time - a.diedAt > BODY_TIME) this.removeHostage();
+  }
+
+  /** The countdown in words: the officer pleads now and then, the gunman warns him, then his last words. */
+  private sceneLines(h: Hostage): void {
+    const sim = this.sim;
+    const now = sim.time;
+    const left = h.executeAt - now;
+    if (h.pleaAt >= 0 && now >= h.pleaAt && left > WARN_TIME + 3 && say(sim, h, h.actor, 'officer', 'plead')) h.pleaAt = now + PLEA_GAP;
+    // Only a gunman still holding him at gunpoint says his lines.
+    const gunman = this.castBot(h.gunmanId);
+    if (!gunman?.scene || !gunman.actor.alive) return;
+    if (!h.warned && left <= WARN_TIME) {
+      h.warned = true;
+      say(sim, h, gunman.actor, 'gunman', 'warn', true);
+    }
+    if (!h.lastWords && left <= LAST_WORDS) {
+      h.lastWords = true;
+      say(sim, h, gunman.actor, 'gunman', 'execute', true);
+    }
+  }
+
+  private castBot(id: number): Bot | undefined {
+    return id < 0 ? undefined : this.bots.find((b) => b.actor.id === id && b.actor.alive);
+  }
+
+  private freeHostage(): void {
+    const sim = this.sim;
+    const h = this.hostage!;
+    h.phase = 'freed';
+    h.thanksAt = sim.time + 1.5;
+    h.actor.executioner = -1;
+    for (const p of sim.players) sim.economy.add(p, RESCUE_REWARD, 'officer rescued');
+    this.hostageEvent();
+  }
+
+  private hostageEvent(): void {
+    const h = this.hostage!;
+    this.sim.events.push({ type: 'captive', actorId: h.actor.id, phase: h.phase, executeAt: h.executeAt });
+  }
+
+  private removeHostage(): void {
+    if (!this.hostage) return;
+    this.sim.removeActor(this.hostage.actor);
+    this.hostage = null;
   }
 
   private losTo(b: Bot, pos: Vec3): boolean {
@@ -185,6 +301,14 @@ export class EncounterManager implements SimSystem {
         if (sim.time - st.stalledSince > REINFORCE_GIVE_UP) this.clear(st);
       }
     }
+    // The officer stays put until the players leave his area behind.
+    const h = this.hostage;
+    if (h && h.phase !== 'held') {
+      const [hx, hz] = keyToCoords(h.chunkKey);
+      if (!this.streamer.resident.has(h.chunkKey) || sim.players.every((p) => chunkDist(hx, hz, worldToChunk(p.move.pos.x), worldToChunk(p.move.pos.z)) > 2)) {
+        this.removeHostage();
+      }
+    }
     // Despawn squads every player has left far behind.
     for (const st of this.states.values()) {
       const sq = st.squad;
@@ -196,8 +320,119 @@ export class EncounterManager implements SimSystem {
     }
   }
 
+  private newSquad(key: number, d: ChunkData): Squad {
+    return {
+      id: this.squadIds++,
+      chunkKey: key,
+      homeCx: d.cx,
+      homeCz: d.cz,
+      members: [],
+      lastKnown: null,
+      lastKnownTime: -100,
+      calloutAt: Infinity,
+      lastSeen: this.sim.time,
+      nextNadeAt: this.sim.time + 4,
+    };
+  }
+
+  private patrolOf(d: ChunkData): Vec3[] {
+    const patrol: Vec3[] = [];
+    for (let i = 0; i < d.patrol.length; i += 3) patrol.push(vec3(d.patrol[i], d.patrol[i + 1], d.patrol[i + 2]));
+    return patrol;
+  }
+
+  /** Put one bot into the world. `inv` and `skill` override the level's loadout and skill. */
+  private makeBot(
+    st: EncounterState,
+    squad: Squad,
+    patrol: Vec3[],
+    r: Rand,
+    pos: Vec3,
+    role: BotRole,
+    opts: { inv?: Inventory; skill?: BotSkill; yaw?: number; idleYaw?: number; keepLoot?: boolean } = {},
+  ): Bot {
+    const sim = this.sim;
+    const skill = opts.skill ?? skillFor(st.level);
+    const name = BOT_NAMES[Math.floor(r() * BOT_NAMES.length)];
+    const a = makeActor(sim.newActorId(), name, Team.Bots, pos.x, pos.y, pos.z);
+    a.yaw = a.prevYaw = opts.yaw ?? r() * Math.PI * 2 - Math.PI;
+    if (opts.inv) a.inv = opts.inv;
+    else {
+      const wid = weaponFor(st.level, r(), role === 'overwatch');
+      const isSecondary = wid === 'glock' || wid === 'deagle';
+      a.inv = makeInventory(isSecondary ? wid : 'glock', isSecondary ? null : wid);
+    }
+    a.armor = skill.armor;
+    a.helmet = skill.helmet;
+    a.keepLoot = opts.keepLoot ?? false;
+    if (role !== 'overwatch' && skill.nades > 0) {
+      // Own stream so grenades never change the rest of the spawn.
+      const gr = sfc32(hash3(sim.params.seed, a.id, st.level, Salt.Grenade));
+      for (let i = 0; i < skill.nades; i++) addGrenades(a.inv, skill.nadeKinds[Math.floor(gr() * skill.nadeKinds.length)], 1);
+    }
+    teleport(a, pos.x, pos.y, pos.z);
+    sim.addActor(a);
+    const bot = new Bot(a, skill, squad, role, pos, patrol, sim.params.seed);
+    if (opts.idleYaw !== undefined) bot.idleYaw = bot.lookYaw = bot.aimYaw = opts.idleYaw;
+    squad.members.push(bot);
+    this.bots.push(bot);
+    return bot;
+  }
+
+  /**
+   * The opening ambush: a pair in plain view of the spawn drop-in point, idle and looking away.
+   * They're barely trained: one has an MP9 (it stays on the ground until taken), the rest only
+   * knives. False if the spawn plaza isn't loaded (the
+   * sight checks need its walls) or a player is already too close.
+   */
+  private spawnOpening(st: EncounterState, d: ChunkData, key: number): boolean {
+    const sim = this.sim;
+    const spawnKey = chunkKey(0, 0);
+    if (!this.streamer.resident.has(spawnKey)) return false;
+    const ex = SPAWN_DROP.x;
+    const ez = SPAWN_DROP.z;
+    const eye = vec3(ex, sim.findFloor(ex, ez, 20) + 1.6, ez);
+    const room = Math.min(st.remaining, MAX_BOTS - this.aliveCount);
+    const slots = pickAmbushSlots(sim, d, eye, room);
+    // Someone already standing there (an old save, a guest): spawn the usual way instead.
+    const crowded = slots.some((s) => sim.players.some((p) => p.alive && Math.hypot(s.x - p.move.pos.x, s.z - p.move.pos.z) < MIN_SPAWN_DIST));
+    if (!slots.length || crowded) return false;
+    const r = sfc32(hash3(sim.params.seed, d.cx, d.cz, Salt.Names));
+    const squad = this.newSquad(key, d);
+    const patrol = this.patrolOf(d);
+    // A captured officer kneels just beyond the gunman, facing the plaza.
+    const spot = this.hostage ? null : pickHostageSpot(sim, eye, slots[0], slots.slice(1));
+    let hostage: Hostage | null = null;
+    if (spot) {
+      const l = Math.hypot(spot.x - eye.x, spot.z - eye.z) || 1;
+      hostage = this.hostage = makeHostage(sim, spot, (spot.x - eye.x) / l, (spot.z - eye.z) / l, key);
+    }
+    slots.forEach((pos, i) => {
+      // Facing away from the plaza, a little turned towards each other.
+      const away = Math.atan2(-(pos.x - eye.x), -(pos.z - eye.z));
+      const idleYaw = away + (i % 2 ? 0.35 : -0.35);
+      // In the scene, facing the hostage.
+      const hp = hostage?.actor.move.pos;
+      const yaw = hp && i < 2 ? Math.atan2(-(hp.x - pos.x), -(hp.z - pos.z)) : idleYaw;
+      const inv = i === 0 ? makeInventory(null, 'mp9') : makeInventory(null);
+      const bot = this.makeBot(st, squad, patrol, r, pos, 'anchor', { inv, skill: OPENING_SKILL, yaw, idleYaw, keepLoot: true });
+      if (hostage && i < 2) {
+        bot.scene = { hostage, role: i === 0 ? 'gunman' : 'shover' };
+        if (i === 0) hostage.gunmanId = bot.actor.id;
+        else hostage.shoverId = bot.actor.id;
+        bot.lookYaw = bot.aimYaw = yaw;
+      }
+    });
+    if (hostage) this.hostageEvent();
+    st.remaining -= squad.members.length;
+    st.squad = squad;
+    st.spawnedOnce = true;
+    return true;
+  }
+
   /** Returns false if nobody could be placed (every slot in sight or too close). */
   private spawnSquad(st: EncounterState, d: ChunkData, key: number): boolean {
+    if (d.opening && !st.spawnedOnce && this.spawnOpening(st, d, key)) return true;
     const sim = this.sim;
     const skill = skillFor(st.level);
     const r = sfc32(hash3(sim.params.seed, d.cx, d.cz, Salt.Names) ^ (st.spawnedOnce ? 0x55 : 0));
@@ -228,41 +463,9 @@ export class EncounterManager implements SimSystem {
     const riflemen = Math.min(st.remaining - (wantOverwatch ? 1 : 0), slots.length, MAX_BOTS - this.aliveCount);
     if (riflemen <= 0) return false; // try again next time (players may be looking at every slot)
 
-    const squad: Squad = {
-      id: this.squadIds++,
-      chunkKey: key,
-      homeCx: d.cx,
-      homeCz: d.cz,
-      members: [],
-      lastKnown: null,
-      lastKnownTime: -100,
-      calloutAt: Infinity,
-      lastSeen: sim.time,
-      nextNadeAt: sim.time + 4,
-    };
-    const patrol: { x: number; y: number; z: number }[] = [];
-    for (let i = 0; i < d.patrol.length; i += 3) patrol.push({ x: d.patrol[i], y: d.patrol[i + 1], z: d.patrol[i + 2] });
-
-    const make = (pos: Vec3, role: BotRole) => {
-      const name = BOT_NAMES[Math.floor(r() * BOT_NAMES.length)];
-      const a = makeActor(sim.newActorId(), name, Team.Bots, pos.x, pos.y, pos.z);
-      a.yaw = a.prevYaw = r() * Math.PI * 2 - Math.PI;
-      const wid = weaponFor(st.level, r(), role === 'overwatch');
-      const isSecondary = wid === 'glock' || wid === 'deagle';
-      a.inv = makeInventory(isSecondary ? wid : 'glock', isSecondary ? null : wid);
-      a.armor = skill.armor;
-      a.helmet = skill.helmet;
-      if (role !== 'overwatch' && skill.nades > 0) {
-        // Own stream so grenades never change the rest of the spawn.
-        const gr = sfc32(hash3(sim.params.seed, a.id, st.level, Salt.Grenade));
-        for (let i = 0; i < skill.nades; i++) addGrenades(a.inv, skill.nadeKinds[Math.floor(gr() * skill.nadeKinds.length)], 1);
-      }
-      teleport(a, pos.x, pos.y, pos.z);
-      sim.addActor(a);
-      const bot = new Bot(a, skill, squad, role, pos, patrol, sim.params.seed);
-      squad.members.push(bot);
-      this.bots.push(bot);
-    };
+    const squad = this.newSquad(key, d);
+    const patrol = this.patrolOf(d);
+    const make = (pos: Vec3, role: BotRole) => this.makeBot(st, squad, patrol, r, pos, role);
     for (let i = 0; i < riflemen; i++) {
       const role: BotRole = i === 0 && skill.canFlank && riflemen >= 3 ? 'flanker' : i % 2 === 1 ? 'patroller' : 'anchor';
       make(slots[i], role);
@@ -277,6 +480,8 @@ export class EncounterManager implements SimSystem {
   private despawnSquad(st: EncounterState): void {
     const sq = st.squad;
     if (!sq) return;
+    // Everyone's gone far away: the scene doesn't come back with the survivors.
+    if (this.hostage?.chunkKey === st.key && this.hostage.phase === 'held') this.removeHostage();
     let survivors = 0;
     for (const b of sq.members) {
       if (b.actor.alive) survivors++;
@@ -313,7 +518,7 @@ export class EncounterManager implements SimSystem {
         this.checkCleared(victimBot.squad);
       }
     }
-    if (info.victim.team === Team.Player && killed) this.onPlayerDeath(info.victim);
+    if (info.victim.team === Team.Player && killed && !info.victim.captive) this.onPlayerDeath(info.victim);
   }
 
   private checkCleared(sq: Squad): void {

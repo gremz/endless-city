@@ -63,6 +63,8 @@ export interface SaveData {
   glass?: PaneRef[];
   /** Chunk keys seen on the city map. */
   explored: number[];
+  /** Where the guided opening had got to (an objective step name; absent in older saves). */
+  tutorial?: string;
 }
 
 const savedWeapon = (w: WeaponItem | null): SavedWeapon | null => (w ? { id: w.def.id, clip: w.clip, reserve: w.reserve } : null);
@@ -346,6 +348,7 @@ export function validateSave(raw: unknown): SaveData | null {
       doors: doorSave(raw.doors),
       glass: glassSave(raw.glass),
       explored: intList(raw.explored ?? [], 'explored'),
+      ...(typeof raw.tutorial === 'string' && raw.tutorial.length <= 16 ? { tutorial: raw.tutorial } : {}),
     };
   } catch (e) {
     if (e instanceof Invalid) return null;

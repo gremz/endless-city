@@ -51,6 +51,12 @@ export interface Actor {
   engaging: boolean;
   /** Id of the car this actor is driving, or -1. */
   vehicle: number;
+  /** Guns this actor drops stay until someone takes them (the opening ambush's MP9s). */
+  keepLoot: boolean;
+  /** A kneeling hostage (the opening's captured officer): not a player, and only its executioner can hurt it. */
+  captive: boolean;
+  /** Actor id allowed to hurt this captive, or -1. */
+  executioner: number;
 }
 
 export function makeActor(id: number, name: string, team: TeamId, x: number, y: number, z: number): Actor {
@@ -87,6 +93,9 @@ export function makeActor(id: number, name: string, team: TeamId, x: number, y: 
     money: 0,
     engaging: false,
     vehicle: -1,
+    keepLoot: false,
+    captive: false,
+    executioner: -1,
   };
 }
 

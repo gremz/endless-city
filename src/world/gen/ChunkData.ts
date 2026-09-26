@@ -133,6 +133,8 @@ export interface ChunkData {
   /** Brush indices (into `brushes`) of breakable window panes. */
   glass: Int32Array;
   hasEncounter: boolean;
+  /** The scripted opening ambush, in view of the spawn drop-in point (see encounters.ts). */
+  opening?: boolean;
   genMs: number;
 }
 

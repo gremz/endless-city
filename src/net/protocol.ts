@@ -294,6 +294,7 @@ export const Flag = {
   HasSecondary: 256,
   Noclip: 512,
   Healing: 1024,
+  Captive: 2048,
 } as const;
 
 const SLOTS: readonly WeaponSlot[] = ['primary', 'secondary', 'knife', 'grenade'];
@@ -437,6 +438,7 @@ export function netActor(a: Actor): NetActor {
   if (a.inv.secondary) flags |= Flag.HasSecondary;
   if (m.noclip) flags |= Flag.Noclip;
   if (a.healEnd >= 0) flags |= Flag.Healing;
+  if (a.captive) flags |= Flag.Captive;
   return {
     id: a.id,
     team: a.team,
@@ -476,7 +478,11 @@ export function privateState(a: Actor, swap: number): PrivateState {
   };
 }
 
-export function encodeSnapshot(s: Snapshot): ArrayBuffer {
+/**
+ * `nadesJson` is `toJson(s.nades)` when the caller already has it: grenades are the same for
+ * every client, so the host serialises them once per broadcast.
+ */
+export function encodeSnapshot(s: Snapshot, nadesJson = toJson(s.nades)): ArrayBuffer {
   const w = new Writer();
   w.u8(Bin.Snapshot);
   w.u32(s.tick);
@@ -523,7 +529,7 @@ export function encodeSnapshot(s: Snapshot): ArrayBuffer {
     for (let i = 0; i < 3; i++) w.u16(v.passengers[i] < 0 ? 0xffff : v.passengers[i]);
     w.f32(v.burnUntil);
   }
-  w.bytes(enc.encode(toJson({ me: s.me, nades: s.nades })));
+  w.bytes(enc.encode(`{"me":${toJson(s.me)},"nades":${nadesJson}}`));
   return w.finish();
 }
 
@@ -579,11 +585,11 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
     const p1 = r.u16();
     const p2 = r.u16();
     const burnUntil = r.f32();
-    vehicles.push({ 
-      id, flags, paint, x, y, z, vx, vy, vz, yaw, yawRate, steer, throttle, pitch, roll, health, 
-      driver: d === 0xffff ? -1 : d, 
-      passengers: [p0 === 0xffff ? -1 : p0, p1 === 0xffff ? -1 : p1, p2 === 0xffff ? -1 : p2], 
-      burnUntil 
+    vehicles.push({
+      id, flags, paint, x, y, z, vx, vy, vz, yaw, yawRate, steer, throttle, pitch, roll, health,
+      driver: d === 0xffff ? -1 : d,
+      passengers: [p0 === 0xffff ? -1 : p0, p1 === 0xffff ? -1 : p1, p2 === 0xffff ? -1 : p2],
+      burnUntil,
     });
   }
   const extra = JSON.parse(dec.decode(r.bytes())) as { me: PrivateState | null; nades: NetGrenades };

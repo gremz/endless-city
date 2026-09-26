@@ -357,7 +357,7 @@ export class CharacterRenderer implements ActorRenderer {
     for (const o of inst.vest) o.visible = a.armor > 0;
     // The gun in hand: whatever slot is active; dead bodies that dropped their guns hold nothing.
     const item = a.inv[a.inv.active];
-    const id = !a.alive && !a.inv.primary && !a.inv.secondary ? null : (item?.def.id ?? null);
+    const id = a.captive || (!a.alive && !a.inv.primary && !a.inv.secondary) ? null : (item?.def.id ?? null);
     if (id !== inst.gunId) {
       inst.gunId = id;
       inst.gun.visible = id !== null;
@@ -413,7 +413,7 @@ export class CharacterRenderer implements ActorRenderer {
     }
     // Pistols, knives and grenades: swap the rifle hold's arms for the item's own hold. Long guns
     // stay aimed standing still or firing, and drop to the ready carry on the move.
-    const item = a.alive ? a.inv[a.inv.active] : null;
+    const item = a.alive && !a.captive ? a.inv[a.inv.active] : null;
     const moving = Math.hypot(inst.vx, inst.vz) > READY_SPEED;
     const firing = this.time - inst.shotAt < AIM_AFTER_SHOT;
     const hold = item ? (HOLD_BY_CATEGORY[item.def.category] ?? (moving && !firing ? READY_HOLD : undefined)) : undefined;

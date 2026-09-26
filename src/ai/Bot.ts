@@ -2,9 +2,10 @@ import { HU } from '../core/config';
 import { clamp, DEG, vec3, wrapAngle, type Vec3 } from '../core/math';
 import { hash3, Salt, sfc32, type Rand } from '../core/rng';
 import { Buttons, makeCmd, SELECT_LAST, type UserCmd } from '../input/UserCmd';
-import { MASK_SHOT } from '../physics/brush';
+import { MASK_PLAYER, MASK_SHOT } from '../physics/brush';
 import { makeTrace } from '../physics/trace';
 import { eyeHeight, playerMove } from '../player/pmove';
+import { STAND_MAXS, STAND_MINS } from '../player/movementConfig';
 import type { Actor } from '../sim/Actor';
 import { flashAmount, simulateThrow, throwOrigin, throwVelocity } from '../sim/Grenades';
 import type { Simulation } from '../sim/Simulation';
@@ -16,6 +17,7 @@ import { visibilityAt } from '../sim/Environment';
 import { getPattern, patternAt } from '../weapons/sprayPatterns';
 import { updateWeapon } from '../weapons/WeaponSystem';
 import type { BotSkill } from './difficulty';
+import { say, type Hostage } from './hostage';
 import { bodyScale } from './hitboxes';
 import type { AStar, PathPoint } from './nav/astar';
 import { findCover, type CoverSpot } from './nav/cover';
@@ -23,6 +25,8 @@ import { cellCenter } from './nav/NavGrid';
 
 export type BotState = 'idle' | 'patrol' | 'alert' | 'engage' | 'cover' | 'flank' | 'retreat' | 'overwatch';
 export type BotRole = 'anchor' | 'patroller' | 'flanker' | 'overwatch';
+/** Parts in the opening's execution scene: holding the hostage at gunpoint, or pushing him around. */
+export type SceneRole = 'gunman' | 'shover';
 
 export interface Squad {
   id: number;
@@ -102,6 +106,15 @@ const va = vec3();
 const vb = vec3();
 const tgt = vec3();
 const recoil = { pitch: 0, yaw: 0 };
+/** Distance a knife-wielding bot swings from. */
+const MELEE_REACH = 1.5;
+/** The shover stands this far from the hostage, 85–145° round from straight behind him, and swings from up to SHOVE_REACH. */
+const SHOVE_RADIUS = 1.2;
+const SHOVE_MIN = 85 * DEG;
+const SHOVE_MAX = 145 * DEG;
+const SHOVE_REACH = 2;
+/** The gunman gives up on a burst that hasn't killed after this long. */
+const EXECUTE_BURST = 1.5;
 const moveDir = { x: 0, z: 0 };
 const lookHeights = [0, 0, 0];
 const eyeTmp = vec3();
@@ -156,6 +169,14 @@ export class Bot {
   strafeUntil = 0;
   patrolIdx = 0;
   lookYaw: number;
+  /** Idle bots glance around within 45° of this heading (null: anywhere). */
+  idleYaw: number | null = null;
+  /** A part in a scripted scene round a hostage, played while still unaware (dropped once it isn't). */
+  scene: { hostage: Hostage; role: SceneRole } | null = null;
+  private shoveSpot: Vec3 | null = null;
+  /** When the shover swings next, and when he last did (-1: not at this spot yet). */
+  private shoveAt = 0;
+  private shovedAt = -1;
   private thinkPhase: number;
 
   // Grenades.
@@ -488,6 +509,103 @@ export class Bot {
     }
   }
 
+  // -------------------------------------------------------------- the opening scene
+
+  private leaveScene(): void {
+    const h = this.scene!.hostage;
+    if (h.actor.executioner === this.actor.id) h.actor.executioner = -1;
+    this.scene = null;
+    this.shoveSpot = null;
+  }
+
+  /**
+   * The gunman holds the hostage at gunpoint and, when the time comes, shoots him point blank.
+   * The shover walks round him and takes a swing now and then (it can't hurt him). Returns true
+   * to walk.
+   */
+  private playScene(ctx: BotContext, move: { x: number; z: number }, now: number, dt: number): boolean {
+    const a = this.actor;
+    const { hostage, role } = this.scene!;
+    const hp = hostage.actor.move.pos;
+    const dx = hp.x - a.move.pos.x;
+    const dz = hp.z - a.move.pos.z;
+    const toYaw = Math.atan2(-dx, -dz);
+    if (role === 'gunman') {
+      const dy = hp.y + eyeHeight(hostage.actor.move) - (a.move.pos.y + eyeHeight(a.move));
+      const pitch = Math.atan2(dy, Math.hypot(dx, dz));
+      if (hostage.executeAt < 0 || now < hostage.executeAt) {
+        this.turnTowards(toYaw, pitch, dt, false);
+        return false;
+      }
+      // Point blank, dead on.
+      this.aimYaw = toYaw;
+      this.aimPitch = pitch;
+      hostage.actor.executioner = a.id;
+      this.cmd.buttons |= Buttons.ATTACK;
+      this.cmd.pressed |= Buttons.ATTACK;
+      return false;
+    }
+    // A moment after each swing (or if he never got close enough), move on.
+    if (!this.shoveSpot || (this.shovedAt >= 0 && now > this.shovedAt + 1) || now > this.shoveAt + 3) {
+      this.shoveSpot = this.pickShoveSpot(ctx, hostage) ?? vec3(a.move.pos.x, a.move.pos.y, a.move.pos.z);
+      this.shoveAt = now + 4 + this.r() * 3;
+      this.shovedAt = -1;
+    }
+    const sx = this.shoveSpot.x - a.move.pos.x;
+    const sz = this.shoveSpot.z - a.move.pos.z;
+    // Eyes on the hostage the whole time, even walking.
+    this.turnTowards(toYaw, -0.4, dt, false);
+    if (Math.hypot(sx, sz) > 0.3) {
+      move.x = sx;
+      move.z = sz;
+      return true;
+    }
+    if (now >= this.shoveAt && this.shovedAt < 0 && Math.hypot(dx, dz) <= SHOVE_REACH) {
+      this.cmd.buttons |= Buttons.ATTACK;
+      this.cmd.pressed |= Buttons.ATTACK;
+      this.shovedAt = now;
+      // Quiet once the gunman's said his piece.
+      if (!hostage.warned) say(ctx.sim, hostage, a, 'shover', 'taunt');
+    }
+    return false;
+  }
+
+  /**
+   * Somewhere beside the hostage with room to stand: on the side the shover's already on first,
+   * so he never crosses in front of the gunman.
+   */
+  private pickShoveSpot(ctx: BotContext, h: Hostage): Vec3 | null {
+    const hp = h.actor.move.pos;
+    const first = Math.sign(this.awaySide(h)) || (this.r() < 0.5 ? -1 : 1);
+    for (let i = 0; i < 8; i++) {
+      const side = i < 4 ? first : -first;
+      const ang = side * (SHOVE_MIN + this.r() * (SHOVE_MAX - SHOVE_MIN));
+      const c = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const x = hp.x + (h.awayX * c - h.awayZ * sn) * SHOVE_RADIUS;
+      const z = hp.z + (h.awayX * sn + h.awayZ * c) * SHOVE_RADIUS;
+      const spot = vec3(x, hp.y + 0.05, z);
+      if (ctx.sim.world.testBox(tr, spot, STAND_MINS, STAND_MAXS, MASK_PLAYER)) continue;
+      // Nothing between him and the hostage.
+      va.x = x;
+      va.y = hp.y + 1;
+      va.z = z;
+      vb.x = hp.x;
+      vb.y = hp.y + 1;
+      vb.z = hp.z;
+      ctx.sim.world.traceRay(tr, va, vb, MASK_SHOT);
+      if (tr.fraction >= 0.999) return spot;
+    }
+    return null;
+  }
+
+  /** Which side of the hostage's plaza–away line this bot is on (+/−). */
+  private awaySide(h: Hostage): number {
+    const p = h.actor.move.pos;
+    const m = this.actor.move.pos;
+    return h.awayX * (m.z - p.z) - h.awayZ * (m.x - p.x);
+  }
+
   // -------------------------------------------------------------- aiming
 
   private aimAt(ctx: BotContext, p: Actor, dt: number): { onTarget: boolean; dist: number } {
@@ -605,6 +723,15 @@ export class Bot {
       this.rollAim();
     }
     this.wasVisible = engaged;
+    const h = this.scene?.hostage;
+    if (h && (this.state !== 'idle' || h.phase !== 'held' || (h.executeAt >= 0 && now > h.executeAt + EXECUTE_BURST))) {
+      // Spotted with the officer still alive: raise the alarm (the first one to shout can't wait).
+      if (this.state !== 'idle' && h.phase === 'held') {
+        const first = !h.said.has('gunman:spotted') && !h.said.has('shover:spotted');
+        say(sim, h, a, this.scene!.role, 'spotted', first);
+      }
+      this.leaveScene();
+    }
 
     const move = moveDir;
     move.x = 0;
@@ -621,6 +748,8 @@ export class Bot {
     } else if (now < this.lookAwayUntil) {
       // Own flash in the air: look away until it pops.
       this.turnTowards(this.lookAwayYaw, -0.3, dt, true);
+    } else if (this.scene) {
+      walk = this.playScene(ctx, move, now, dt);
     } else {
       // Look where we're going, or towards the last known position.
       let lookYaw = this.lookYaw;
@@ -632,12 +761,13 @@ export class Bot {
 
     switch (this.state) {
       case 'idle':
+        if (this.scene) break;
         if (Math.hypot(this.post.x - a.move.pos.x, this.post.z - a.move.pos.z) > 1.5) {
           this.goTo(ctx, this.post);
           this.followPath(move);
           walk = true;
         } else if (this.r() < 0.004) {
-          this.lookYaw += (this.r() - 0.5) * 2.5;
+          this.lookYaw = this.idleYaw === null ? this.lookYaw + (this.r() - 0.5) * 2.5 : this.idleYaw + (this.r() - 0.5) * (Math.PI / 2);
         }
         break;
       case 'patrol': {
@@ -764,6 +894,10 @@ export class Bot {
       move.z = pz * 0.9 - move.z * 0.3;
     }
 
+    // A knife only swings once it's in reach.
+    const melee = activeItem(a.inv).def.category === 'knife';
+    if (melee && dist > MELEE_REACH) wantFire = false;
+
     // Firing with burst control by range.
     if (wantFire) {
       const def = activeItem(a.inv).def;
@@ -780,7 +914,7 @@ export class Bot {
         this.burstLeft = def.category === 'sniper' ? 1 : dist > 30 ? 1 : dist > 15 ? 3 + Math.floor(this.r() * 3) : 8 + Math.floor(this.r() * 6);
       }
       const speed = Math.hypot(a.move.vel.x, a.move.vel.z);
-      const slowEnough = speed < def.maxSpeed * 0.34 || !a.move.onGround;
+      const slowEnough = melee || speed < def.maxSpeed * 0.34 || !a.move.onGround;
       if (this.burstLeft > 0 && slowEnough && target && this.clearShot(ctx, target)) {
         // Semi-autos need the trigger released between shots.
         if (def.automatic || !a.wpn.triggerHeld) {
@@ -1011,8 +1145,8 @@ export class Bot {
     const a = this.actor;
     const now = ctx.sim.time;
     const def = activeItem(a.inv).def;
-    // Too far for the weapon: close in along a path.
-    const effective = def.category === 'pistol' ? 25 : def.category === 'smg' ? 30 : 70;
+    // Too far for the weapon: close in along a path (all the way in with a knife).
+    const effective = def.category === 'knife' ? MELEE_REACH * 0.8 : def.category === 'pistol' ? 25 : def.category === 'smg' ? 30 : 70;
     if (dist > effective && this.lastKnown) {
       this.goTo(ctx, this.lastKnown);
       this.followPath(move);

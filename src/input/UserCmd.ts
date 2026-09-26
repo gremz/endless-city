@@ -1,3 +1,5 @@
+import { DEG } from '../core/math';
+
 export const Buttons = {
   ATTACK: 1,
   ATTACK2: 2,
@@ -11,6 +13,9 @@ export const Buttons = {
   HEAL: 512,
   FLASHLIGHT: 1024,
 } as const;
+
+/** View pitch limit, up or down. */
+export const MAX_PITCH = 89 * DEG;
 
 /** One tick of input, produced by the local player's Input or by a bot brain. */
 export interface UserCmd {

@@ -380,6 +380,7 @@ export class Simulation implements WeaponContext {
   // ---- WeaponContext ----
 
   canHit(attacker: Actor, victim: Actor): boolean {
+    if (victim.captive) return attacker.id === victim.executioner;
     return attacker.team !== victim.team;
   }
 

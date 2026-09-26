@@ -3,9 +3,8 @@ import type { Rand } from '../../core/rng';
 import { NAV_CELL, NAV_RES, NavFlag } from './ChunkData';
 import { spanColumns, type NavBake } from './navBake';
 
-/** Where the player drops in on the spawn plaza (chunk-local meters). */
-const SPAWN_X = 32;
-const SPAWN_Z = 22;
+/** Where the player drops in on the spawn plaza (chunk-local meters), facing +Z. */
+export const SPAWN_DROP = { x: 32, z: 22 } as const;
 const MIN_SPACING = 12;
 
 /**
@@ -30,7 +29,7 @@ export function placePickups(r: Rand, nav: NavBake, cx: number, cz: number, hasE
     if (!(f & NavFlag.Walkable) || !(f & NavFlag.Reachable) || f & (NavFlag.Street | NavFlag.Water)) continue;
     let score = r();
     if (isSpawn) {
-      const d = Math.hypot((i + 0.5) * NAV_CELL - SPAWN_X, (j + 0.5) * NAV_CELL - SPAWN_Z);
+      const d = Math.hypot((i + 0.5) * NAV_CELL - SPAWN_DROP.x, (j + 0.5) * NAV_CELL - SPAWN_DROP.z);
       if (d < 5 || d > 14) continue;
     } else {
       if (f & NavFlag.Indoor) score += 1.5;

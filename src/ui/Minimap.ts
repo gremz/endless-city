@@ -30,9 +30,12 @@ export interface MinimapView {
   stash: { x: number; z: number } | null;
   /** Cars free to drive. */
   cars?: { x: number; z: number; yaw: number }[];
+  /** The objective's waypoint. */
+  objective?: { x: number; z: number } | null;
 }
 
 const STASH = '#7fd4ff';
+export const OBJECTIVE = '#ffd66a';
 
 /**
  * CS-style radar in the HUD corner: rotates with the view, shows the streamed city top-down,
@@ -218,6 +221,30 @@ export class Minimap implements StreamerListener {
       }
       const [sx, sy] = toScreen(dx, dz);
       drawStash(ctx, sx, sy, this.dpr);
+    }
+
+    // Objective: a gold diamond, pinned to the rim when it's off the radar.
+    if (v.objective) {
+      let dx = v.objective.x - v.x;
+      let dz = v.objective.z - v.z;
+      const l = Math.hypot(dx, dz);
+      if (l > range * 0.86) {
+        dx = (dx / l) * range * 0.86;
+        dz = (dz / l) * range * 0.86;
+      }
+      const [sx, sy] = toScreen(dx, dz);
+      const r = 6 * this.dpr;
+      ctx.fillStyle = OBJECTIVE;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.lineWidth = 1.5 * this.dpr;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - r);
+      ctx.lineTo(sx + r, sy);
+      ctx.lineTo(sx, sy + r);
+      ctx.lineTo(sx - r, sy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
 
     // North marker on the rim.

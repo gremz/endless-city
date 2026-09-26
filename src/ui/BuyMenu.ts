@@ -30,6 +30,8 @@ export class BuyMenu {
   private status: HTMLDivElement;
   private category = -1;
   open = false;
+  /** Item to point out (the objective's upgrade suggestion), and its category. */
+  private suggested: BuyItem | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -78,6 +80,12 @@ export class BuyMenu {
     this.render();
   }
 
+  highlight(item: BuyItem | null): void {
+    if (item === this.suggested) return;
+    this.suggested = item;
+    this.render();
+  }
+
   feedback(text: string, ok: boolean): void {
     this.status.textContent = text;
     this.status.className = `buy-status ${ok ? 'ok' : 'bad'}`;
@@ -90,7 +98,11 @@ export class BuyMenu {
     const rows: HTMLElement[] = [];
     if (!zone.ok) rows.push(el('div.buy-warning', { text: zone.reason }));
     if (this.category < 0) {
-      BUY_MENU.forEach((c, i) => rows.push(el('div.buy-row', {}, [el('kbd', { text: String(i + 1) }), el('span', { text: c.title })])));
+      BUY_MENU.forEach((c, i) => {
+        const row = el('div.buy-row', {}, [el('kbd', { text: String(i + 1) }), el('span', { text: c.title })]);
+        if (this.suggested && c.items.includes(this.suggested)) row.classList.add('suggested');
+        rows.push(row);
+      });
     } else {
       const c = BUY_MENU[this.category];
       rows.push(el('div.buy-cat', { text: c.title }));
@@ -108,6 +120,7 @@ export class BuyMenu {
           el('span.buy-price', { text: unavailable ? unavailableLabel(unavailable) : `$${price}` }),
         ]);
         if (unavailable || price > this.model.money || !zone.ok) row.classList.add('disabled');
+        else if (item === this.suggested) row.classList.add('suggested');
         rows.push(row);
       });
     }

@@ -3,7 +3,7 @@ import { CHUNK } from '../core/config';
 import type { SimEvent } from '../core/events';
 import { FixedLoop } from '../core/loop';
 import type { GameParams } from '../core/urlParams';
-import { Buttons, type UserCmd } from '../input/UserCmd';
+import { Buttons, MAX_PITCH, type UserCmd } from '../input/UserCmd';
 import { teleport, type Actor } from '../sim/Actor';
 import { buy, engagedNear, OUT_OF_COMBAT } from '../sim/buy';
 import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
@@ -14,6 +14,7 @@ import { Vehicles } from '../sim/vehicle/Vehicles';
 import { WEAPONS, type BuyItem } from '../weapons/weaponDefs';
 import type { ChunkSource } from '../world/WorldStreamer';
 import { WorldStreamer } from '../world/WorldStreamer';
+import { SPAWN_DROP } from '../world/gen/pickups';
 import {
   Bin,
   binKind,
@@ -43,6 +44,20 @@ const CATCH_UP = 2;
 const MAX_PER_TICK = 4;
 /** Commands queued beyond this are merged away (movement is lost, key presses are kept). */
 const MAX_QUEUE = 64;
+/**
+ * Command budget: each tick earns a player this many commands (a little over one, for a client
+ * clock that runs slightly fast), banked up to MAX_CREDIT for catching up after a hitch. Sending
+ * commands faster than the tick rate can't make anyone move faster than that.
+ */
+const CMD_RATE = 1.05;
+const MAX_CREDIT = MAX_QUEUE;
+/** Seconds a connection may take to say hello, and connections allowed beyond the player cap. */
+const HELLO_TIMEOUT = 15;
+const SPARE_CONNS = 2;
+/** Chat flood guard: a burst of this many messages, then this many per second. */
+const CHAT_BURST = 5;
+const CHAT_RATE = 1;
+const MAX_CHAT = 200;
 /** Ticks to wait for a command that's missing from the sequence (late or reordered packet). */
 const GAP_WAIT = 3;
 /** Lag compensation: how far back shots may be checked, and how much history is kept. */
@@ -79,6 +94,12 @@ interface Conn {
   pendingSpawn: { x: number; z: number } | null;
   /** Saved state to put this player back in once they're placed (the host continuing a save). */
   restore: SaveData | null;
+  /** Commands this player may still run (see CMD_RATE). */
+  credit: number;
+  /** Host time this connection opened (hello timeout). */
+  openedAt: number;
+  chatCredit: number;
+  chatAt: number;
 }
 
 const BUYABLE = new Set<string>([...Object.keys(WEAPONS), 'kevlar', 'helmet', 'ammo_primary', 'ammo_secondary']);
@@ -155,6 +176,11 @@ export class ServerGame {
 
   /** A client connected; it becomes a player once it says hello. */
   connect(transport: Transport): void {
+    if (this.conns.length >= this.maxPlayers + SPARE_CONNS) {
+      transport.send(toJson({ t: 'reject', reason: `The game is full (${this.maxPlayers} players).` } satisfies ServerMsg), true);
+      transport.close();
+      return;
+    }
     const conn: Conn = {
       transport,
       actor: null,
@@ -171,6 +197,10 @@ export class ServerGame {
       ackSnapshot: 0,
       pendingSpawn: null,
       restore: null,
+      credit: 0,
+      openedAt: this.sim.time,
+      chatCredit: CHAT_BURST,
+      chatAt: this.sim.time,
     };
     this.conns.push(conn);
     transport.onMessage = (data) => this.receive(conn, data);
@@ -183,6 +213,11 @@ export class ServerGame {
     this.lastUpdate = now;
     this.stream();
     this.loop.advance(dt, () => this.tick());
+  }
+
+  /** Seconds until the next tick is due (for scheduling the next update). */
+  get untilNextTick(): number {
+    return this.loop.untilNextTick;
   }
 
   /** Keep the world loaded around every player (and where joining players will appear). */
@@ -200,9 +235,12 @@ export class ServerGame {
   tick(): void {
     const sim = this.sim;
     this.cmds.clear();
-    for (const c of this.conns) {
+    for (const c of [...this.conns]) {
       const a = c.actor;
-      if (!a) continue;
+      if (!a) {
+        if (sim.time - c.openedAt > HELLO_TIMEOUT) c.transport.close();
+        continue;
+      }
       if (c.pendingSpawn) {
         // Input from before we're in the world means nothing.
         if (c.queue.length) c.ranSeq = Math.max(c.ranSeq, c.queue[c.queue.length - 1].seq);
@@ -219,6 +257,7 @@ export class ServerGame {
         }
         c.pendingSpawn = null;
       }
+      c.credit = Math.min(MAX_CREDIT, c.credit + CMD_RATE);
       // Never simulate someone standing on a chunk that hasn't loaded here yet.
       if (!this.streamer.isLoaded(a.move.pos.x, a.move.pos.z)) continue;
       // No command, no move: the player's state stays a pure function of their commands,
@@ -259,13 +298,8 @@ export class ServerGame {
 
   private nextCmd(c: Conn): UserCmd | null {
     const q = c.queue;
-    // Far too far behind: fold the oldest commands into the next one, keeping their key presses.
-    while (q.length > MAX_QUEUE) {
-      const old = q.shift()!;
-      q[0].cmd.pressed |= old.cmd.pressed;
-      if (q[0].cmd.weaponSelect < 0) q[0].cmd.weaponSelect = old.cmd.weaponSelect;
-    }
-    if (!q.length) return null;
+    ServerGame.foldQueue(q);
+    if (!q.length || c.credit < 1) return null;
     // A gap: the missing command may still be on its way in a reordered packet.
     if (q[0].seq > c.ranSeq + 1 && c.ranSeq > 0 && c.gapWait < GAP_WAIT && q.length <= CATCH_UP + GAP_WAIT) {
       c.gapWait++;
@@ -274,7 +308,17 @@ export class ServerGame {
     c.gapWait = 0;
     const next = q.shift()!;
     c.ranSeq = next.seq;
+    c.credit--;
     return next.cmd;
+  }
+
+  /** Far too far behind: fold the oldest commands into the next one, keeping their key presses. */
+  private static foldQueue(q: SeqCmd[]): void {
+    while (q.length > MAX_QUEUE) {
+      const old = q.shift()!;
+      q[0].cmd.pressed |= old.cmd.pressed;
+      if (q[0].cmd.weaponSelect < 0) q[0].cmd.weaponSelect = old.cmd.weaponSelect;
+    }
   }
 
   private recordHistory(): void {
@@ -334,14 +378,26 @@ export class ServerGame {
     }
   }
 
+  /** Anything a client sends is untrusted: malformed input is dropped, never thrown. */
   private receive(c: Conn, data: Payload): void {
+    try {
+      this.handle(c, data);
+    } catch {
+      /* malformed message */
+    }
+  }
+
+  private handle(c: Conn, data: Payload): void {
     if (data instanceof ArrayBuffer) {
       if (binKind(data) !== Bin.Cmds || !c.actor) return;
       const p = decodeCmds(data);
+      if (!Number.isFinite(p.viewTime) || !p.cmds.every((sc) => validCmd(sc.cmd))) return;
       c.ackSnapshot = Math.max(c.ackSnapshot, p.ackSnapshot);
       c.viewTime = Math.max(c.viewTime, p.viewTime);
       for (const sc of p.cmds) {
         if (sc.seq <= c.ranSeq) continue;
+        sc.cmd.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, sc.cmd.pitch));
+        sc.cmd.attackPitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, sc.cmd.attackPitch));
         // Keep the queue in order and free of duplicates (packets repeat commands, and may
         // arrive out of order).
         const q = c.queue;
@@ -350,29 +406,33 @@ export class ServerGame {
         if (i > 0 && q[i - 1].seq === sc.seq) continue;
         q.splice(i, 0, sc);
       }
+      ServerGame.foldQueue(c.queue);
       return;
     }
-    let msg: ClientMsg;
-    try {
-      msg = JSON.parse(data) as ClientMsg;
-    } catch {
-      return;
-    }
+    if (typeof data !== 'string') return;
+    const msg = JSON.parse(data) as ClientMsg | null;
+    if (typeof msg !== 'object' || msg === null) return;
     if (msg.t === 'hello') this.hello(c, msg.name, msg.version, !!msg.autoBhop);
     else if (msg.t === 'buy' && c.actor && BUYABLE.has(msg.item)) {
       buy(this.sim, c.actor, msg.item as BuyItem, engagedNear(this.sim, c.actor));
     } else if (msg.t === 'chat' && c.actor && typeof msg.text === 'string') {
-      const text = msg.text.slice(0, 200).trim();
-      if (text) this.sendAll({ t: 'chat', from: c.name, text });
+      const now = this.sim.time;
+      c.chatCredit = Math.min(CHAT_BURST, c.chatCredit + (now - c.chatAt) * CHAT_RATE);
+      c.chatAt = now;
+      if (c.chatCredit < 1) return;
+      const text = msg.text.slice(0, MAX_CHAT).trim();
+      if (!text) return;
+      c.chatCredit--;
+      this.sendAll({ t: 'chat', from: c.name, text });
     }
   }
 
-  private hello(c: Conn, rawName: string, version: number, autoBhop: boolean): void {
+  private hello(c: Conn, rawName: unknown, version: unknown, autoBhop: boolean): void {
     if (c.actor) return;
     if (version !== PROTOCOL_VERSION) return this.reject(c, 'The host is running a different version of the game.');
     if (this.playerCount >= this.maxPlayers) return this.reject(c, `The game is full (${this.maxPlayers} players).`);
     const sim = this.sim;
-    let name = String(rawName ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME) || 'Player';
+    let name = (typeof rawName === 'string' ? rawName : '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME) || 'Player';
     const taken = new Set(sim.players.map((p) => p.name));
     for (let i = 2; taken.has(name); i++) name = `${name.replace(/ \d+$/, '')} ${i}`;
     c.name = name;
@@ -384,7 +444,7 @@ export class ServerGame {
     const mate = sim.players.find((p) => p.alive && p !== a);
     let spot = mate
       ? respawnPoint(sim, mate, (key) => this.streamer.resident.has(key))
-      : { x: this.params.spawnCx * CHUNK + 32 + (sim.players.length - 1) * 1.5, z: this.params.spawnCz * CHUNK + 22 };
+      : { x: this.params.spawnCx * CHUNK + SPAWN_DROP.x + (sim.players.length - 1) * 1.5, z: this.params.spawnCz * CHUNK + SPAWN_DROP.z };
     if (this.hostSave && a.id === HOST_ID) {
       c.restore = this.hostSave;
       spot = { x: this.hostSave.player.x, z: this.hostSave.player.z };
@@ -439,6 +499,9 @@ export class ServerGame {
     const sim = this.sim;
     const actors = sim.actors.map(netActor);
     const nades = this.netGrenades();
+    const nadesJson = toJson(nades);
+    // Shared by every client's `known` below; replaced, never mutated.
+    const ids = new Set(sim.actors.map((x) => x.id));
     const slow = sim.tick % (SNAPSHOT_EVERY * 8) === 0;
     const pickupsJson = slow ? toJson(this.pickups.items.map(netPickup)) : '';
     const world = slow ? this.worldState() : null;
@@ -460,7 +523,7 @@ export class ServerGame {
       const add: [number, string, number, boolean][] = [];
       for (const x of sim.actors) if (!c.known.has(x.id)) add.push([x.id, x.name, x.team, x.dummy]);
       if (add.length) this.send(c, { t: 'roster', add });
-      c.known = new Set(sim.actors.map((x) => x.id));
+      c.known = ids;
       if (c.events.length) {
         this.send(c, { t: 'ev', e: c.events });
         c.events = [];
@@ -480,7 +543,7 @@ export class ServerGame {
       const swap = this.pickups.swapCandidate(a.id)?.id ?? -1;
       const pos = a.move.pos;
       const vehicles = sim.vehicles.filter((v) => v.id === a.vehicle || Math.hypot(v.car.pos.x - pos.x, v.car.pos.z - pos.z) < VEHICLE_RANGE).map(netVehicle);
-      const snap = encodeSnapshot({ tick: sim.tick, time: sim.time, ackCmd: c.ranSeq, actors, vehicles, me: privateState(a, swap), nades });
+      const snap = encodeSnapshot({ tick: sim.tick, time: sim.time, ackCmd: c.ranSeq, actors, vehicles, me: privateState(a, swap), nades }, nadesJson);
       c.transport.send(snap, false);
     }
   }
@@ -517,4 +580,9 @@ export class ServerGame {
     for (const c of [...this.conns]) c.transport.close();
     this.streamer.dispose();
   }
+}
+
+/** A command's angles must be real numbers (NaN would spread through the simulation). */
+function validCmd(cmd: UserCmd): boolean {
+  return Number.isFinite(cmd.yaw) && Number.isFinite(cmd.pitch) && Number.isFinite(cmd.attackYaw) && Number.isFinite(cmd.attackPitch);
 }

@@ -4,3 +4,6 @@ dist/
 .DS_Store
 .vite/
 coverage/
+.voices/
+public/voice/audition/
+scripts/__pycache__/

@@ -4,7 +4,7 @@ import { parseParams } from '../core/urlParams';
 import { makeInventory } from '../weapons/Inventory';
 import { chunkKey } from '../world/chunkMath';
 import { teleport } from './Actor';
-import { buy, priceOf, unavailableReason } from './buy';
+import { buy, priceOf, recommendUpgrade, unavailableReason } from './buy';
 import { Simulation } from './Simulation';
 
 /** City sim with the player standing in the spawn chunk, well out of combat. */
@@ -58,5 +58,30 @@ describe('buying ammo', () => {
     expect(buy(sim, sim.player, 'ammo_secondary', false)).toBe(false);
     sim.cleared.add(chunkKey(sim.params.spawnCx + 3, sim.params.spawnCz));
     expect(buy(sim, sim.player, 'ammo_secondary', false)).toBe(true);
+  });
+});
+
+describe('upgrade recommendation', () => {
+  it('suggests a rifle with Kevlar money kept back, then Kevlar, then a helmet', () => {
+    const p = makeSim().player;
+    p.inv = makeInventory('glock', 'mp9');
+    p.money = 500;
+    expect(recommendUpgrade(p)).toBe(null);
+    p.money = 1400;
+    expect(recommendUpgrade(p)).toBe('kevlar');
+    // An AK alone is affordable, but not with Kevlar on top: armour first.
+    p.money = 3000;
+    expect(recommendUpgrade(p)).toBe('kevlar');
+    p.money = 2700 + 650;
+    expect(recommendUpgrade(p)).toBe('ak47');
+    p.money = 3100 + 650;
+    expect(recommendUpgrade(p)).toBe('m4a4');
+    p.armor = 100;
+    p.money = 2800;
+    expect(recommendUpgrade(p)).toBe('ak47');
+    p.inv = makeInventory('glock', 'ak47');
+    expect(recommendUpgrade(p)).toBe('helmet');
+    p.helmet = true;
+    expect(recommendUpgrade(p)).toBe(null);
   });
 });

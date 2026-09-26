@@ -4,8 +4,9 @@ A browser first-person shooter with Counter-Strike movement and gunplay, set in 
 procedurally generated city. Clear bot squads to earn money, buy better guns, and push further
 from spawn, where the bots get sharper. Play alone or co-op with up to three friends.
 
-Built with Vite, TypeScript and three.js. It uses no art or audio assets: textures, gun models,
-sounds and music are all generated in code.
+Built with Vite, TypeScript and three.js. Textures, gun models, sounds and music are all
+generated in code. The only recorded audio is a handful of voice lines, generated offline with
+Piper (see [Voice lines](#voice-lines)).
 
 ## Run
 
@@ -17,6 +18,10 @@ npm run build      # type-check + production build to dist/
 ```
 
 If `localhost` doesn't reach WSL from Windows, use the Network URL that Vite prints.
+
+To reach the dev server through a tunnel, name the tunnel's hostname when starting it:
+`ALLOWED_HOSTS=abc.free.pinggy.net npm run dev` (comma-separate several). The dev server isn't
+hardened for the open internet; for anything longer-lived, share a `npm run build` instead.
 
 ### URL parameters
 
@@ -56,6 +61,36 @@ gun; H again or firing cancels and keeps the pack. The radar in the top-left cor
 `$` on its rim pointing to the nearest one when it's out of range. M opens the city map.
 L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)) and opens doors. Esc pauses. F3
 toggles the debug overlay.
+
+## The opening and objectives
+
+A new game drops you on the spawn plaza facing north. The block beyond the fountain is the only
+area near spawn with bots: two barely trained gang members stand in plain view 40–55 m away,
+looking the other way. One has an MP9, which stays on the ground until someone takes it; the
+other only has a knife and charges you with it.
+
+A panel under the compass says what to do next, with a gold waypoint on screen (an arrow on
+the edge when it's off screen) and a diamond on the radar. Each new objective first appears
+large in the middle of the screen with a chime, then moves up into place. A new game walks you
+through these steps:
+
+1. **Clear the pair ahead.** Shift walks quietly.
+2. **Grab the MP9 and draw it.**
+3. **Take a car.** The waypoint points at the nearest one that runs.
+4. **Drive to the next area and clear it.**
+5. **Upgrade.** Once the fight there is over, if you can afford something better you're told
+   what (a rifle, Kevlar or a helmet), and the buy menu marks it.
+
+6. **How the city works.** Once you're out of combat, five short cards follow one another, about
+   8 seconds each: clearing areas (buy zones and respawn points), danger levels, dying and your
+   dropped gear, night, and the city map and autosaves. They pause during a fight.
+
+After that the panel goes away for good. The "Press B to buy" hint still names the best upgrade
+you can afford, and the radar and compass still show nearby areas.
+
+A step with nothing to point at is skipped. Tips appear once, the first time you reach a door, a
+locked door and a ladder. Your progress through these steps is kept in your save. Settings →
+Gameplay → "Objectives, waypoint and tips" turns all of this off.
 
 ## Climbing and rooftops
 
@@ -260,6 +295,29 @@ game, each character is a pooled skinned clone. Walk, run and crouch cycles shar
 matched to ground speed, aim pitch bends the spine, the game's own gun models sit in the weapon
 socket, and shots, reloads, throws and hits play as additive upper-body overlays. Characters off
 screen aren't animated, and far ones update every third frame.
+
+## Voice lines
+
+The opening scene's spoken lines are text-to-speech clips made with
+[Piper](https://github.com/OHF-Voice/piper1-gpl), a local neural TTS. The lines, and which
+Piper voice says each one (with pace and pitch), are in `src/ai/voiceLines.ts`. After editing
+them, regenerate the clips:
+
+```bash
+pip install piper-tts soundfile pyworld   # once (PYTHON=... picks the interpreter)
+npm run voices                            # all lines, or: npm run voices shover_taunt_1 ...
+npm run voices -- --audition [officer]    # candidate voices (gang, officer), to compare on /voices.html
+```
+
+Pitch and formant changes go through the WORLD vocoder (`pyworld`), so a lowered voice keeps its
+character instead of sounding like slowed tape. `/voices.html` on the dev server plays every line
+and the audition clips, either dry or as heard in game from 45 m. Its "use for…" buttons copy a
+voice's settings to paste into `VOICES`.
+
+This downloads the voices into `.voices/` on first use (about 60–120 MB each, not committed). It
+writes `public/voice/<id>.mp3` and records each clip's length in `src/ai/voiceDurations.ts`,
+which the bots use to space lines out. The host decides who speaks and when. Everyone hears it
+positionally and sees a caption if they're within 70 m. A missing clip leaves just the caption.
 
 ## How it works
 

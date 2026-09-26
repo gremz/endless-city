@@ -603,3 +603,136 @@ describe('co-op saves', () => {
     expect(host2.sim.cleared.has(chunkKey(1, 0))).toBe(true);
   });
 });
+
+describe('the opening ambush online', () => {
+  it('the host spawns the pair, one more per extra player, and guests see them', () => {
+    // The flat city, with the opening chunk ahead of spawn flagged as generation does it.
+    const opening = (seed: number, cx: number, cz: number): ChunkData => {
+      const d = flatChunk(seed, cx, cz);
+      if (cx === 0 && cz === 1) {
+        d.hasEncounter = true;
+        d.opening = true;
+        d.level = 0;
+      }
+      return d;
+    };
+    const server = new ServerGame(parseParams('?seed=7', 1), new SyncChunkSource(7, opening));
+    const host = joinClient(server, 'Host');
+    const guest = joinClient(server, 'Guest');
+    run(server, [host, guest], 64);
+    const bots = server.sim.actors.filter((a) => a.team === Team.Bots && a.alive);
+    // Two, plus one for the second player.
+    expect(bots.length).toBe(3);
+    // One MP9 in the whole squad; the rest carry knives.
+    expect(bots.filter((b) => b.inv.primary?.def.id === 'mp9')).toHaveLength(1);
+    for (const b of bots) {
+      expect(b.keepLoot).toBe(true);
+      expect(Math.floor(b.move.pos.z / CHUNK)).toBe(1);
+    }
+    // Guests see the area as a live encounter.
+    expect(guest.sim.actors.filter((a) => a.team === Team.Bots).length).toBe(3);
+    // And the officer the pair are holding: kneeling, on their side, but not a player.
+    const hostage = server.sim.actors.find((a) => a.captive)!;
+    expect(hostage).toBeTruthy();
+    const seen = guest.sim.getActor(hostage.id)!;
+    expect(seen.captive).toBe(true);
+    expect(seen.team).toBe(Team.Player);
+    expect(seen.move.ducked).toBe(true);
+    expect(guest.sim.players).not.toContain(seen);
+    expect(guest.sim.players).toHaveLength(2);
+    expect(guest.sim.events.drain().some((e) => e.type === 'captive' && e.phase === 'held' && e.executeAt > 0)).toBe(true);
+  });
+});
+
+describe('untrusted clients', () => {
+  /** Send raw commands from a client, bypassing its NetClient. */
+  function sendRaw(c: Client, from: number, count: number, make: (cmd: UserCmd) => void): number {
+    const cmds = [];
+    for (let i = 0; i < count; i++) {
+      const cmd = makeCmd();
+      make(cmd);
+      cmds.push({ seq: from + i, cmd });
+    }
+    c.link.send(encodeCmds({ ackSnapshot: 0, viewTime: 0, cmds }), false);
+    return from + count;
+  }
+
+  function queueLength(server: ServerGame): number {
+    return (server as unknown as { conns: { queue: unknown[] }[] }).conns[0].queue.length;
+  }
+
+  it('ignores malformed and hostile messages', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'A');
+    const two = joinClient(server, 'B');
+    run(server, [one, two], 32);
+    for (const bad of ['null', '42', '"x"', '[]', '{"t":"chat"}', '{"t":"hello","name":{}}', '{"t":"buy","item":{}}', 'not json']) {
+      expect(() => one.link.send(bad, true)).not.toThrow();
+    }
+    expect(() => one.link.send(new Uint8Array([1, 0, 0]).buffer, false)).not.toThrow();
+    expect(() => one.link.send(new ArrayBuffer(0), false)).not.toThrow();
+    let seq = one.net.cmdSeq + 1;
+    seq = sendRaw(one, seq, 2, (c) => (c.yaw = Number.NaN));
+    sendRaw(one, seq, 2, (c) => (c.attackPitch = Infinity));
+    one.link.send(encodeCmds({ ackSnapshot: 0, viewTime: Number.NaN, cmds: [] }), false);
+    run(server, [one, two], 16);
+    const a = server.sim.getActor(one.net.actorId)!;
+    expect(Number.isFinite(a.yaw) && Number.isFinite(a.move.pos.x) && Number.isFinite(a.move.pos.z)).toBe(true);
+    expect(server.sim.players).toHaveLength(2);
+  });
+
+  it('runs no more than about one command per tick, however fast they arrive', () => {
+    const server = makeServer();
+    const honest = joinClient(server, 'A');
+    const cheat = joinClient(server, 'B');
+    run(server, [honest, cheat], 64);
+    const h = server.sim.getActor(honest.net.actorId)!;
+    const c = server.sim.getActor(cheat.net.actorId)!;
+    const h0 = { ...h.move.pos };
+    const c0 = { ...c.move.pos };
+    let hs = honest.net.cmdSeq + 1;
+    let cs = cheat.net.cmdSeq + 1;
+    const fwd = (cmd: UserCmd) => (cmd.forward = 1);
+    for (let i = 0; i < 64; i++) {
+      hs = sendRaw(honest, hs, 1, fwd);
+      cs = sendRaw(cheat, cs, 4, fwd);
+      server.stream();
+      server.tick();
+    }
+    const dh = Math.hypot(h.move.pos.x - h0.x, h.move.pos.z - h0.z);
+    const dc = Math.hypot(c.move.pos.x - c0.x, c.move.pos.z - c0.z);
+    expect(dh).toBeGreaterThan(1);
+    expect(dc).toBeLessThan(dh * 1.15);
+  });
+
+  it('keeps a flooded command queue bounded', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'A');
+    run(server, [one], 32);
+    let seq = one.net.cmdSeq + 1;
+    for (let i = 0; i < 40; i++) seq = sendRaw(one, seq, 255, () => {});
+    expect(queueLength(server)).toBeLessThanOrEqual(64);
+  });
+
+  it('rate-limits chat', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'A');
+    const two = joinClient(server, 'B');
+    run(server, [one, two], 8);
+    for (let i = 0; i < 20; i++) one.net.sendChat(`spam ${i}`);
+    run(server, [one, two], 2);
+    expect(two.chat).toHaveLength(5);
+  });
+
+  it('drops connections that never say hello, and too many of them', () => {
+    const server = makeServer('?seed=7', 2);
+    const links = Array.from({ length: 6 }, () => {
+      const [a, b] = LoopbackTransport.pair();
+      server.connect(b);
+      return a;
+    });
+    expect(links.filter((l) => l.closed)).toHaveLength(2);
+    for (let i = 0; i < 16 * 64; i++) server.tick();
+    expect(links.every((l) => l.closed)).toBe(true);
+  });
+});

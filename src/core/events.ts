@@ -66,7 +66,11 @@ export type SimEvent =
       side: number;
       pos: Vec3;
     }
-  | { type: 'glass_break'; chunkKey: number; index: number; pos: Vec3 };
+  | { type: 'glass_break'; chunkKey: number; index: number; pos: Vec3 }
+  /** Someone says a generated voice line (see ai/voiceLines.ts). */
+  | { type: 'voice'; actorId: number; line: string }
+  /** The opening's captured officer: held (with the execution time once the fuse is lit), freed or executed. */
+  | { type: 'captive'; actorId: number; phase: 'held' | 'freed' | 'executed'; /** Sim time, or -1 before the fuse is lit. */ executeAt: number };
 
 export type SoundEventKind = 'gunshot' | 'footstep' | 'land' | 'reload' | 'knife' | 'grenade' | 'vehicle' | 'door' | 'glass';
 

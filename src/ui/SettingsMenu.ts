@@ -121,6 +121,7 @@ export class SettingsMenu {
       this.check('Show FPS / debug overlay', 'showFps'),
       el('div.set-group', { text: 'Gameplay' }),
       this.check('Auto bunny-hop (hold space)', 'autoBhop'),
+      this.check('Objectives, waypoint and tips', 'objectives'),
       this.select('Time of day', 'timeOfDay', [
         ['cycle', 'Day/night cycle'],
         ['day', 'Always day'],

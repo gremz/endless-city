@@ -162,9 +162,9 @@ export class PickupManager implements SimSystem, StreamerListener {
   }
 
   /** Drop an item at a world position; with an `owner` it becomes part of their death stash. */
-  drop(x: number, y: number, z: number, item: PickupItem = { kind: 'medkit' }, yaw = 0, owner = -1): Pickup | null {
+  drop(x: number, y: number, z: number, item: PickupItem = { kind: 'medkit' }, yaw = 0, owner = -1, lifetime = DROP_LIFETIME): Pickup | null {
     const key = chunkKey(worldToChunk(x), worldToChunk(z));
-    return this.add(item, vec3(x, y + 0.02, z), yaw, key, -1, owner, owner >= 0 ? Infinity : this.sim.time + DROP_LIFETIME);
+    return this.add(item, vec3(x, y + 0.02, z), yaw, key, -1, owner, owner >= 0 ? Infinity : this.sim.time + lifetime);
   }
 
   /**
@@ -183,7 +183,8 @@ export class PickupManager implements SimSystem, StreamerListener {
       const ang = base + (i / items.length) * Math.PI * 2 + (r() - 0.5) * 0.6;
       const dist = 0.3 + r() * 0.5;
       const [x, y, z] = this.groundSpot(a.move.pos, Math.sin(ang) * dist, Math.cos(ang) * dist);
-      this.drop(x, y, z, item, r() * Math.PI * 2, stash ? a.id : -1);
+      const keep = a.keepLoot && item.kind === 'weapon';
+      this.drop(x, y, z, item, r() * Math.PI * 2, stash ? a.id : -1, keep ? Infinity : DROP_LIFETIME);
     });
     a.inv = makeInventory(null);
     a.medkits = 0;
@@ -314,7 +315,8 @@ export class PickupManager implements SimSystem, StreamerListener {
 
   onHit(sim: Simulation, info: HitInfo, killed: boolean): void {
     const v = info.victim;
-    if (!killed || v.dummy) return;
+    // A dead hostage had nothing on him.
+    if (!killed || v.dummy || v.captive) return;
     if (v.team === Team.Player) {
       // Dying again loses the stash you never went back for.
       for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].owner === v.id) this.items.splice(i, 1);

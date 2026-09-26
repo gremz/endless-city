@@ -198,3 +198,12 @@ describe('save games', () => {
     expect(v.player.primary!.reserve).toBe(90);
   });
 });
+
+describe('the guided opening in saves', () => {
+  it('keeps the step it had got to, and older saves load without one', () => {
+    const { save } = played();
+    expect(save.tutorial).toBeUndefined();
+    expect(validateSave({ ...save, tutorial: 'car' })?.tutorial).toBe('car');
+    expect(validateSave({ ...save, tutorial: 42 })?.tutorial).toBeUndefined();
+  });
+});

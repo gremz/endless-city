@@ -29,15 +29,18 @@ scope.onmessage = (e: MessageEvent<HostWorkerMsg>) => {
   if (msg.type === 'start' && !server) {
     server = new ServerGame(msg.params, new WorkerChunkSource(msg.params.seed, 'city', generateChunk), undefined, msg.save);
     const s = server;
-    // Ticks are paced by the fixed loop; poll often so they run close to on time.
-    timer = setInterval(() => {
+    // Ticks are paced by the fixed loop: wake when the next one is due, not on a fast poll.
+    const run = () => {
+      if (server !== s) return;
       try {
         s.update(performance.now() / 1000);
       } catch (err) {
         // Keep the game running for everyone; report what went wrong.
         console.error('host tick failed', (err as Error)?.stack ?? err);
       }
-    }, 4) as unknown as number;
+      timer = setTimeout(run, Math.max(1, s.untilNextTick * 1000)) as unknown as number;
+    };
+    run();
   } else if (msg.type === 'connect' && server) {
     server.connect(new PortTransport(msg.port));
   } else if (msg.type === 'save') {
@@ -45,7 +48,7 @@ scope.onmessage = (e: MessageEvent<HostWorkerMsg>) => {
     const reply: HostWorkerReply = typeof r === 'string' ? { type: 'saved', id: msg.id, save: null, error: r } : { type: 'saved', id: msg.id, save: r, error: null };
     scope.postMessage(reply);
   } else if (msg.type === 'stop') {
-    clearInterval(timer);
+    clearTimeout(timer);
     server?.dispose();
     server = null;
     scope.close();

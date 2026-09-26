@@ -188,6 +188,13 @@ export const RECIPES: Record<string, Recipe> = {
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(ctx, out, { at: i * 0.11, f0: f, gain: 0.22, decay: 0.25, dur: 1.2, type: 'triangle' }));
     },
   },
+  objective: {
+    duration: 1.2,
+    build: (ctx, out) => {
+      tone(ctx, out, { f0: 783.99, gain: 0.16, decay: 0.3, dur: 0.9, type: 'triangle' });
+      tone(ctx, out, { at: 0.14, f0: 1174.66, gain: 0.16, decay: 0.4, dur: 1, type: 'triangle' });
+    },
+  },
   pickup: {
     duration: 0.5,
     build: (ctx, out) => {

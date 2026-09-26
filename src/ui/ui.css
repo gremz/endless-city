@@ -632,6 +632,32 @@ kbd {
   opacity: 1;
 }
 
+.caption {
+  position: absolute;
+  left: 50%;
+  bottom: 18%;
+  transform: translateX(-50%);
+  max-width: min(640px, 90vw);
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 16px;
+  color: #f2f2f2;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+
+.caption.show {
+  opacity: 1;
+}
+
+.caption-who {
+  font-weight: 700;
+  color: #ffd66a;
+}
+
 .center-msg.bad {
   color: #ff8a7a;
 }
@@ -708,6 +734,172 @@ kbd {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.objective {
+  position: absolute;
+  left: 50%;
+  top: 38px;
+  transform: translateX(-50%);
+  transform-origin: 50% 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 18px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 214, 106, 0.45);
+  background: linear-gradient(rgba(20, 16, 6, 0.72), rgba(12, 10, 4, 0.6));
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+}
+
+/* A new objective: big in the middle of the screen, then up into its place. */
+.objective.fresh {
+  animation: objective-in 3.4s ease-in-out;
+}
+
+@keyframes objective-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 26vh) scale(1.45);
+  }
+  8% {
+    opacity: 1;
+    transform: translate(-50%, 26vh) scale(1.5);
+  }
+  14% {
+    transform: translate(-50%, 26vh) scale(1.4);
+  }
+  70% {
+    transform: translate(-50%, 26vh) scale(1.4);
+    box-shadow: 0 0 28px rgba(255, 200, 80, 0.45);
+  }
+  100% {
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+.objective-kicker {
+  display: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: rgba(255, 214, 106, 0.8);
+}
+
+.objective.fresh .objective-kicker {
+  display: block;
+  animation: objective-kicker 3.4s forwards;
+}
+
+@keyframes objective-kicker {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* A briefing card: its heading stays up, and it fades in rather than flying in. */
+.objective.brief.fresh {
+  animation: brief-in 0.6s ease-out;
+}
+
+.objective.brief .objective-kicker {
+  display: block;
+  animation: none;
+}
+
+@keyframes brief-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.objective-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffd66a;
+}
+
+.objective-title::before {
+  content: '◆ ';
+}
+
+.objective-sub {
+  font-size: 13px;
+  color: #eef1f3;
+}
+
+.objective.urgent .objective-sub {
+  color: #ff7a66;
+  font-weight: 700;
+}
+
+.objective-tip {
+  position: absolute;
+  left: 50%;
+  top: 116px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  color: #9fd8ff;
+}
+
+.waypoint {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: #ffd66a;
+  font-size: 12px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  will-change: transform;
+}
+
+.waypoint-mark {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ffd66a;
+  background: rgba(255, 214, 106, 0.3);
+  transform: rotate(45deg);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  animation: waypoint-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes waypoint-pulse {
+  50% {
+    box-shadow: 0 0 10px 3px rgba(255, 214, 106, 0.55);
+  }
+}
+
+.waypoint.edge .waypoint-mark {
+  width: 0;
+  height: 0;
+  border: 8px solid transparent;
+  border-bottom: 12px solid #ffd66a;
+  background: none;
+  box-shadow: none;
+  transform: rotate(var(--edge-angle, 0rad));
 }
 
 .minimap {
@@ -821,6 +1013,15 @@ kbd {
 
 .buy-row.disabled {
   opacity: 0.4;
+}
+
+.buy-row.suggested {
+  color: #ffd66a;
+}
+
+.buy-row.suggested::after {
+  content: '◆';
+  font-size: 11px;
 }
 
 .buy-name {

@@ -28,6 +28,8 @@ export interface Settings {
   rainParticles: number;
   /** Animated character models when available, or the simple box figures. */
   characters: 'detailed' | 'simple';
+  /** Objective line, waypoint and one-time tips. */
+  objectives: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -53,6 +55,7 @@ export const DEFAULT_SETTINGS: Settings = {
   weather: 'dynamic',
   rainParticles: 1,
   characters: 'detailed',
+  objectives: true,
 };
 
 /** Allowed values for the settings that are really enums (stored as strings or numbers). */

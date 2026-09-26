@@ -8,6 +8,17 @@ export interface EncounterData {
   perches: Float32Array;
   patrol: Float32Array;
   hasEncounter: boolean;
+  opening: boolean;
+}
+
+/**
+ * The block straight ahead of the spawn drop-in point (the player starts facing +Z): the one
+ * chunk near spawn with bots, a scripted pair in plain view to open the game with.
+ */
+export const OPENING_CHUNK = { cx: 0, cz: 1 } as const;
+
+export function isOpeningChunk(cx: number, cz: number): boolean {
+  return cx === OPENING_CHUNK.cx && cz === OPENING_CHUNK.cz;
 }
 
 /**
@@ -103,11 +114,13 @@ export function placeEncounters(
   }
 
   const nearSpawn = Math.max(Math.abs(cx), Math.abs(cz)) <= 1;
-  const hasEncounter = !nearSpawn && spawns.length >= 4 * 3 && r() < 0.55 + 0.03 * level;
+  const opening = isOpeningChunk(cx, cz);
+  const hasEncounter = opening || (!nearSpawn && spawns.length >= 4 * 3 && r() < 0.55 + 0.03 * level);
   return {
     spawns: new Float32Array(spawns),
     perches: new Float32Array(perches),
     patrol: new Float32Array(patrol),
     hasEncounter,
+    opening,
   };
 }

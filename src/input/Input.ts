@@ -1,10 +1,9 @@
 import { clamp, DEG } from '../core/math';
 import { BUTTON_KEYS, LAST_WEAPON_KEY, LOCKED_DUCK_KEYS, MOVE_KEYS, SLOT_KEYS } from './bindings';
-import { Buttons, SELECT_LAST, SELECT_NEXT, SELECT_PREV, type UserCmd } from './UserCmd';
+import { Buttons, MAX_PITCH, SELECT_LAST, SELECT_NEXT, SELECT_PREV, type UserCmd } from './UserCmd';
 
 /** CS m_yaw / m_pitch: degrees per mouse count at sensitivity 1. */
 const M_YAW = 0.022;
-const MAX_PITCH = 89 * DEG;
 
 type KeyHandler = (code: string, e: KeyboardEvent) => void;
 

@@ -247,8 +247,10 @@ export class Mirror {
     const r = this.roster.get(na.id);
     const a = makeActor(na.id, r?.name ?? '…', na.team as TeamId, na.x, na.y, na.z);
     a.dummy = !!(na.flags & Flag.Dummy);
+    // The opening's hostage is on the players' side but isn't one.
+    a.captive = !!(na.flags & Flag.Captive);
     a.inv = makeInventory(null);
-    if (a.team === Team.Player) this.sim.players.push(a);
+    if (a.team === Team.Player && !a.captive) this.sim.players.push(a);
     this.sim.actors.push(a);
     return a;
   }

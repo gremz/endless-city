@@ -204,8 +204,8 @@ export class BotRenderer implements ActorRenderer {
     // Gun at chest height pointing along aim.
     const gunY = shoulderY - 0.12 + Math.sin(aimPitch) * 0.3;
     place(7, 0.05, gunY, -0.42 - Math.cos(aimPitch) * 0.05, aimPitch, 0);
-    // Dropped their guns (dead bodies): hide the gun.
-    if (!a.alive && !a.inv.primary && !a.inv.secondary) this.meshes[7].setMatrixAt(i, this.m.makeScale(0, 0, 0));
+    // Dropped their guns (dead bodies) or never had one (a hostage): hide the gun.
+    if (a.captive || (!a.alive && !a.inv.primary && !a.inv.secondary)) this.meshes[7].setMatrixAt(i, this.m.makeScale(0, 0, 0));
     if (a.alive && this.torches?.has(a.id)) {
       // Torch taped under the barrel.
       this.q.setFromEuler(this.e.set(aimPitch, 0, 0, 'YXZ'));

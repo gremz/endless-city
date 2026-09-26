@@ -110,3 +110,20 @@ export function buy(sim: Simulation, p: Actor, item: BuyItem, engagedNearby: boo
   sim.events.push({ type: 'buy', actorId: p.id, item, ok: true });
   return true;
 }
+
+/**
+ * The next upgrade worth buying that the player can afford, or null: a rifle (keeping enough
+ * back for Kevlar if unarmoured), then Kevlar, then a helmet.
+ */
+export function recommendUpgrade(p: Actor): BuyItem | null {
+  if (!p.alive) return null;
+  const unarmoured = p.armor < 50;
+  const cat = p.inv.primary?.def.category;
+  if (cat !== 'rifle' && cat !== 'sniper') {
+    const keep = unarmoured ? priceOf(p, 'kevlar') : 0;
+    for (const id of ['m4a4', 'ak47'] as const) if (p.money >= priceOf(p, id) + keep) return id;
+  }
+  if (unarmoured && p.money >= priceOf(p, 'kevlar')) return 'kevlar';
+  if (!unarmoured && !p.helmet && p.money >= priceOf(p, 'helmet')) return 'helmet';
+  return null;
+}

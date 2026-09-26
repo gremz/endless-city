@@ -20,6 +20,8 @@ export interface PlayOptions {
   reverb?: number;
   /** 'master' skips the effects bus (not muffled by flashbang deafness). */
   bus?: 'sfx' | 'master';
+  /** Distance (m) before positional falloff starts (default 3); voices carry further. */
+  refDistance?: number;
 }
 
 /**
@@ -85,12 +87,30 @@ export class AudioEngine {
       this.music.setVolume(this.musicVolume);
       renderAll(ctx.sampleRate)
         .then((bank) => {
+          // Clips loaded before synthesis finished stay in the bank.
+          for (const [k, v] of this.bank) bank.set(k, v);
           this.bank = bank;
           this.ready = true;
         })
         .catch((e) => console.warn('sound synthesis failed', e));
     }
     if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {});
+  }
+
+  /**
+   * Load recorded clips (the generated voice lines) into the bank under their names. Missing
+   * files are skipped: the game plays on without them.
+   */
+  loadClips(clips: readonly { name: string; url: string }[]): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    for (const { name, url } of clips) {
+      fetch(url)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
+        .then((data) => ctx.decodeAudioData(data))
+        .then((buf) => this.bank.set(name, [buf]))
+        .catch(() => {});
+    }
   }
 
   setVolume(v: number): void {
@@ -208,7 +228,7 @@ export class AudioEngine {
       const pan = ctx.createPanner();
       pan.panningModel = 'HRTF';
       pan.distanceModel = 'inverse';
-      pan.refDistance = 3;
+      pan.refDistance = opts.refDistance ?? 3;
       pan.rolloffFactor = 1.1;
       pan.maxDistance = 200;
       pan.positionX.value = opts.pos.x;

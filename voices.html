@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Endless City – voice lines</title>
+    <style>
+      body { margin: 0; padding: 16px 20px 40px; background: #16181b; color: #ddd; font: 13px system-ui, sans-serif; }
+      h1 { font-size: 16px; margin: 0 0 4px; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8b95a1; margin: 22px 0 8px; }
+      .hint { color: #7c8792; font-size: 12px; max-width: 760px; }
+      label { display: inline-flex; gap: 6px; align-items: center; margin: 10px 0 0; color: #aab; }
+      table { border-collapse: collapse; }
+      th, td { padding: 4px 10px 4px 0; text-align: left; vertical-align: middle; }
+      th { color: #8b95a1; font-weight: 600; font-size: 12px; }
+      td.text { color: #cfd6de; max-width: 520px; }
+      td.who { color: #ffd66a; font-weight: 600; }
+      button { background: #2b3138; color: #ddd; border: 1px solid #454c55; border-radius: 3px; padding: 3px 9px; cursor: pointer; font: inherit; }
+      button:hover { background: #353c45; }
+      button.playing { background: #3d5a3a; border-color: #5f8a59; }
+      button.pick { font-size: 11px; color: #9fb3c8; padding: 2px 6px; }
+      .missing { color: #ff8a80; }
+      code { font: 11px ui-monospace, monospace; color: #9fb3c8; }
+      #copied { color: #8dffa6; margin-left: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Voice lines</h1>
+    <div class="hint">
+      The game's lines (<code>src/ai/voiceLines.ts</code>, made with <code>npm run voices</code>), and candidate voices from
+      <code>npm run voices -- --audition</code>. "Use for…" copies that voice's settings: paste them into <code>VOICES</code>,
+      then run <code>npm run voices</code>.
+    </div>
+    <label><input id="far" type="checkbox" /> Hear as in game from the drop-in point (~45 m: muffled, with reverb)</label>
+    <span id="copied"></span>
+
+    <h2>In the game</h2>
+    <table id="lines"></table>
+
+    <h2>Audition</h2>
+    <div id="audition" class="hint">loading…</div>
+
+    <script type="module" src="/src/devtools/voiceBoard.ts"></script>
+  </body>
+</html>

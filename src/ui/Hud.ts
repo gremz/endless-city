@@ -25,12 +25,18 @@ export class Hud {
   private feedEntries: FeedEntry[] = [];
   private scope: HTMLDivElement;
   private center: HTMLDivElement;
+  /** Subtitles for spoken lines. */
+  private captionEl: HTMLDivElement;
+  private captionUntil = 0;
   private centerUntil = 0;
   private hitUntil = 0;
   private damageFlash: HTMLDivElement;
   private dmgUntil = 0;
   private arcs: HTMLDivElement;
   private compass: HTMLDivElement;
+  private compassMarks: HTMLDivElement[] = [];
+  /** Last color set per marker (style.color reads back normalized, so it can't be compared). */
+  private compassColors: string[] = [];
   private death: HTMLDivElement;
   private deathTitle: HTMLDivElement;
   private deathHint: HTMLDivElement;
@@ -57,6 +63,14 @@ export class Hud {
   private lastGap = -1;
   private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1, kits: -1, heal: -1 };
   private clock = 0;
+  private objective: HTMLDivElement;
+  private objTitle: HTMLDivElement;
+  private objSub: HTMLDivElement;
+  private objKicker: HTMLDivElement;
+  private objKey = '';
+  private tipEl: HTMLDivElement;
+  private tipUntil = 0;
+  private buyHintText = '';
 
   constructor(parent: HTMLElement, private settings: Settings) {
     this.chLines = [0, 1, 2, 3].map((i) => el(`div.ch-line.ch-${i}`));
@@ -95,9 +109,16 @@ export class Hud {
     this.feed = el('div.killfeed');
     this.scope = el('div.scope', {}, [el('div.scope-h'), el('div.scope-v')]);
     this.center = el('div.center-msg');
+    this.captionEl = el('div.caption');
     this.damageFlash = el('div.damage-flash');
     this.arcs = el('div.dmg-arcs');
     this.compass = el('div.compass');
+    this.objTitle = el('div.objective-title');
+    this.objKicker = el('div.objective-kicker', { text: 'New objective' });
+    this.objSub = el('div.objective-sub');
+    this.tipEl = el('div.objective-tip');
+    this.objective = el('div.objective', {}, [this.objKicker, this.objTitle, this.objSub]);
+    this.objective.hidden = true;
     this.buyHint = el('div.buy-hint', { text: 'Press B to buy' });
     this.healHint = el('div.heal-hint', { text: 'Press H to use a medkit' });
     this.prompt = el('div.use-prompt');
@@ -119,7 +140,10 @@ export class Hud {
       this.carBox,
       this.feed,
       this.center,
+      this.captionEl,
       this.compass,
+      this.objective,
+      this.tipEl,
       this.clockEl,
       this.buyHint,
       this.healHint,
@@ -130,6 +154,7 @@ export class Hud {
     this.buyHint.hidden = true;
     this.healHint.hidden = true;
     this.prompt.hidden = true;
+    this.tipEl.hidden = true;
     parent.append(this.root);
     this.applyCrosshairStyle();
   }
@@ -296,8 +321,53 @@ export class Hud {
     this.scope.hidden = !on;
   }
 
-  setBuyHint(on: boolean): void {
+  /** "Press B to buy", with what's worth buying when there is something. */
+  setBuyHint(on: boolean, suggestion: string | null = null): void {
     this.buyHint.hidden = !on;
+    const text = suggestion ? `Press B to buy · you can afford ${suggestion}` : 'Press B to buy';
+    if (on && text !== this.buyHintText) {
+      this.buyHintText = text;
+      this.buyHint.textContent = text;
+    }
+  }
+
+  /**
+   * The objective panel under the compass (null hides it), with the distance to its waypoint.
+   * A new objective first shows big mid-screen, then settles into place; a briefing card (with a
+   * `kicker` heading) fades in. Returns true when it's new.
+   */
+  setObjective(title: string | null, sub = '', dist: number | null = null, kicker: string | null = null, urgent = false): boolean {
+    this.objective.classList.toggle('urgent', urgent);
+    const full = title === null ? '' : dist === null ? sub : sub ? `${sub} · ${Math.round(dist)} m` : `${Math.round(dist)} m`;
+    const key = `${title}|${full}|${kicker}`;
+    if (key === this.objKey) return false;
+    this.objKey = key;
+    this.objective.hidden = title === null;
+    const fresh = title !== null && title !== this.objTitle.textContent;
+    if (title === null) {
+      this.objTitle.textContent = '';
+      return false;
+    }
+    this.objTitle.textContent = title;
+    this.objSub.textContent = full;
+    this.objSub.hidden = !full;
+    // A briefing card keeps its own heading and fades in; a new objective flies in under "New objective".
+    this.objKicker.textContent = kicker ?? 'New objective';
+    this.objective.classList.toggle('brief', kicker !== null);
+    if (fresh) {
+      // Restart the intro animation.
+      this.objective.classList.remove('fresh');
+      void this.objective.offsetWidth;
+      this.objective.classList.add('fresh');
+    }
+    return fresh;
+  }
+
+  /** A one-off tip under the objective line. */
+  tip(text: string, seconds = 6): void {
+    this.tipEl.textContent = text;
+    this.tipEl.hidden = false;
+    this.tipUntil = this.clock + seconds;
   }
 
   /** Interaction prompt under the crosshair (e.g. weapon swap), or null to hide. */
@@ -342,28 +412,48 @@ export class Hud {
     this.centerUntil = this.clock + seconds;
   }
 
+  /** Subtitle a spoken line: "Speaker: text". */
+  caption(speaker: string, text: string, seconds: number): void {
+    this.captionEl.replaceChildren(el('span.caption-who', { text: `${speaker}: ` }), document.createTextNode(text));
+    this.captionEl.classList.add('show');
+    this.captionUntil = this.clock + seconds;
+  }
+
   setCompass(items: { angle: number; label: string; color: string }[], viewYaw: number): void {
-    // Render markers along a 180° strip centered on the view direction.
-    this.compass.replaceChildren(
-      ...items
-        .map((it) => {
-          let d = it.angle - viewYaw;
-          while (d > Math.PI) d -= Math.PI * 2;
-          while (d < -Math.PI) d += Math.PI * 2;
-          if (Math.abs(d) > Math.PI / 2) return null;
-          const m = el('div.compass-mark', { text: it.label });
-          m.style.left = `${50 - (d / (Math.PI / 2)) * 50}%`;
-          m.style.color = it.color;
-          return m;
-        })
-        .filter((x): x is HTMLDivElement => x !== null),
-    );
+    // Render markers along a 180° strip centered on the view direction, reusing the marker
+    // elements: this runs every frame.
+    const marks = this.compassMarks;
+    let n = 0;
+    for (const it of items) {
+      let d = it.angle - viewYaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      if (Math.abs(d) > Math.PI / 2) continue;
+      let m = marks[n];
+      if (!m) {
+        m = el('div.compass-mark');
+        marks.push(m);
+        this.compass.append(m);
+      }
+      if (m.textContent !== it.label) m.textContent = it.label;
+      const left = `${(50 - (d / (Math.PI / 2)) * 50).toFixed(1)}%`;
+      if (m.style.left !== left) m.style.left = left;
+      if (this.compassColors[n] !== it.color) {
+        this.compassColors[n] = it.color;
+        m.style.color = it.color;
+      }
+      m.hidden = false;
+      n++;
+    }
+    for (let i = n; i < marks.length; i++) marks[i].hidden = true;
   }
 
   update(dt: number): void {
     this.clock += dt;
     if (this.clock > this.hitUntil) this.hitMarker.classList.remove('show');
     if (this.clock > this.centerUntil) this.center.classList.remove('show');
+    if (this.clock > this.captionUntil) this.captionEl.classList.remove('show');
+    if (!this.tipEl.hidden && this.clock > this.tipUntil) this.tipEl.hidden = true;
     if (this.clock > this.dmgUntil) this.damageFlash.classList.remove('show');
     if (this.clock > this.healUntil) this.healFlash.classList.remove('show');
     for (const f of this.feedEntries) {

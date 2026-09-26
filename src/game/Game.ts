@@ -24,6 +24,10 @@ import { flashAmount } from '../sim/Grenades';
 import { DebugOverlay } from '../ui/DebugOverlay';
 import { Hud } from '../ui/Hud';
 import { Minimap } from '../ui/Minimap';
+import { Waypoint } from '../ui/Waypoint';
+import { ladderEnds, OBJECTIVE_STEPS, Objectives, Tips, type ObjectiveContext, type ObjectiveStep, type TipId } from './Objectives';
+import { OPENING_CHUNK } from '../world/gen/encounters';
+import type { ChunkData } from '../world/gen/ChunkData';
 import { NameTags } from '../ui/NameTags';
 import { Chat } from '../ui/Chat';
 import { Scoreboard } from '../ui/Scoreboard';
@@ -38,9 +42,10 @@ import { WorkerChunkSource } from '../world/WorkerChunkSource';
 import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
 import { EncounterManager } from '../ai/EncounterManager';
+import { lineSeconds, VOICE_BY_ID, VOICE_LINES, VOICES, voiceFile } from '../ai/voiceLines';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SoundEvents } from '../audio/sounds';
-import { buy, buyZoneStatus, engagedNear, OUT_OF_COMBAT, priceOf, unavailableReason, type BuyItem } from '../sim/buy';
+import { buy, buyZoneStatus, engagedNear, OUT_OF_COMBAT, priceOf, recommendUpgrade, unavailableReason, type BuyItem } from '../sim/buy';
 import { BuyMenu, itemName } from '../ui/BuyMenu';
 import { SettingsMenu } from '../ui/SettingsMenu';
 import { BUY_AMMO_KEYS, MAP_KEY, SLOT_KEYS } from '../input/bindings';
@@ -62,6 +67,7 @@ import { carSpeed, forwardSpeed } from '../sim/vehicle/carPhysics';
 import { enterableVehicle } from '../sim/vehicle/Vehicle';
 import { Vehicles } from '../sim/vehicle/Vehicles';
 import { lampStands } from '../world/gen/cityFeatures';
+import { SPAWN_DROP } from '../world/gen/pickups';
 import { CHASE_PITCH_MAX, CHASE_PITCH_MIN } from '../player/CameraController';
 import { botModelUrls, characterUrl, PLAYER_FILE } from '../render/characters/characterSpec';
 
@@ -111,6 +117,12 @@ export class Game {
   private hud: Hud;
   private minimap: Minimap;
   private nameTags: NameTags | null = null;
+  /** The guided opening and the standing objective (city only). */
+  private objectives: Objectives | null = null;
+  private tips: Tips;
+  private waypoint: Waypoint;
+  private objTarget: { x: number; y: number; z: number } | null = null;
+  private ladders = new WeakMap<ChunkData, Float32Array>();
   private chat: Chat | null = null;
   private scoreboard: Scoreboard | null = null;
   private scores = new Map<number, { kills: number; deaths: number; money: number }>();
@@ -150,6 +162,7 @@ export class Game {
   private focus = new THREE.Vector3();
   /** An area was cleared: save as soon as the fight is over. */
   private pendingAutosave = false;
+  private voicesLoaded = false;
   timeScale = 1;
   private mirror: Mirror | null = null;
   private prediction: Prediction | null = null;
@@ -215,6 +228,13 @@ export class Game {
     this.hud = new Hud(ui, this.settings);
     this.hud.setVisible(false);
     this.minimap = new Minimap(this.hud.root);
+    this.waypoint = new Waypoint(this.hud.root);
+    if (params.world === 'city') {
+      // A fresh game starts with the ambush; a save picks up where it was (older saves: past it).
+      const step = save?.tutorial as ObjectiveStep | undefined;
+      this.objectives = new Objectives(!save ? 'ambush' : step && OBJECTIVE_STEPS.includes(step) ? step : 'done');
+    }
+    this.tips = new Tips(loadTips(), storeTips);
     if (online) {
       this.nameTags = new NameTags(this.hud.root);
       this.scoreboard = new Scoreboard(this.hud.root);
@@ -259,6 +279,7 @@ export class Game {
     this.presentation.sinks.push(this.sounds);
     this.presentation.sinks.push({
       handle: (e) => {
+        this.objectives?.onEvent(e, this.me.id);
         if (e.type === 'money') {
           if (e.actorId === this.me.id) this.hud.flashMoney(e.amount);
         }
@@ -266,6 +287,7 @@ export class Game {
           this.hud.message(`AREA CLEARED  +$${e.bonus}  ·  buy zone unlocked`, 3.5);
           this.pendingAutosave = true;
         }
+        else if (e.type === 'voice') this.caption(e.actorId, e.line);
         else if (e.type === 'buy' && e.actorId === this.me.id) {
           const text = e.ok ? `Bought ${itemName(e.item as BuyItem)}` : (e.reason ?? 'Cannot buy');
           this.buyMenu.feedback(text, e.ok);
@@ -399,8 +421,8 @@ export class Game {
       this.spawnZ = this.save.player.z;
     } else {
       // City: the spawn plaza, just south of the fountain.
-      this.spawnX = this.params.spawnCx * CHUNK + 32;
-      this.spawnZ = this.params.spawnCz * CHUNK + 22;
+      this.spawnX = this.params.spawnCx * CHUNK + SPAWN_DROP.x;
+      this.spawnZ = this.params.spawnCz * CHUNK + SPAWN_DROP.z;
     }
     teleport(this.me, this.spawnX, 30, this.spawnZ);
     this.menu.setReady(false);
@@ -411,7 +433,9 @@ export class Game {
     this.loading = false;
     const p = this.me;
     if (this.online) {
-      this.input.yaw = p.yaw;
+      // Dropping into the plaza: face the opening ambush, as in a solo game.
+      const plaza = Math.hypot(p.move.pos.x - (this.params.spawnCx * CHUNK + SPAWN_DROP.x), p.move.pos.z - (this.params.spawnCz * CHUNK + SPAWN_DROP.z)) < 8;
+      this.input.yaw = plaza && !this.save ? Math.PI : p.yaw;
       this.input.pitch = 0;
       this.menu.setStatus('');
       this.menu.setReady(true);
@@ -460,6 +484,7 @@ export class Game {
     if (manual && this.inCombat()) return 'You can’t save during a fight.';
     if (this.me.vehicle >= 0) return 'Get out of the car to save.';
     const data = captureSave(this.sim, this.me, this.pickups, this.encounters, this.vehicles, this.worldMap.exploredKeys());
+    if (this.objectives) data.tutorial = this.objectives.saved;
     if (!writeSave(data)) return 'Could not write the save (storage blocked or full).';
     this.pendingAutosave = false;
     this.refreshSaveInfo();
@@ -569,6 +594,10 @@ export class Game {
     this.menu.setStatus('');
     // Audio may only start from a user gesture.
     void this.audio.unlock();
+    if (!this.voicesLoaded) {
+      this.voicesLoaded = true;
+      this.audio.loadClips(VOICE_LINES.map((l) => ({ name: l.id, url: `${import.meta.env.BASE_URL}${voiceFile(l.id)}` })));
+    }
     if (fullscreen && !document.fullscreenElement) {
       try {
         await document.documentElement.requestFullscreen();
@@ -719,6 +748,7 @@ export class Game {
     this.renderer.updateSun(this.focus);
     this.renderer.render();
     this.nameTags?.update(cam, this.allies());
+    this.waypoint.update(cam, this.objTarget);
 
     this.updateHudExtras();
     this.updateCoopHud(now / 1000);
@@ -819,7 +849,8 @@ export class Game {
     if (!p.alive && this.buyMenu.open) this.buyMenu.close();
     this.input.menuOpen = this.buyMenu.open;
     const zone = buyZoneStatus(this.sim, p, false);
-    this.hud.setBuyHint(zone.ok && !this.buyMenu.open && this.params.world === 'city');
+    const upgrade = zone.ok ? recommendUpgrade(p) : null;
+    this.hud.setBuyHint(zone.ok && !this.buyMenu.open && this.params.world === 'city', upgrade ? itemName(upgrade) : null);
     const swap = this.pickups.swapCandidate(p.id);
     let prompt: string | null = null;
     // E gets into a car before it swaps guns.
@@ -837,6 +868,8 @@ export class Game {
     }
     this.hud.setPrompt(prompt);
     if (this.buyMenu.open && (this.sim.tick & 15) === 0) this.buyMenu.render();
+    const highlight = this.updateObjective();
+    this.buyMenu.highlight(highlight ?? upgrade);
     if (this.encounters) {
       const marks = this.encounters.nearbyEncounters(p.move.pos.x, p.move.pos.z).map((e) => {
         const dx = (e.cx + 0.5) * CHUNK - p.move.pos.x;
@@ -852,6 +885,106 @@ export class Game {
     this.updateMinimap();
   }
 
+  /** Objective line, waypoint and tips. Returns the buy menu item the objective points out. */
+  private updateObjective(): BuyItem | null {
+    const obj = this.objectives;
+    const p = this.me;
+    if (!obj || !this.settings.objectives || this.loading) {
+      this.hud.setObjective(null);
+      this.objTarget = null;
+      return null;
+    }
+    const view = obj.update(this.objectiveContext());
+    const t = p.alive ? (view?.target ?? null) : null;
+    this.objTarget = t;
+    const dist = t ? Math.hypot(t.x - p.move.pos.x, t.z - p.move.pos.z) : null;
+    // Hold new objectives back until the player is in the game to see them arrive.
+    if (this.state === 'playing' && this.hud.setObjective(view?.title ?? null, view?.sub, dist, view?.kicker, view?.urgent)) this.audio.play('objective', { volume: 0.5 });
+    if (p.alive && p.vehicle < 0) {
+      const door = this.sim.doors.target(p);
+      const tip = this.tips.check({ door: door ? { locked: door.locked } : null, nearLadder: this.nearLadder() });
+      if (tip) this.hud.tip(tip);
+    }
+    return view?.highlight ?? null;
+  }
+
+  private objectiveContext(): ObjectiveContext {
+    const p = this.me;
+    const pos = p.move.pos;
+    const { cx, cz } = OPENING_CHUNK;
+    const key = chunkKey(cx, cz);
+    const openingBots = this.sim.actors
+      .filter((a) => a.alive && a.team === Team.Bots && worldToChunk(a.move.pos.x) === cx && worldToChunk(a.move.pos.z) === cz)
+      .map((a) => ({ x: a.move.pos.x, y: a.move.pos.y + 1.2, z: a.move.pos.z }));
+    let mp9: ObjectiveContext['mp9'] = null;
+    let best = Infinity;
+    for (const it of this.pickups.items) {
+      if (it.item.kind !== 'weapon' || it.item.weapon !== 'mp9') continue;
+      const d = Math.hypot(it.pos.x - pos.x, it.pos.z - pos.z);
+      if (d < best && d <= 60) {
+        best = d;
+        mp9 = { x: it.pos.x, y: it.pos.y + 0.4, z: it.pos.z };
+      }
+    }
+    let car: ObjectiveContext['car'] = null;
+    best = Infinity;
+    for (const v of this.sim.vehicles) {
+      if (v.destroyed || v.driver >= 0) continue;
+      const d = Math.hypot(v.car.pos.x - pos.x, v.car.pos.z - pos.z);
+      if (d < best && d <= 120) {
+        best = d;
+        car = { x: v.car.pos.x, y: v.car.pos.y + 1.6, z: v.car.pos.z };
+      }
+    }
+    let nextArea: ObjectiveContext['nextArea'] = null;
+    best = Infinity;
+    for (const e of this.encounters?.nearbyEncounters(pos.x, pos.z) ?? []) {
+      const x = (e.cx + 0.5) * CHUNK;
+      const z = (e.cz + 0.5) * CHUNK;
+      const d = Math.hypot(x - pos.x, z - pos.z);
+      if (d < best) {
+        best = d;
+        nextArea = { pos: { x, y: pos.y + 2, z }, level: e.level };
+      }
+    }
+    const openingCenter = { x: (cx + 0.5) * CHUNK, y: pos.y + 2, z: (cz + 0.5) * CHUNK };
+    const hostage = this.sim.actors.find((a) => a.captive && a.alive);
+    const captive = hostage ? { x: hostage.move.pos.x, y: hostage.move.pos.y + 1.2, z: hostage.move.pos.z } : null;
+    return {
+      now: this.sim.time,
+      player: p,
+      inBuyZone: buyZoneStatus(this.sim, p, this.engagedNearby()).ok,
+      inCombat: this.inCombat(),
+      openingCleared: this.sim.cleared.has(key) || !!this.encounters?.isCleared(key),
+      captive,
+      openingBots,
+      openingCenter,
+      mp9,
+      car,
+      nextArea,
+    };
+  }
+
+  /** Within a few metres of either end of a ladder (or on one). */
+  private nearLadder(): boolean {
+    const m = this.me.move;
+    if (m.onLadder) return true;
+    const pcx = worldToChunk(m.pos.x);
+    const pcz = worldToChunk(m.pos.z);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const d = this.streamer.getChunk(pcx + dx, pcz + dz);
+        if (!d) continue;
+        let ends = this.ladders.get(d);
+        if (!ends) this.ladders.set(d, (ends = ladderEnds(d)));
+        for (let i = 0; i < ends.length; i += 3) {
+          if (Math.abs(ends[i + 1] - m.pos.y) < 2 && Math.hypot(ends[i] - m.pos.x, ends[i + 2] - m.pos.z) < 3) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   private updateMinimap(): void {
     const pos = this.me.move.pos;
     const encounters = this.encounters;
@@ -859,7 +992,7 @@ export class Game {
       x: pos.x,
       z: pos.z,
       yaw: this.input.yaw,
-      buyZones: new Set([chunkKey(this.params.spawnCx, this.params.spawnCz), ...this.sim.cleared]),
+      buyZones: buyZoneKeys(chunkKey(this.params.spawnCx, this.params.spawnCz), this.sim.cleared),
       showZones: this.params.world === 'city',
       encounters: encounters?.nearbyEncounters(pos.x, pos.z) ?? [],
       // Only bots that are fighting you show up: no free wallhacks.
@@ -868,6 +1001,7 @@ export class Game {
       pickups: this.pickups.items,
       stash: this.pickups.stashPos(this.me.id),
       cars: this.sim.vehicles.filter((v) => !v.destroyed && v.driver < 0).map((v) => ({ x: v.car.pos.x, z: v.car.pos.z, yaw: v.car.yaw })),
+      objective: this.objTarget,
     });
   }
 
@@ -910,6 +1044,16 @@ export class Game {
       if (a.alive && a.flashlight && a.team === Team.Bots) set.add(a.id);
     }
     return set;
+  }
+
+  /** Subtitle for a spoken line, if the speaker is near enough to hear. */
+  private caption(actorId: number, lineId: string): void {
+    const line = VOICE_BY_ID.get(lineId);
+    const a = this.sim.getActor(actorId);
+    if (!line || !a) return;
+    const p = this.me.move.pos;
+    if (Math.hypot(a.move.pos.x - p.x, a.move.pos.z - p.z) > CAPTION_RANGE) return;
+    this.hud.caption(VOICES[line.voice].name, line.text, lineSeconds(line) + 1.2);
   }
 
   /** Height of the first surface below the open sky at (x, z), or -Infinity over nothing. */
@@ -1026,4 +1170,32 @@ export class Game {
     this.renderer.dispose();
     this.ui.replaceChildren();
   }
+}
+
+const TIPS_KEY = 'endless-city.tips';
+/** Spoken lines further away than this (m) aren't captioned. */
+const CAPTION_RANGE = 70;
+
+/** Tips already shown in this browser. */
+function loadTips(): Set<TipId> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TIPS_KEY) ?? '[]') as unknown;
+    return new Set(Array.isArray(raw) ? (raw.filter((t) => typeof t === 'string') as TipId[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function storeTips(seen: Set<TipId>): void {
+  try {
+    localStorage.setItem(TIPS_KEY, JSON.stringify([...seen]));
+  } catch {
+    /* storage blocked */
+  }
+}
+
+/** The spawn plaza and every cleared area, without copying the (ever-growing) cleared set. */
+function* buyZoneKeys(spawnKey: number, cleared: ReadonlySet<number>): Generator<number> {
+  yield spawnKey;
+  for (const k of cleared) if (k !== spawnKey) yield k;
 }

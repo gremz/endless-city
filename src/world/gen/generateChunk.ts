@@ -180,6 +180,7 @@ export function generateChunk(seed: number, cx: number, cz: number, opts: { dres
     doors: doorRecords(ctx.doorLeaves, cx, cz),
     glass: new Int32Array(ctx.glass),
     hasEncounter: enc.hasEncounter,
+    opening: enc.opening,
     genMs: performance.now() - t0,
   };
 }
