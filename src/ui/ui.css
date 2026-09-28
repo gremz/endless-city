@@ -50,6 +50,64 @@ body {
   pointer-events: auto !important;
 }
 
+.menu.leaving {
+  opacity: 0;
+  transition: opacity 0.6s;
+  pointer-events: none !important;
+}
+
+/* Title: a slim column on the left, the city flying by behind it. */
+.menu.title {
+  justify-content: flex-start;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.15) 45%, rgba(0, 0, 0, 0) 70%);
+}
+
+.menu.title .menu-panel {
+  width: min(380px, calc(100vw - 32px));
+  margin-left: max(16px, 5vw);
+  padding: 26px 28px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  background: rgba(14, 18, 22, 0.58);
+  backdrop-filter: blur(6px);
+}
+
+.menu.title .menu-title {
+  font-size: 34px;
+  letter-spacing: 4px;
+  white-space: nowrap;
+}
+
+.menu.title .menu-buttons {
+  flex-direction: column;
+}
+
+.menu.title .menu-buttons .btn {
+  text-align: left;
+}
+
+.menu.title .menu-coop-row .btn {
+  flex-basis: 150px;
+  white-space: nowrap;
+}
+
+.menu.title .controls {
+  grid-template-columns: 1fr;
+}
+
+.menu-controls {
+  margin-top: 12px;
+}
+
+.menu-controls summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
 .menu-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -277,6 +335,72 @@ kbd {
   inset: 0;
   font-family: 'Segoe UI', system-ui, sans-serif;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* ---------- intro cinematic ---------- */
+.hud.cinematic > :not(.cine):not(.caption) {
+  visibility: hidden;
+}
+
+.cine-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  background: #000;
+  transition: height 0.8s ease-in-out;
+}
+
+.cine-bar.top {
+  top: 0;
+}
+
+.cine-bar.bottom {
+  bottom: 0;
+}
+
+.hud.cinematic .cine-bar {
+  height: 11vh;
+}
+
+.cine-card {
+  position: absolute;
+  left: 6vw;
+  bottom: calc(11vh + 28px);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  color: rgba(255, 224, 150, 0.95);
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.9s,
+    transform 0.9s;
+}
+
+.cine-card.show {
+  opacity: 1;
+  transform: none;
+}
+
+.cine-skip {
+  position: absolute;
+  right: 3vw;
+  bottom: calc(5.5vh - 10px);
+  font-size: 13px;
+  color: var(--dim);
+  opacity: 0;
+  transition: opacity 0.6s;
+}
+
+.cine-skip.show {
+  opacity: 1;
+}
+
+/* Captions sit just above the lower bar during the intro. */
+.hud.cinematic .caption {
+  bottom: calc(11vh + 18px);
 }
 
 .crosshair {

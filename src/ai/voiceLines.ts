@@ -42,13 +42,19 @@ export type Faction = 'gang' | 'cell';
 export const FACTION_VOICES = { gang: ['gang1', 'gang2'], cell: ['cell1', 'cell2'] } as const;
 export type BarkVoiceId = (typeof FACTION_VOICES)[Faction][number];
 
-export type VoiceId = 'gunman' | 'shover' | 'officer' | BarkVoiceId;
+export type VoiceId = 'gunman' | 'shover' | 'officer' | 'dispatch' | BarkVoiceId;
 
 export const VOICES: Record<VoiceId, Voice> = {
   // The opening's scene.
   gunman: { source: 'elevenlabs', direction: 'Male, 30s–40s, low and menacing, unhurried.', name: 'Gunman' },
   shover: { source: 'elevenlabs', direction: 'Male, 20s–30s, sneering street thug.', name: 'Thug' },
   officer: { source: 'elevenlabs', direction: 'Male police officer, shaken, voice wobbling.', name: 'Officer' },
+  // The intro's police radio. Recorded clean: the game adds the radio sound (PlayOptions.radio).
+  dispatch: {
+    source: 'elevenlabs',
+    direction: 'Police radio dispatcher, female, 30s–40s, calm, clipped and professional; even pace, urgent underneath but never rushed.',
+    name: 'Dispatch',
+  },
   // Squad barks: both voices of a faction record the same lines. Captioned with the bot's own name.
   gang1: { source: 'elevenlabs', direction: 'Male, 20s, fast and cocky street voice, loud, a little reckless.', name: 'Gang member' },
   gang2: { source: 'elevenlabs', direction: 'Male, 30s, deeper and gravelly, slower: the older head of the crew.', name: 'Gang member' },
@@ -77,7 +83,7 @@ export type BarkCue =
   | 'taunt';
 
 /** When a line is said. */
-export type VoiceCue = 'plead' | 'warn' | 'execute' | 'after' | 'thanks' | BarkCue;
+export type VoiceCue = 'plead' | 'warn' | 'execute' | 'after' | 'thanks' | 'intro' | BarkCue;
 
 export interface VoiceLine {
   id: string;
@@ -156,6 +162,13 @@ const SCENE_LINES: readonly VoiceLine[] = [
   { id: 'officer_thanks_1', voice: 'officer', cue: 'thanks', text: 'Thank you. I thought I was dead. Take his gun, there are cars down the street.' },
 ];
 
+/** The intro's radio call, in order (see game/Intro.ts for when each one plays). */
+export const INTRO_LINES: readonly VoiceLine[] = [
+  { id: 'dispatch_intro_1', voice: 'dispatch', cue: 'intro', text: 'All units, be advised. An officer has been taken hostage by the plaza fountain.' },
+  { id: 'dispatch_intro_2', voice: 'dispatch', cue: 'intro', text: "Two armed suspects. They're threatening to execute him. You're the closest unit." },
+  { id: 'dispatch_intro_3', voice: 'dispatch', cue: 'intro', text: 'Get him out alive.' },
+];
+
 /** Every faction line, once per voice of the faction: `<voice>_<cue>_<n>`. */
 function barkLines(): VoiceLine[] {
   const out: VoiceLine[] = [];
@@ -169,7 +182,7 @@ function barkLines(): VoiceLine[] {
   return out;
 }
 
-export const VOICE_LINES: readonly VoiceLine[] = [...SCENE_LINES, ...barkLines()];
+export const VOICE_LINES: readonly VoiceLine[] = [...SCENE_LINES, ...INTRO_LINES, ...barkLines()];
 
 export const VOICE_BY_ID: ReadonlyMap<string, VoiceLine> = new Map(VOICE_LINES.map((l) => [l.id, l]));
 

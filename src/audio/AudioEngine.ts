@@ -22,6 +22,8 @@ export interface PlayOptions {
   bus?: 'sfx' | 'master';
   /** Distance (m) before positional falloff starts (default 3); voices carry further. */
   refDistance?: number;
+  /** Through a police radio: band-limited and lightly overdriven. */
+  radio?: boolean;
 }
 
 /**
@@ -215,6 +217,18 @@ export class AudioEngine {
     g.gain.value = opts.volume ?? 1;
     let tail: AudioNode = g;
     src.connect(g);
+    if (opts.radio) {
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 380;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 2900;
+      const drive = ctx.createWaveShaper();
+      drive.curve = this.radioCurve();
+      tail.connect(hp).connect(drive).connect(lp);
+      tail = lp;
+    }
     if (opts.pos) {
       // Distance filtering: far sounds lose their highs.
       if (listener) {
@@ -251,6 +265,22 @@ export class AudioEngine {
       if (i >= 0) this.voices.splice(i, 1);
     };
     src.start();
+  }
+
+  private radioCurveCache: Float32Array<ArrayBuffer> | null = null;
+
+  /** Soft clipping for the radio's crunch. */
+  private radioCurve(): Float32Array<ArrayBuffer> {
+    if (!this.radioCurveCache) {
+      const n = 1024;
+      const c = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const x = (i / (n - 1)) * 2 - 1;
+        c[i] = Math.tanh(x * 2.2) / Math.tanh(2.2);
+      }
+      this.radioCurveCache = c;
+    }
+    return this.radioCurveCache;
   }
 
   dispose(): void {

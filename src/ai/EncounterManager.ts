@@ -49,6 +49,8 @@ const OPENING_SKILL: BotSkill = {
 };
 const DESPAWN_UNSEEN = 10;
 const BODY_TIME = 12;
+/** Seconds into the intro cinematic before the officer's first plea (the camera's reached him by then). */
+const INTRO_FIRST_PLEA = 6;
 /** A squadmate further away than this (m) doesn't see a bot go down. */
 const MOURN_RANGE = 30;
 
@@ -205,7 +207,7 @@ export class EncounterManager implements SimSystem {
         h.afterAt = sim.time + 1.2;
         this.hostageEvent();
       } else {
-        if (h.executeAt < 0 && best <= FUSE_RANGE) {
+        if (h.executeAt < 0 && best <= FUSE_RANGE && !sim.introHold) {
           h.executeAt = sim.time + EXECUTE_FUSE;
           h.pleaAt = sim.time + 8;
           this.hostageEvent();
@@ -213,6 +215,7 @@ export class EncounterManager implements SimSystem {
         // Everyone in his area down: he's free.
         if (!this.bots.some((b) => b.actor.alive && b.squad.chunkKey === h.chunkKey)) this.freeHostage();
         else if (h.executeAt >= 0) this.sceneLines(h);
+        else if (sim.introHold) this.introLines(h);
       }
     }
     // The shover gloats over the body (if he's still standing around), the officer says thanks.
@@ -247,6 +250,18 @@ export class EncounterManager implements SimSystem {
       h.lastWords = true;
       say(sim, h, gunman.actor, 'gunman', 'execute', true);
     }
+  }
+
+  /** While the intro camera looks on (no fuse yet), the officer still pleads now and then. */
+  private introLines(h: Hostage): void {
+    const now = this.sim.time;
+    if (h.pleaAt < 0) h.pleaAt = now + INTRO_FIRST_PLEA;
+    else if (now >= h.pleaAt && say(this.sim, h, h.actor, 'officer', 'plead')) h.pleaAt = now + PLEA_GAP;
+  }
+
+  /** Nobody in the scene starts a line before `until` (sim time), e.g. while the radio talks. */
+  hushScene(until: number): void {
+    if (this.hostage) this.hostage.quietUntil = Math.max(this.hostage.quietUntil, until);
   }
 
   private castBot(id: number): Bot | undefined {

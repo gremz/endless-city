@@ -4,10 +4,10 @@ import { daylightAt, DAY_LENGTH, envAt, hourAt, visibilityAt, WEATHER_WINDOW, we
 import { nearestLampDist } from '../world/gen/streets';
 
 describe('day/night cycle', () => {
-  it('starts mid-morning and takes 24 minutes', () => {
-    expect(hourAt(0)).toBe(9);
-    expect(hourAt(DAY_LENGTH)).toBeCloseTo(9);
-    expect(hourAt(60)).toBeCloseTo(10);
+  it('starts at sunrise and takes 24 minutes', () => {
+    expect(hourAt(0)).toBe(6.5);
+    expect(hourAt(DAY_LENGTH)).toBeCloseTo(6.5);
+    expect(hourAt(60)).toBeCloseTo(7.5);
   });
 
   it('is bright by day, dark at night and smooth at dawn and dusk', () => {

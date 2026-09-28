@@ -78,6 +78,11 @@ export class Simulation implements WeaponContext {
    */
   replica = false;
   /**
+   * The opening's intro cinematic is playing: bots don't notice players and the hostage's fuse
+   * waits until the player has control.
+   */
+  introHold = false;
+  /**
    * Lag compensation (host): wraps the weapon update of a player's command, e.g. to rewind the
    * other actors to where that player saw them.
    */

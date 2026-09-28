@@ -71,6 +71,10 @@ export class Hud {
   private tipEl: HTMLDivElement;
   private tipUntil = 0;
   private buyHintText = '';
+  /** Letterbox bars, a title card and the skip hint, for the intro cinematic. */
+  private cine: HTMLDivElement;
+  private cineCard: HTMLDivElement;
+  private cineSkip: HTMLDivElement;
 
   constructor(parent: HTMLElement, private settings: Settings) {
     this.chLines = [0, 1, 2, 3].map((i) => el(`div.ch-line.ch-${i}`));
@@ -127,7 +131,11 @@ export class Hud {
     this.deathHint = el('div.death-hint');
     this.death = el('div.death', {}, [this.deathTitle, this.deathHint]);
     this.death.hidden = true;
+    this.cineCard = el('div.cine-card');
+    this.cineSkip = el('div.cine-skip', {}, [el('kbd', { text: 'Space' }), ' Skip']);
+    this.cine = el('div.cine', {}, [el('div.cine-bar.top'), el('div.cine-bar.bottom'), this.cineCard, this.cineSkip]);
     this.root = el('div.hud', {}, [
+      this.cine,
       this.flashOverlay,
       this.damageFlash,
       this.healFlash,
@@ -170,6 +178,19 @@ export class Hud {
 
   setVisible(v: boolean): void {
     this.root.hidden = !v;
+  }
+
+  /** Intro cinematic: letterboxed, everything but captions and the title card hidden. */
+  setCinematic(on: boolean): void {
+    this.root.classList.toggle('cinematic', on);
+    if (!on) this.setCineCard(null, false);
+  }
+
+  /** The intro's title card ("where · when"), and whether the skip hint shows. */
+  setCineCard(text: string | null, skipHint: boolean): void {
+    if (text !== null && this.cineCard.textContent !== text) this.cineCard.textContent = text;
+    this.cineCard.classList.toggle('show', text !== null);
+    this.cineSkip.classList.toggle('show', skipHint);
   }
 
   /**

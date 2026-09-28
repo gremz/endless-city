@@ -29,8 +29,8 @@ export interface EnvOverride {
 
 /** One full day in real seconds: 24 minutes, so a game hour lasts a minute. */
 export const DAY_LENGTH = 24 * 60;
-/** New games start mid-morning. */
-export const START_HOUR = 9;
+/** New games start at sunrise, in the golden light (full day a few minutes later). */
+export const START_HOUR = 6.5;
 /** Weather changes every 4 minutes and blends in over the first 30 s. */
 export const WEATHER_WINDOW = 240;
 const WEATHER_BLEND = 30;

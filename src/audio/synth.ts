@@ -397,6 +397,14 @@ export const RECIPES: Record<string, Recipe> = {
       noise(ctx, out, s + 50, { at: 0.2, dur: 1, gain: 0.2, type: 'highpass', freq: 5000, attack: 0.05, decay: 0.35 });
     },
   },
+  // Police radio squelch: a key-up chirp and a burst of static.
+  radio: {
+    duration: 0.35,
+    build: (ctx, out, s) => {
+      tone(ctx, out, { f0: 1400, gain: 0.12, decay: 0.03, dur: 0.06, type: 'square' });
+      noise(ctx, out, s, { at: 0.02, dur: 0.22, gain: 0.3, type: 'bandpass', freq: 2200, q: 0.9, decay: 0.08 });
+    },
+  },
   fire_out: {
     duration: 1,
     build: (ctx, out, s) => noise(ctx, out, s, { dur: 0.9, gain: 0.4, type: 'highpass', freq: 2000, attack: 0.02, decay: 0.3, freqEnd: 900 }),

@@ -41,6 +41,7 @@ import { generateGymChunk } from '../world/gen/gymGen';
 import { WorkerChunkSource } from '../world/WorkerChunkSource';
 import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
+import { Intro, titleOrbit, type CamPose, type IntroAnchors } from './Intro';
 import { EncounterManager } from '../ai/EncounterManager';
 import { isBarkVoice, isRecorded, lineSeconds, VOICE_BY_ID, VOICE_LINES, VOICES, voiceFile } from '../ai/voiceLines';
 import { AudioEngine } from '../audio/AudioEngine';
@@ -71,7 +72,7 @@ import { SPAWN_DROP } from '../world/gen/pickups';
 import { CHASE_PITCH_MAX, CHASE_PITCH_MIN } from '../player/CameraController';
 import { botModelUrls, characterUrl, PLAYER_FILE } from '../render/characters/characterSpec';
 
-type State = 'menu' | 'playing' | 'paused' | 'map';
+type State = 'menu' | 'intro' | 'playing' | 'paused' | 'map';
 
 export interface GameHooks {
   /** Throw this game away and start the saved one (the host rebuilds the Game). */
@@ -167,6 +168,13 @@ export class Game {
   private mirror: Mirror | null = null;
   private prediction: Prediction | null = null;
   private gotSnapshot = false;
+  /** A fresh solo city game: the intro cinematic plays when the player first drops in. */
+  private introPending: boolean;
+  private intro: Intro | null = null;
+  /** The title camera: seconds it has been circling, and where it is now (the intro starts there). */
+  private titleT = 0;
+  private titlePose: CamPose | null = null;
+  private camTrace = makeTrace();
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -178,6 +186,7 @@ export class Game {
     readonly online: OnlineGame | null = null,
   ) {
     this.settings = loadSettings();
+    this.introPending = !save && !online && params.world === 'city' && !params.noBots;
     const tickDt = 1 / params.tickRate;
     this.loop = new FixedLoop(tickDt);
     this.sim = new Simulation(params, { autoBhop: this.settings.autoBhop }, tickDt);
@@ -470,9 +479,95 @@ export class Game {
       this.menu.show('paused', 'SAVE LOADED');
     } else {
       this.input.yaw = Math.PI;
+      if (this.introPending) this.stageOpening();
     }
     this.menu.setStatus('');
     this.menu.setReady(true);
+  }
+
+  /**
+   * Set the opening scene up behind the title screen: run the world for a moment (with the
+   * player held back and the fuse unlit) so the squad and the officer are in place for the
+   * title camera and the intro.
+   */
+  private stageOpening(): void {
+    this.sim.introHold = true;
+    const idle = makeCmd();
+    idle.yaw = this.input.yaw;
+    for (let i = 0; i < 40; i++) this.sim.step(idle);
+  }
+
+  /** What the intro films: the player's eye and the officer (or where he'll be). */
+  private introAnchors(): IntroAnchors {
+    const p = this.me;
+    const eye = { x: p.move.pos.x, y: p.move.pos.y + eyeHeight(p.move), z: p.move.pos.z };
+    const h = this.sim.actors.find((a) => a.captive && a.alive);
+    const scene = h
+      ? { x: h.move.pos.x, y: h.move.pos.y, z: h.move.pos.z }
+      : { x: eye.x, y: p.move.pos.y, z: eye.z + 45 };
+    return { eye, scene };
+  }
+
+  /** A camera spot pulled in short of any wall between it and `from`. */
+  private clearSpot(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) {
+    this.sim.world.traceRay(this.camTrace, from, to, MASK_SHOT);
+    const f = Math.max(0, this.camTrace.fraction - 0.05);
+    return { x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f, z: from.z + (to.z - from.z) * f };
+  }
+
+  /** Title screen camera: a slow circle over the spawn plaza, looking at the opening scene. */
+  private updateTitleCamera(dt: number): void {
+    this.titleT += dt;
+    const a = this.introAnchors();
+    const center = { x: a.eye.x, y: a.eye.y, z: a.eye.z + 20 };
+    const want = titleOrbit(this.titleT, center, { x: a.scene.x, y: a.scene.y + 1, z: a.scene.z });
+    const at = this.clearSpot({ x: center.x, y: center.y + 40, z: center.z }, want);
+    this.titlePose = { ...at, yaw: want.yaw, pitch: want.pitch };
+  }
+
+  private beginIntro(): void {
+    if (!this.intro) {
+      const start = this.titlePose ?? { ...this.introAnchors().eye, yaw: this.input.yaw, pitch: this.input.pitch };
+      this.intro = new Intro(start, (from, to) => this.clearSpot(from, to));
+    }
+    this.sim.introHold = true;
+    this.input.enabled = false;
+    this.hud.setCinematic(true);
+  }
+
+  /** Run the intro for a frame: camera, radio lines, title card; hand over at the end. */
+  private updateIntro(dt: number): CamPose {
+    const intro = this.intro!;
+    const anchors = this.introAnchors();
+    const f = intro.update(dt, anchors);
+    for (const id of f.cues) this.radio(id);
+    const card = f.t > 0.6 && f.t < 6.5 && !intro.skipping ? `The plaza  ·  ${clockText(this.sim.env.hour)}` : null;
+    this.hud.setCineCard(card, f.t > 1.2 && !intro.skipping);
+    if (f.done) this.endIntro(intro.endPose(anchors));
+    return f.pose;
+  }
+
+  /** A line over the police radio: squelch, the voice through the radio filter, a caption. */
+  private radio(id: string): void {
+    const line = VOICE_BY_ID.get(id);
+    if (!line) return;
+    const secs = lineSeconds(line);
+    this.audio.play('radio', { volume: 0.35, reverb: 0 });
+    this.audio.play(id, { radio: true, volume: 1.2, reverb: 0 });
+    this.hud.caption(VOICES[line.voice].name, line.text, secs + 1.2);
+    // The scene keeps quiet under the radio.
+    this.encounters?.hushScene(this.sim.time + secs + 0.6);
+  }
+
+  private endIntro(end: CamPose): void {
+    this.intro = null;
+    this.introPending = false;
+    this.sim.introHold = false;
+    this.input.yaw = end.yaw;
+    this.input.pitch = end.pitch;
+    this.input.enabled = true;
+    this.hud.setCinematic(false);
+    this.state = 'playing';
   }
 
   /** Write the save slot. Returns why it couldn't, or null on success. */
@@ -527,13 +622,15 @@ export class Game {
 
     const onLockChange = () => {
       if (document.pointerLockElement === this.canvas) {
-        this.state = 'playing';
-        this.menu.hide();
+        const intro = this.introPending && !this.loading;
+        this.state = intro ? 'intro' : 'playing';
+        this.menu.hide(intro);
         this.worldMap.hide();
         this.hud.setVisible(true);
         this.loop.reset();
         this.audio.setMusicPaused(false);
-      } else if (this.state === 'playing') {
+        if (intro) this.beginIntro();
+      } else if (this.state === 'playing' || this.state === 'intro') {
         this.pause();
       }
     };
@@ -548,8 +645,15 @@ export class Game {
       document.removeEventListener('pointerlockerror', onLockError);
     });
 
+    // A click skips the intro too.
+    const onMouseDown = () => {
+      if (this.state === 'intro') this.intro?.skip();
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    this.disposers.push(() => document.removeEventListener('mousedown', onMouseDown));
+
     const onVisibility = () => {
-      if (document.hidden && this.state === 'playing') this.input.exitLock();
+      if (document.hidden && (this.state === 'playing' || this.state === 'intro')) this.input.exitLock();
     };
     document.addEventListener('visibilitychange', onVisibility);
     this.disposers.push(() => document.removeEventListener('visibilitychange', onVisibility));
@@ -564,6 +668,10 @@ export class Game {
       this.input.onKeyDown((code) => {
         if (this.chat?.open) return;
         if (code === DEBUG_KEYS.overlay) this.debug.toggle();
+        if (this.state === 'intro') {
+          if (code === 'Space' || code === 'Enter') this.intro?.skip();
+          return;
+        }
         if (this.chat && this.state === 'playing' && code === 'Enter') {
           this.chat.show();
           return;
@@ -680,7 +788,7 @@ export class Game {
     let alpha = 1;
     if (this.online) {
       alpha = this.onlineTick(frameMs / 1000, now);
-    } else if (this.state === 'playing') {
+    } else if (this.state === 'playing' || this.state === 'intro') {
       // Never simulate on top of an unloaded chunk.
       const ready = this.streamer.isLoaded(p.move.pos.x, p.move.pos.z);
       if (ready) {
@@ -711,6 +819,7 @@ export class Game {
       this.streamer.apply(1);
     }
 
+    this.presentation.cinematic = this.state === 'intro' || (this.introPending && !this.loading && this.state === 'menu');
     this.presentation.update(this.sim, alpha, frameMs / 1000);
     const cam = this.renderer.camera;
     const car = p.alive ? this.sim.vehicleOf(p) : undefined;
@@ -720,6 +829,18 @@ export class Game {
     } else {
       this.drivingId = -1;
       this.camCtl.update(cam, p, alpha, this.input.yaw, this.input.pitch);
+    }
+    // The title camera and the intro take the camera over (and put the gun away).
+    let shot: CamPose | null = null;
+    // Same clamped step as the world, so the radio and the scene's dialogue stay in step on a slow frame.
+    if (this.state === 'intro' && this.intro) shot = this.updateIntro(dt);
+    else if (this.introPending && !this.loading && this.state === 'menu') {
+      this.updateTitleCamera(frameMs / 1000);
+      shot = this.titlePose;
+    }
+    if (shot) {
+      cam.position.set(shot.x, shot.y, shot.z);
+      cam.rotation.set(shot.pitch, shot.yaw, 0, 'YXZ');
     }
     const env = this.sim.env;
     this.vehicleRenderer.update(this.sim.vehicles, alpha, this.sim.time, frameMs / 1000, car?.id ?? -1, env.darkness);
@@ -1175,6 +1296,13 @@ export class Game {
 }
 
 const TIPS_KEY = 'endless-city.tips';
+
+/** "18:05" for an hour of the day. */
+function clockText(hour: number): string {
+  const h = Math.floor(hour);
+  const m = Math.floor((hour - h) * 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
 /** Spoken lines further away than this (m) aren't captioned. */
 const CAPTION_RANGE = 70;
 /** Squad barks further away than this (m) aren't captioned. */

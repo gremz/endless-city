@@ -58,6 +58,8 @@ export class Presentation {
   torches: ReadonlySet<number> = new Set();
   /** Actor id of the player this screen belongs to. */
   localId = -1;
+  /** A cinematic camera (title, intro) has the view: no gun in it. */
+  cinematic = false;
   private torchLevel = 0;
   readonly viewmodel: Viewmodel;
   readonly tracers = new Tracers();
@@ -297,7 +299,7 @@ export class Presentation {
     }
     this.input.sensScale = scoped ? (fov / this.baseFov) * this.settings.zoomSensitivityRatio : 1;
     const car = sim.vehicleOf(p);
-    this.viewmodel.visible = !scoped && !car;
+    this.viewmodel.visible = !scoped && !car && !this.cinematic;
     this.hud.setScope(scoped);
     this.viewmodel.update(frameDt, p, simTime, this.input.yaw, this.input.pitch);
 

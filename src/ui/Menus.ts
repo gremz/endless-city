@@ -16,6 +16,8 @@ export interface MenuCallbacks {
 }
 
 const NAME_KEY = 'endless-city.name';
+/** How long the title takes to fade out when the intro starts (matches .menu.leaving in ui.css). */
+const MENU_FADE_MS = 600;
 
 export function savedName(): string {
   try {
@@ -64,6 +66,8 @@ export class MainMenu {
   private loadBtn: HTMLButtonElement;
   private saveLine: HTMLDivElement;
   private mode: 'title' | 'paused' = 'title';
+  private controls: HTMLDetailsElement;
+  private fadeTimer = 0;
   private hasSave = false;
   private canSave = false;
   private coop: HTMLDivElement;
@@ -129,11 +133,14 @@ export class MainMenu {
     this.room = el('div.menu-room', {}, [el('div', {}, [el('span', { text: 'Room code ' }), this.roomCode, copyBtn]), this.roomPlayers]);
     this.leaveBtn = el('button.btn', { text: 'Leave game' });
     this.leaveBtn.addEventListener('click', () => cb.onLeave?.());
-    const controls = el(
-      'div.controls',
-      {},
-      CONTROLS.map(([k, v]) => el('div.control', {}, [el('kbd', { text: k }), el('span', { text: v })])),
-    );
+    this.controls = el('details.menu-controls', {}, [
+      el('summary', { text: 'Controls' }),
+      el(
+        'div.controls',
+        {},
+        CONTROLS.map(([k, v]) => el('div.control', {}, [el('kbd', { text: k }), el('span', { text: v })])),
+      ),
+    ]);
     this.playBtn.addEventListener('click', () => cb.onPlay(false));
     this.fsBtn.addEventListener('click', () => cb.onPlay(true));
     settingsBtn.addEventListener('click', () => cb.onSettings());
@@ -150,17 +157,22 @@ export class MainMenu {
       this.room,
       this.coop,
       this.status,
-      controls,
+      this.controls,
       this.seedLine,
     ]);
-    this.root = el('div.menu', {}, [panel]);
+    this.root = el('div.menu.title', {}, [panel]);
     parent.append(this.root);
     this.updateSaveButtons();
   }
 
   show(mode: 'title' | 'paused', heading = mode === 'title' ? 'ENDLESS CITY' : 'PAUSED'): void {
     this.mode = mode;
+    clearTimeout(this.fadeTimer);
+    this.root.classList.remove('leaving');
     this.root.hidden = false;
+    // The title is a slim column over the city; the pause menu a panel in the middle, controls open.
+    this.root.classList.toggle('title', mode === 'title');
+    this.controls.open = mode === 'paused';
     this.heading.textContent = heading;
     this.playBtn.textContent = mode === 'title' ? 'Play' : 'Resume';
     this.fsBtn.textContent = mode === 'title' ? 'Play fullscreen' : 'Resume fullscreen';
@@ -213,8 +225,18 @@ export class MainMenu {
     this.joinBtn.disabled = busy;
   }
 
-  hide(): void {
-    this.root.hidden = true;
+  /** Hide the menu; `fade` lets it fade out over the game (leaving the title for the intro). */
+  hide(fade = false): void {
+    clearTimeout(this.fadeTimer);
+    if (!fade || this.root.hidden) {
+      this.root.hidden = true;
+      return;
+    }
+    this.root.classList.add('leaving');
+    this.fadeTimer = window.setTimeout(() => {
+      this.root.hidden = true;
+      this.root.classList.remove('leaving');
+    }, MENU_FADE_MS);
   }
 
   setStatus(text: string): void {

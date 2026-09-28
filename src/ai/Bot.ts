@@ -278,6 +278,7 @@ export class Bot {
     const a = this.actor;
     this.visible = false;
     if (this.target && !this.target.alive) this.target = null;
+    if (sim.introHold) return;
     if (!sim.players.some((p) => p.alive)) {
       this.awareness = Math.max(0, this.awareness - dt * 0.2);
       return;

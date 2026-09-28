@@ -121,7 +121,12 @@ export class Atmosphere {
 
     // Blend the palette: night -> golden hour -> day, golden strongest right around sunrise/sunset.
     const d = env.daylight;
-    const golden = Math.max(0, 1 - Math.abs(d - 0.55) / 0.45) * (env.hour > 12 ? 1 : 0.8);
+    // The low sun stays warm for a while either side of that too: after sunrise (the sunrise
+    // start) and before dusk.
+    const h = env.hour;
+    const low = h > 12 ? (h - 16) / 3.5 : h > 5 ? (9.5 - h) / 2.5 : 0;
+    const warm = Math.max(0, Math.min(1, low)) * d;
+    const golden = Math.max(warm * 0.75, Math.max(0, 1 - Math.abs(d - 0.55) / 0.45) * (h > 12 ? 1 : 0.8));
     this.mix(p, NIGHT, DAY, d);
     this.mix(p, p, GOLDEN, golden * 0.8);
 
