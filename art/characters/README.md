@@ -206,6 +206,10 @@ each one on the SWAT's rig the same way. It writes `public/models/characters/bot
   bot has no armour. Chest rigs stay on as clothing, and there's no `Helmet`.
 - The tracksuit's arm stripes bend with the elbow. The coat's skirt and the belts ride the hips.
 
+The six `Civ_*` models (office worker, jogger, elderly, tourist, student, worker) are the
+pedestrians. They use the same pipeline, in the `civilian` group. The game lets their arms hang
+from the bind pose, since every clip holds a gun.
+
 Armoured bots use a terrorist model and the rest a gang model. The actor id picks which one,
 so every client in co-op shows the same model, and a bot keeps its model when its armour breaks.
 The list lives in `BOT_MODELS` in `src/render/characters/characterSpec.ts`.

@@ -3,6 +3,7 @@ import { Contents, SOLID } from '../../physics/brush';
 import { FLOOR_H } from './buildings';
 import { District, FacadeCell, Material } from './ChunkData';
 import type { BuildingInfo, GenContext } from './genContext';
+import { CarGlassTint } from './meshBake';
 import { LOT0, LOT1 } from './streets';
 
 /**
@@ -294,12 +295,13 @@ function dressRoof(D: Dresser, b: BuildingInfo): void {
       w.box(x, y + 1.4, z, x + 2.0, y + 3.5, z + 2.0, Material.Wood, SOLID, 110);
       w.box(x + 0.1, y + 3.5, z + 0.1, x + 1.9, y + 3.8, z + 1.9, Material.Metal, VIS, 4);
     } else if (k < 0.9) {
-      // Skylight: glazing lying flat in a low curb.
+      // Skylight: dark glazing in a low curb, split by a glazing bar (not a wall window laid flat).
       const s = spot(1.4, 2.0, 0.3, 1.2);
       if (!s) continue;
       const [x, z] = s;
       w.box(x, y, z, x + 1.4, y + 0.22, z + 2.0, Material.Metal, SOLID, 4);
-      w.box(x + 0.08, y + 0.22, z + 0.08, x + 1.32, y + 0.24, z + 1.92, Material.Facade, VIS, FacadeCell.Window);
+      w.box(x + 0.08, y + 0.22, z + 0.08, x + 1.32, y + 0.24, z + 1.92, Material.CarGlass, VIS, CarGlassTint.Intact);
+      w.box(x + 0.66, y + 0.24, z + 0.08, x + 0.74, y + 0.27, z + 1.92, Material.Metal, VIS, 4);
     } else if (tall) {
       // Antenna mast with cross arms (see-through, no collision).
       const s = spot(0.1, 0.1, 5, 1.0);

@@ -73,7 +73,7 @@ describe('bot models', () => {
     }
   });
 
-  it('picks gang models for unarmoured bots and terrorists for armoured ones, stably by id', () => {
+  it('picks gang models for unarmoured bots, terrorists for armoured ones and civilians for pedestrians, stably by id', () => {
     const groups = BOT_MODELS.map((m) => m.group);
     const picks = new Set<number>();
     for (let id = 1; id <= 64; id++) {
@@ -84,6 +84,12 @@ describe('bot models', () => {
       picks.add(plain);
     }
     expect(picks.size).toBe(4);
+    // Civilians only ever get civilian models, and the gang's when there are none.
+    for (let id = 1; id <= 64; id++) {
+      expect(groups[pickVariant({ id, armor: 0, team: Team.Civilian }, groups)]).toBe('civilian');
+      const noCivs = groups.filter((g) => g !== 'civilian');
+      expect(noCivs[pickVariant({ id, armor: 0, team: Team.Civilian }, noCivs)]).toBe('gang');
+    }
     // A group with no models falls back to all of them.
     expect(pickVariant({ id: 3, armor: 100 }, ['gang', undefined])).toBeLessThan(2);
     expect(pickVariant({ id: 3, armor: 0 }, [undefined])).toBe(0);

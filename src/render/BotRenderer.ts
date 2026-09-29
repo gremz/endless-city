@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { SimEvent } from '../core/events';
 import { lerp } from '../core/math';
 import { bodyScale, STAND_BOXES } from '../ai/hitboxes';
-import { Team, type Actor } from '../sim/Actor';
+import { Team, unarmed, type Actor } from '../sim/Actor';
 import { BOX_LOOKS as LOOKS } from './characters/characterSpec';
 
 /** Draws every actor but the local player: the box figures here, or the imported characters. */
@@ -19,7 +19,7 @@ export interface ActorRenderer {
   dispose(): void;
 }
 
-const MAX = 48;
+const MAX = 64;
 /** Part index → palette index. */
 const PART_LOOK = [0, 1, 2, 3, 3, 4, 4, 5];
 
@@ -177,7 +177,7 @@ export class BotRenderer implements ActorRenderer {
     const hipY = 0.8 * Math.max(0.45, legBend);
     const aimPitch = a.alive ? a.pitch : 0;
 
-    const look = a.dummy ? LOOKS.dummy : a.team === Team.Player ? LOOKS.ally : a.armor > 0 && a.helmet ? LOOKS.elite : LOOKS.bot;
+    const look = a.dummy ? LOOKS.dummy : a.team === Team.Player ? LOOKS.ally : a.team === Team.Civilian ? LOOKS.civ : a.armor > 0 && a.helmet ? LOOKS.elite : LOOKS.bot;
     const place = (part: number, x: number, y: number, z: number, rx: number, ry: number, sy = 1) => {
       this.q.setFromEuler(this.e.set(rx, ry, 0, 'YXZ'));
       this.local.compose(this.v.set(x, y, z), this.q, this.s.set(1, sy, 1));
@@ -198,14 +198,21 @@ export class BotRenderer implements ActorRenderer {
     // Arms reach forward to hold the gun, following aim pitch.
     const shoulderY = chestY + b[1].hy * k * 0.75;
     // Arms hang along -Y from the shoulder; rotating +90° about X points them forward (-Z).
-    const armRx = Math.PI / 2 - 0.35 + aimPitch;
-    place(5, -0.2, shoulderY, -0.05, armRx, 0.45);
-    place(6, 0.2, shoulderY, -0.05, armRx, -0.2);
+    const noGun = unarmed(a);
+    if (noGun) {
+      // Nothing to hold: arms swing with the stride.
+      place(5, -0.2, shoulderY, 0, -swing * 0.8, 0);
+      place(6, 0.2, shoulderY, 0, swing * 0.8, 0);
+    } else {
+      const armRx = Math.PI / 2 - 0.35 + aimPitch;
+      place(5, -0.2, shoulderY, -0.05, armRx, 0.45);
+      place(6, 0.2, shoulderY, -0.05, armRx, -0.2);
+    }
     // Gun at chest height pointing along aim.
     const gunY = shoulderY - 0.12 + Math.sin(aimPitch) * 0.3;
     place(7, 0.05, gunY, -0.42 - Math.cos(aimPitch) * 0.05, aimPitch, 0);
     // Dropped their guns (dead bodies) or never had one (a hostage): hide the gun.
-    if (a.captive || (!a.alive && !a.inv.primary && !a.inv.secondary)) this.meshes[7].setMatrixAt(i, this.m.makeScale(0, 0, 0));
+    if (noGun || (!a.alive && !a.inv.primary && !a.inv.secondary)) this.meshes[7].setMatrixAt(i, this.m.makeScale(0, 0, 0));
     if (a.alive && this.torches?.has(a.id)) {
       // Torch taped under the barrel.
       this.q.setFromEuler(this.e.set(aimPitch, 0, 0, 'YXZ'));
@@ -213,7 +220,7 @@ export class BotRenderer implements ActorRenderer {
       this.m.multiplyMatrices(this.root4, this.local);
       this.beams.setMatrixAt(this.beamCount++, this.m);
     }
-    if (a.alive && a.inv.active === 'grenade') {
+    if (a.alive && !noGun && a.inv.active === 'grenade') {
       // Grenade in hand: a small lump raised by the head, ready to throw.
       this.q.setFromEuler(this.e.set(0, 0, 0, 'YXZ'));
       this.local.compose(this.v.set(0.22, shoulderY + 0.12, -0.12), this.q, this.s.set(1.1, 1, 0.14));

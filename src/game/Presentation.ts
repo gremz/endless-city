@@ -11,6 +11,7 @@ import type { BotGroup } from '../render/characters/characterSpec';
 import type { CharacterVariant } from '../render/characters/variants';
 import { CompositeActorRenderer } from '../render/CompositeActorRenderer';
 import { Team } from '../sim/Actor';
+import { ChargeRenderer } from '../render/ChargeRenderer';
 import { GrenadeRenderer } from '../render/GrenadeRenderer';
 import { PickupRenderer } from '../render/PickupRenderer';
 import { Decals, MuzzleLight, Particles, Tracers } from '../render/fx/Effects';
@@ -18,6 +19,7 @@ import type { Renderer } from '../render/Renderer';
 import { Viewmodel } from '../render/viewmodel/Viewmodel';
 import type { Simulation } from '../sim/Simulation';
 import { flashAmount } from '../sim/Grenades';
+import { plantProgress } from '../sim/breach';
 import { healProgress } from '../sim/medkit';
 import type { Pickup } from '../sim/Pickups';
 import type { Hud } from '../ui/Hud';
@@ -30,7 +32,7 @@ import { carSpeed } from '../sim/vehicle/carPhysics';
 
 /** Kill feed names for deaths not caused by a weapon. */
 const NON_WEAPON_NAMES: Record<string, string> = { car: 'Car', fall: 'Fall' };
-import { Material } from '../world/gen/ChunkData';
+import { Material, PieceKind } from '../world/gen/ChunkData';
 import { SMOKE_HEALTH, VEHICLE_HEALTH } from '../sim/vehicle/Vehicle';
 
 const NADE_LABELS: Record<string, string> = { hegrenade: 'HE', flashbang: 'FL', smokegrenade: 'SM', molotov: 'MO' };
@@ -67,6 +69,7 @@ export class Presentation {
   readonly particles = new Particles();
   readonly muzzleLight = new MuzzleLight();
   readonly grenades: GrenadeRenderer;
+  private charges = new ChargeRenderer();
   /** Extra event consumers (audio, kill rewards UI...). */
   readonly sinks: EventSink[] = [];
   private tmp = new THREE.Vector3();
@@ -88,7 +91,7 @@ export class Presentation {
     this.pickupRenderer = new PickupRenderer(settings.shadows > 0);
     this.grenades = new GrenadeRenderer(this.particles);
     const scene = renderer.scene;
-    scene.add(this.bots.root, this.pickupRenderer.root, this.grenades.root, this.tracers.mesh, this.decals.mesh, this.particles.points, this.muzzleLight.light);
+    scene.add(this.bots.root, this.pickupRenderer.root, this.grenades.root, this.charges.root, this.tracers.mesh, this.decals.mesh, this.particles.points, this.muzzleLight.light);
     this.viewmodel = new Viewmodel(renderer.camera.aspect);
     this.viewmodel.setFovFromHorizontal43(settings.viewmodelFov);
     renderer.overlays.push({ scene: this.viewmodel.scene, camera: this.viewmodel.camera });
@@ -222,11 +225,16 @@ export class Presentation {
         case 'step':
           if (e.material === Material.Water) this.particles.splash(e.pos);
           break;
-        case 'glass_break':
-          this.particles.shards(e.pos);
+        case 'piece_break':
+          if (e.kind === PieceKind.Glass) this.particles.shards(e.pos);
+          else if (e.kind === PieceKind.Breach) this.particles.rubble(e.pos);
           break;
         case 'door':
           if (e.action === 'break') this.particles.splinters(e.pos);
+          break;
+        case 'breach_detonate':
+          this.particles.explosion(e.pos);
+          this.muzzleLight.flash(e.pos.x, e.pos.y, e.pos.z, 5, 0.14, 24);
           break;
         case 'nade_throw':
           if (e.actorId === player.id) this.viewmodel.onThrow();
@@ -277,6 +285,7 @@ export class Presentation {
     this.particles.update(frameDt);
     this.muzzleLight.update(frameDt);
     this.grenades.update(sim.grenades, alpha, simTime, frameDt, this.renderer.camera.position);
+    this.charges.update(sim.charges, simTime);
 
     // Recoil view punch: the camera follows part of the spray pattern.
     const item = activeItem(p.inv);
@@ -306,6 +315,7 @@ export class Presentation {
     // HUD.
     this.hud.setVitals(p.health, p.armor, p.helmet);
     this.hud.setMedkits(p.medkits, healProgress(p, simTime), p.alive && p.medkits > 0 && p.health <= 50 && p.healEnd < 0);
+    this.hud.setCharges(p.breachCharges, plantProgress(p, simTime));
     this.hud.setAmmo(def.name, item.clip, item.reserve, def.category === 'knife' ? 'melee' : def.category === 'grenade' ? 'count' : 'gun');
     this.hud.setGrenades(
       GRENADE_IDS.filter((id) => p.inv.nades[id] > 0).map((id) => ({ kind: id, label: NADE_LABELS[id], count: p.inv.nades[id] })),
@@ -337,6 +347,7 @@ export class Presentation {
     for (const v of [...(this.assets.bot ?? []), ...(this.assets.player ?? [])]) v.asset.dispose();
     this.pickupRenderer.dispose();
     this.grenades.dispose();
+    this.charges.dispose();
     this.viewmodel.dispose();
   }
 }

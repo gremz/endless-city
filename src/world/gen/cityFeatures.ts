@@ -278,7 +278,7 @@ export function buildPark(ctx: GenContext, lot: Rect, r: Rand): void {
   if (rw(fq) >= 9 && rd(fq) >= 9) {
     const cx = (fq.x0 + fq.x1) / 2;
     const cz = (fq.z0 + fq.z1) / 2;
-    basin(ctx, rect(cx - 3.5, cz - 3.5, cx + 3.5, cz + 3.5));
+    fountain(ctx, rect(cx - 3.5, cz - 3.5, cx + 3.5, cz + 3.5));
   }
   // Trees and hedges wherever there's room.
   for (let i = 0; i < 40; i++) {
@@ -309,20 +309,51 @@ export function buildPark(ctx: GenContext, lot: Rect, r: Rand): void {
   }
 }
 
-/** Raised stone basin of shallow water with a spout in the middle. */
-function basin(ctx: GenContext, b: Rect): void {
+/** Four walls `t` thick around the inside of `b`, from y0 to y1. */
+function ring(ctx: GenContext, b: Rect, t: number, y0: number, y1: number, mat: number, tint: number): void {
+  const { w } = ctx;
+  w.box(b.x0, y0, b.z0, b.x1, y1, b.z0 + t, mat, SOLID, tint);
+  w.box(b.x0, y0, b.z1 - t, b.x1, y1, b.z1, mat, SOLID, tint);
+  w.box(b.x0, y0, b.z0 + t, b.x0 + t, y1, b.z1 - t, mat, SOLID, tint);
+  w.box(b.x1 - t, y0, b.z0 + t, b.x1, y1, b.z1 - t, mat, SOLID, tint);
+}
+
+/**
+ * Stone fountain: a coped basin of shallow (wadeable) water with a plinth, a column and an upper
+ * bowl in the middle, and a spout on top. The water itself isn't baked into the chunk mesh:
+ * FountainRenderer draws the animated surfaces, the jet and the cascade from the recorded layout.
+ */
+export function fountain(ctx: GenContext, b: Rect, claimIt = true): void {
   const { w, lotY } = ctx;
-  if (!claim(ctx, b, 0.5, Occ.Solid)) return;
-  const t = 0.5;
-  const h = lotY + 0.4;
-  w.box(b.x0, lotY, b.z0, b.x1, h, b.z0 + t, Material.Concrete, SOLID, 190);
-  w.box(b.x0, lotY, b.z1 - t, b.x1, h, b.z1, Material.Concrete, SOLID, 190);
-  w.box(b.x0, lotY, b.z0 + t, b.x0 + t, h, b.z1 - t, Material.Concrete, SOLID, 190);
-  w.box(b.x1 - t, lotY, b.z0 + t, b.x1, h, b.z1 - t, Material.Concrete, SOLID, 190);
-  w.box(b.x0 + t, lotY, b.z0 + t, b.x1 - t, h - 0.05, b.z1 - t, Material.Water, Contents.WATER | Contents.VISIBLE, 128);
+  if (claimIt && !claim(ctx, b, 0.5, Occ.Solid)) return;
   const mx = (b.x0 + b.x1) / 2;
   const mz = (b.z0 + b.z1) / 2;
-  w.box(mx - 0.4, lotY, mz - 0.4, mx + 0.4, lotY + 1.8, mz + 0.4, Material.Concrete, SOLID, 200);
+  const half = (b.x1 - b.x0) / 2;
+  const k = half / 3.5;
+  // Basin: walls, a coping that overhangs both faces, a darker floor under the water.
+  const t = 0.45;
+  const rimTop = lotY + 0.5;
+  ring(ctx, b, t, lotY, rimTop, Material.Concrete, 185);
+  ring(ctx, rect(b.x0 - 0.06, b.z0 - 0.06, b.x1 + 0.06, b.z1 + 0.06), t + 0.12, rimTop, rimTop + 0.1, Material.Concrete, 210);
+  w.box(b.x0 + t, lotY, b.z0 + t, b.x1 - t, lotY + 0.02, b.z1 - t, Material.Stone, PAINT, 110);
+  const waterY = rimTop - 0.08;
+  w.box(b.x0 + t, lotY, b.z0 + t, b.x1 - t, waterY, b.z1 - t, Material.Water, Contents.WATER, 128);
+  // Centrepiece: plinth, column, bowl with a lip, spout.
+  const p = 0.6 * k;
+  w.box(mx - p, lotY, mz - p, mx + p, lotY + 0.6, mz + p, Material.Concrete, SOLID, 200);
+  const c = 0.24 * k;
+  const bowlY = lotY + 1.45 * k + 0.1;
+  w.box(mx - c, lotY + 0.6, mz - c, mx + c, bowlY, mz + c, Material.Concrete, SOLID, 190);
+  const bh = 1.2 * k;
+  const bowl = rect(mx - bh, mz - bh, mx + bh, mz + bh);
+  w.box(bowl.x0 + 0.25, bowlY - 0.1, bowl.z0 + 0.25, bowl.x1 - 0.25, bowlY, bowl.z1 - 0.25, Material.Concrete, SOLID, 180);
+  w.box(bowl.x0, bowlY, bowl.z0, bowl.x1, bowlY + 0.12, bowl.z1, Material.Concrete, SOLID, 190);
+  ring(ctx, bowl, 0.12, bowlY + 0.12, bowlY + 0.32, Material.Concrete, 210);
+  const s = 0.13 * k;
+  const spoutY = bowlY + 0.12 + 0.55 * k;
+  w.box(mx - s, bowlY + 0.12, mz - s, mx + s, spoutY - 0.08, mz + s, Material.Concrete, SOLID, 205);
+  w.box(mx - s * 0.6, spoutY - 0.08, mz - s * 0.6, mx + s * 0.6, spoutY, mz + s * 0.6, Material.Metal, SOLID, 3);
+  ctx.fountains.push(mx, mz, half - t, waterY, bh - 0.12, bowlY + 0.26, spoutY);
 }
 
 /** Bandstand: a raised platform with steps, four posts and a roof you can climb onto. */
@@ -375,7 +406,7 @@ export function buildPlaza(ctx: GenContext, lot: Rect, r: Rand): void {
     w.box(mx - 2.5, lotY, mz - 2.5, mx + 2.5, lotY + 1.1, mz + 2.5, Material.Concrete, FLOOR, 200);
     w.box(mx - 0.7, lotY + 1.1, mz - 0.7, mx + 0.7, lotY + 7, mz + 0.7, Material.Concrete, SOLID, 210);
     w.box(mx - 0.5, lotY + 7, mz - 0.9, mx + 0.5, lotY + 8.8, mz + 0.9, Material.Metal, SOLID, 3);
-  } else basin(ctx, rect(mx - 4.5, mz - 4.5, mx + 4.5, mz + 4.5));
+  } else fountain(ctx, rect(mx - 4.5, mz - 4.5, mx + 4.5, mz + 4.5));
   // Colonnade along one side.
   const side = randInt(r, 0, 3);
   for (let a = 3; a < LOT1 - LOT0 - 2; a += 3.2) {

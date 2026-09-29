@@ -162,6 +162,11 @@ export class AudioEngine {
     this.ambience?.update();
   }
 
+  /** Splashing fountain nearby: 0 (none in earshot) .. 1 (right beside it). Call every frame. */
+  setFountain(level: number): void {
+    this.ambience?.setFountain(level);
+  }
+
   /** Running car engines near the listener, nearest first. Call every frame. */
   setEngines(sources: readonly EngineSource[]): void {
     if (this.ctx?.state === 'running') this.engines?.update(sources, this.paused);

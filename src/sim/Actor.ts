@@ -2,7 +2,8 @@ import { vec3, type Vec3 } from '../core/math';
 import { eyeHeight, makeMoveState, type MoveState } from '../player/pmove';
 import { makeInventory, makeWeaponState, type Inventory, type WeaponState } from '../weapons/Inventory';
 
-export const Team = { Player: 0, Bots: 1 } as const;
+/** Civilians are ambient pedestrians: anyone can hurt them, bots ignore them (see Pedestrians.ts). */
+export const Team = { Player: 0, Bots: 1, Civilian: 2 } as const;
 export type TeamId = (typeof Team)[keyof typeof Team];
 
 /** State shared by the player and bots. Brains attach to this. */
@@ -39,6 +40,12 @@ export interface Actor {
   medkits: number;
   /** Sim time the current medkit use finishes, or -1 when not healing. */
   healEnd: number;
+  /** Carried breaching charges. */
+  breachCharges: number;
+  /** Sim time the charge being planted is in place, or -1; and the plug it goes on (chunk, brush). */
+  plantEnd: number;
+  plantChunk: number;
+  plantIndex: number;
   /** Flashbang blindness: when it started, when it ends, and peak whiteness (0..1). */
   flashStart: number;
   flashUntil: number;
@@ -58,6 +65,9 @@ export interface Actor {
   /** Actor id allowed to hurt this captive, or -1. */
   executioner: number;
 }
+
+/** Carries no gun in hand whatever the inventory says: a hostage, a passer-by. */
+export const unarmed = (a: Pick<Actor, 'captive' | 'team'>) => a.captive || a.team === Team.Civilian;
 
 export function makeActor(id: number, name: string, team: TeamId, x: number, y: number, z: number): Actor {
   const move = makeMoveState(x, y, z);
@@ -86,6 +96,10 @@ export function makeActor(id: number, name: string, team: TeamId, x: number, y: 
     stepAccum: 0,
     medkits: 0,
     healEnd: -1,
+    breachCharges: 0,
+    plantEnd: -1,
+    plantChunk: 0,
+    plantIndex: -1,
     flashStart: -10,
     flashUntil: -10,
     flashPeak: 0,

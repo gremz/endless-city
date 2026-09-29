@@ -217,7 +217,7 @@ export class Viewmodel {
       px -= d * 0.05;
     }
     // Medkit: lower the gun and tilt it away.
-    this.healLower += ((a.healEnd >= 0 ? 1 : 0) - this.healLower) * (1 - Math.exp(-frameDt * 12));
+    this.healLower += ((a.healEnd >= 0 || a.plantEnd >= 0 ? 1 : 0) - this.healLower) * (1 - Math.exp(-frameDt * 12));
     if (this.healLower > 0.001) {
       py -= this.healLower * 0.2;
       rx -= this.healLower * 0.6;

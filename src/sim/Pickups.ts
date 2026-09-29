@@ -243,9 +243,10 @@ export class PickupManager implements SimSystem, StreamerListener {
         }
         if (d > REACH) continue;
         if (!cur) {
-          // Empty slot: take it as it lies, keep holding what you hold.
+          // Empty slot: take it as it lies. A primary gets drawn; a sidearm waits in its holster.
           p.inv[def.slot as 'primary' | 'secondary'] = { def, clip: it.item.clip, reserve: it.item.reserve };
           this.remove(i, t);
+          if (def.slot === 'primary') equipSlot(p, 'primary', sim);
           sim.events.push({ type: 'pickup', actorId: p.id, item: def.id, pos: it.pos, amount: 1 });
         } else {
           this.takeAmmo(i, p, cur, sim);

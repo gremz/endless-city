@@ -3,19 +3,19 @@ import { worldNoise } from '../../core/noise';
 import { hash3, Salt, sfc32, type Rand } from '../../core/rng';
 import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
-import { buildBuilding, buildCourtyard } from './buildings';
+import { BREACHABLE_WALLS, buildBuilding, buildCourtyard } from './buildings';
 import { buildRooftops } from './facades';
 import { dressBuildings } from './buildingDetail';
-import { buildHighway, buildPark, buildPlaza, buildRiver, rampSite } from './cityFeatures';
+import { buildHighway, buildPark, buildPlaza, buildRiver, fountain, rampSite } from './cityFeatures';
 import { chunkPlan } from './cityPlan';
 import { buildLandmark, LANDMARK_IDS, LANDMARK_SIZE, pickLandmark, type LandmarkKind } from './landmarks';
-import { District, DOOR_STRIDE, Landmark, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
+import { District, DOOR_STRIDE, FOUNTAIN_STRIDE, glassPieces, Landmark, PIECE_STRIDE, PieceKind, VEHICLE_STRIDE, type ChunkData } from './ChunkData';
 import { districtFor, levelFor } from './district';
 import { placeEncounters } from './encounters';
 import { Occ, Occupancy, rect, rd, rw, subtractRects, type GenContext, type Rect, type VehicleSpot } from './genContext';
 import { splitLot, typeParcels, type Parcel } from './lots';
-import { bakeMeshes } from './meshBake';
-import { bakeNav } from './navBake';
+import { bakeMeshes, bakePieceMeshes } from './meshBake';
+import { bakeNav, bakeNavWithPieces } from './navBake';
 import { placePickups } from './pickups';
 import { lowWalls, scatterProps } from './props';
 import { buildLot, buildStreets, carBrushes, carYaw, CAR_L, CAR_W, CURB, LOT0, LOT1 } from './streets';
@@ -39,7 +39,7 @@ function lotHeight(seed: number, cx: number, cz: number, district: number): numb
  * Generate one city chunk: pure and deterministic in (seed, cx, cz). Runs in a worker or on
  * the main thread; returns transferable typed arrays.
  */
-export function generateChunk(seed: number, cx: number, cz: number, opts: { dress?: boolean } = {}): ChunkData {
+export function generateChunk(seed: number, cx: number, cz: number, opts: { dress?: boolean; breachable?: boolean } = {}): ChunkData {
   const t0 = performance.now();
   const district = districtFor(seed, cx, cz);
   const plan = chunkPlan(seed, cx, cz);
@@ -52,6 +52,7 @@ export function generateChunk(seed: number, cx: number, cz: number, opts: { dres
     r: sfc32(hash3(seed, cx, cz, Salt.Layout)),
     rp: sfc32(hash3(seed, cx, cz, Salt.Props)),
     rb: sfc32(hash3(seed, cx, cz, Salt.Breakables)),
+    rx: sfc32(hash3(seed, cx, cz, Salt.Breach)),
     district,
     level,
     // Rivers, parks and plazas sit at street level.
@@ -66,7 +67,10 @@ export function generateChunk(seed: number, cx: number, cz: number, opts: { dres
     ladders: [],
     doorLeaves: [],
     glass: [],
+    breachable: opts.breachable ?? BREACHABLE_WALLS,
+    breach: [],
     trims: [],
+    fountains: [],
   };
 
   const lot = rect(LOT0, LOT0, LOT1, LOT1);
@@ -149,11 +153,17 @@ export function generateChunk(seed: number, cx: number, cz: number, opts: { dres
   // Facade dressing and roof clutter last, so it can fit around everything else.
   if (!plan.river && opts.dress !== false) dressBuildings(ctx, sfc32(hash3(seed, cx, cz, Salt.Detail)));
   const brushes = ctx.w.finish();
-  const meshes = bakeMeshes(brushes);
+  // Breachable plugs are drawn apart from the chunk, so they can vanish.
+  const plugs = ctx.breach;
+  const meshes = bakeMeshes(brushes, plugs.length ? new Set(plugs) : undefined);
+  const pieceMeshes = plugs.length ? bakePieceMeshes(brushes, plugs) : undefined;
   // Bots path around the parked driveable cars as if they were part of the city.
   const navWriter = new BrushWriter(64);
   for (const v of ctx.vehicles) carBrushes(navWriter, v.style, v.alongX, v.lane, v.at, v.y);
-  const nav = bakeNav(ctx.vehicles.length ? concatBrushes(brushes, navWriter.finish()) : brushes, ctx.ladders);
+  const navBrushes = ctx.vehicles.length ? concatBrushes(brushes, navWriter.finish()) : brushes;
+  // ...and through a plug's hole once it's blown.
+  const patches = plugs.length ? bakeNavWithPieces(navBrushes, plugs, ctx.ladders) : null;
+  const nav = patches?.nav ?? bakeNav(navBrushes, ctx.ladders);
   const enc = placeEncounters(sfc32(hash3(seed, cx, cz, Salt.Encounter)), nav, cx, cz, level, ctx.perches);
   const pickups = placePickups(sfc32(hash3(seed, cx, cz, Salt.Pickups)), nav, cx, cz, enc.hasEncounter, district.id === District.Spawn);
 
@@ -164,6 +174,7 @@ export function generateChunk(seed: number, cx: number, cz: number, opts: { dres
     seed,
     brushes,
     meshes,
+    ...(pieceMeshes ? { pieceMeshes } : {}),
     district: district.id,
     landmark: placed && kind ? LANDMARK_IDS[kind] : plan.river ? Landmark.River : plan.feature === 'park' ? Landmark.Park : plan.feature === 'plaza' ? Landmark.Plaza : Landmark.None,
     level,
@@ -178,7 +189,9 @@ export function generateChunk(seed: number, cx: number, cz: number, opts: { dres
     pickups,
     vehicles: vehicleSpawns(ctx.vehicles, cx, cz),
     doors: doorRecords(ctx.doorLeaves, cx, cz),
-    glass: new Int32Array(ctx.glass),
+    fountains: fountainRecords(ctx.fountains, cx, cz),
+    pieces: pieceRecords(ctx.glass, plugs, patches?.ranges ?? null),
+    navPatch: patches?.records ?? new Int32Array(0),
     hasEncounter: enc.hasEncounter,
     opening: enc.opening,
     genMs: performance.now() - t0,
@@ -218,12 +231,9 @@ function placeLandmark(r: Rand, kind: LandmarkKind, lot: Rect, keep: Rect[]): { 
 
 /** Spawn chunk: an open plaza with a fountain, a couple of small buildings and light cover. */
 function buildSpawnPlaza(ctx: GenContext, lot: Rect): void {
-  const { w, lotY } = ctx;
   const mx = (lot.x0 + lot.x1) / 2;
   const mz = (lot.z0 + lot.z1) / 2;
-  // Fountain.
-  w.box(mx - 3, lotY, mz - 3, mx + 3, lotY + 0.6, mz + 3, 0, undefined, 170);
-  w.box(mx - 0.6, lotY + 0.6, mz - 0.6, mx + 0.6, lotY + 2.2, mz + 0.6, 0, undefined, 200);
+  fountain(ctx, rect(mx - 3, mz - 3, mx + 3, mz + 3), false);
   ctx.occ.mark(rect(mx - 4, mz - 4, mx + 4, mz + 4), 3);
   // Two small houses in opposite corners.
   buildBuilding(ctx, rect(lot.x0, lot.z0, lot.x0 + 14, lot.z0 + 12));
@@ -232,6 +242,17 @@ function buildSpawnPlaza(ctx: GenContext, lot: Rect): void {
   ctx.open.push(lot);
   lowWalls(ctx, lot, 3);
   scatterProps(ctx, lot, 0.35, ['crates', 'barriers']);
+}
+
+/** Piece records: window panes, then breachable plugs with their nav patch ranges. */
+export function pieceRecords(glass: readonly number[], plugs: readonly number[], ranges: readonly [number, number][] | null): Int32Array {
+  const out = new Int32Array((glass.length + plugs.length) * PIECE_STRIDE);
+  out.set(glassPieces(glass));
+  plugs.forEach((b, k) => {
+    const [lo, hi] = ranges?.[k] ?? [0, 0];
+    out.set([PieceKind.Breach, b, lo, hi], (glass.length + k) * PIECE_STRIDE);
+  });
+  return out;
 }
 
 function concatBrushes(a: Int32Array, b: Int32Array): Int32Array {
@@ -247,6 +268,16 @@ function doorRecords(leaves: readonly number[], cx: number, cz: number): Float32
   for (let o = 0; o < out.length; o += DOOR_STRIDE) {
     out[o] += cx * CHUNK;
     out[o + 2] += cz * CHUNK;
+  }
+  return out;
+}
+
+/** Fountains as ChunkData.fountains records (world coordinates). */
+function fountainRecords(list: readonly number[], cx: number, cz: number): Float32Array {
+  const out = new Float32Array(list);
+  for (let o = 0; o < out.length; o += FOUNTAIN_STRIDE) {
+    out[o] += cx * CHUNK;
+    out[o + 1] += cz * CHUNK;
   }
   return out;
 }

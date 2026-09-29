@@ -28,6 +28,8 @@ export interface GameParams {
   charModel: string | null;
   /** Same for the player character (`?playermodel=`); null loads the generated SWAT. */
   playerModel: string | null;
+  /** Pedestrian density override (`?peds=0..2`), or null for the setting. */
+  peds: number | null;
 }
 
 const WEATHERS: readonly WeatherKind[] = ['clear', 'overcast', 'rain', 'fog', 'storm'];
@@ -49,6 +51,7 @@ export function parseParams(search: string, randomSeed: number): GameParams {
   const level = Number.parseInt(q.get('level') ?? '', 10);
   const hour = Number.parseFloat(q.get('time') ?? '');
   const weatherRaw = q.get('weather') as WeatherKind | null;
+  const peds = Number.parseFloat(q.get('peds') ?? '');
   return {
     seed,
     seedText,
@@ -64,5 +67,6 @@ export function parseParams(search: string, randomSeed: number): GameParams {
     weather: weatherRaw && WEATHERS.includes(weatherRaw) ? weatherRaw : null,
     charModel: q.get('charmodel') || null,
     playerModel: q.get('playermodel') || null,
+    peds: Number.isFinite(peds) ? Math.max(0, Math.min(2, peds)) : null,
   };
 }

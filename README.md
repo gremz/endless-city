@@ -32,6 +32,7 @@ hardened for the open internet; for anything longer-lived, share a `npm run buil
 | `?world=gym` / `?world=range` | Movement test course / shooting range with target dummies |
 | `?level=N` | Force bot difficulty 0–10 everywhere |
 | `?nobots=1`, `?god=1` | No encounters / invulnerable |
+| `?peds=0` | Pedestrian density, 0–2 (overrides the Pedestrians setting) |
 | `?spawn=cx,cz` | Spawn in another chunk |
 | `?tick=16` | Simulation tick rate (default 64), for checking interpolation |
 | `?time=22` | Fix the hour of day (0–24) instead of running the day/night cycle |
@@ -59,7 +60,8 @@ without opening the menu. Red-cross health packs lie around the city (and bots s
 carry it (up to 3), and press H to use it for +50 HP. Using one takes a second and lowers your
 gun; H again or firing cancels and keeps the pack. The radar in the top-left corner shows buy zones in green, with a
 `$` on its rim pointing to the nearest one when it's out of range. M opens the city map.
-L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)) and opens doors. Esc pauses. F3
+L toggles your flashlight. E gets in and out of a car (see [Cars](#cars)) and opens doors, and held on a
+bricked-up doorway it plants a breaching charge (see [Breaching walls](#breaching-walls)). Esc pauses. F3
 toggles the debug overlay.
 
 ## The opening and objectives
@@ -159,6 +161,25 @@ Bots spawn and fight on every floor, and snipers take the upper windows and the 
 - Open, broken and kicked-in doors and shattered windows stay that way. They're in your save
   and shared in co-op.
 
+## Breaching walls
+
+Some doorways have been bricked up: a door-sized patch of brick (or concrete block, in brick
+walls) under a lintel. You can blow them open to make your own way in. They're in the
+partitions of houses and between apartment rooms, and one or two per building face an alley,
+yard or street. `/gen.html` shows them in orange.
+
+- **Breaching charges** are Gear in the buy menu ($300; carry up to 2). Look at a bricked-up
+  doorway and hold E for 1.5 s to plant one. Your gun is lowered while you do. Letting go of E,
+  firing or looking away cancels, and you keep the charge.
+- **The blast.** The charge beeps faster and faster for 3 s, then blows the patch out. Everyone
+  within 3.5 m takes damage (you don't), nearby glass shatters and doors take a hit. The beeping
+  is audible, so bots on either side may come to look.
+- **HE grenades** also blow a patch out, but only one that goes off within about a meter of it.
+- **Bots** path through a hole once it's blown, but never make one themselves.
+- Blown-out walls stay that way. They're in your save and shared in co-op.
+- On the shooting range (`?world=range`) you start with two charges, and there are two
+  bricked-up walls past the doorway.
+
 ## Grenades
 
 The buy menu has a Grenades category: HE ($300), flashbang ($200), smoke ($300) and molotov
@@ -203,6 +224,30 @@ small yellow car. The spawn plaza always has one waiting on the road behind you.
   and come back, and it's kept in your save. You can't save while you're in a car.
 - At night the car you drive has headlights.
 
+## Pedestrians
+
+Civilians walk the sidewalks around you: office workers, joggers, tourists, students, workers
+and pensioners. They cross at the corners, stop now and then, and thin out at night and in the
+rain. Downtown is busiest and the industrial district quietest.
+
+- **Gunfire.** A shot or an explosion nearby sends them running away from it, and the panic
+  spreads to the people around them. Once they're clear they crouch and wait, then carry on
+  walking after a while.
+- **Fines.** Killing a civilian costs you $300, by any means: gun, grenade or car. Bots don't
+  aim at civilians, but stray fire can still hit them, and then nobody pays. Civilian kills
+  don't count on the co-op scoreboard.
+- **Where they keep away.** Nobody wanders into an area while its squad is out, or into the
+  opening scene before you've dealt with it.
+- **Performance.** Settings → Graphics → Pedestrians (Off / Few / Normal) caps how many there
+  are. There are at most 24 at a time, and nobody is drawn past the fog.
+
+How it works: pedestrians are ordinary actors on their own team, so hits, damage, rendering and
+co-op sync all work as for anyone else. But there's no player movement or pathfinding for them.
+`src/ai/civilians/sidewalks.ts` treats the city's sidewalk corners as a lattice. Each stretch of
+sidewalk or crossing is checked against the collision world the first time someone wants to
+walk it, which rules out rivers, ramps and anything in the way. `Pedestrians.ts` steers each
+person along those lines, and co-op hosts run it like the bots.
+
 ## Day, night and weather
 
 A full day lasts 24 minutes, and a new game starts at 09:00. Night falls around 21:00. At
@@ -242,6 +287,7 @@ Settings can fix the time of day, turn the weather off and lower the number of r
   - money and cleared areas
   - encounter progress
   - dropped items and health-pack timers
+  - opened doors, broken windows and blown-out walls
   - the explored map
 
   A squad that was fighting you when you saved comes back later with just its survivors, at
@@ -347,6 +393,14 @@ use (about 60–120 MB each, not committed).
   reachability. Each nav column holds every floor with standing room in it (street, upper
   storeys, catwalks), so bots path up stairs and ramps and fight on more than one level.
   Chunks stream in around the player.
+  - **Chunk pieces** (`src/sim/Pieces.ts`): parts of a chunk that can be destroyed for good
+    (window panes, breachable wall patches). Each is one brush, named by its index in the chunk.
+    The destroyed set is saved, sent to co-op clients, and re-applied when a chunk streams back
+    in. A breachable patch is drawn apart from the chunk's meshes, so it can vanish. It also
+    carries a nav patch: chunks with patches bake their nav twice, with the patches standing and
+    with them gone. The spans only the open bake has (the floor through the doorway) start out
+    not walkable, and blowing a patch out switches the spans around it to their open values.
+    A new kind of destructible belongs here as a new `PieceKind`.
 - **Presentation** (`src/render`, `src/ui`, `src/audio`, `src/game`) reads simulation state and
   events to draw the world, the viewmodel, effects and HUD, and to play synthesized positional
   audio. The background music is generative: an ambient pad and arpeggio, with a soft pulse

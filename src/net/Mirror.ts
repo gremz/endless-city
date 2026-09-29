@@ -101,9 +101,11 @@ export class Mirror {
       case 'ev':
         for (const e of m.e) {
           if (this.predicted && PREDICTED.has(e.type) && actorOf(e) === this.localId) continue;
-          // Doors and glass change here right away (the world state catches up later).
+          // Doors and pieces change here right away (the world state catches up later).
           if (e.type === 'door') sim.doors.applyAction(e.chunkKey, e.index, e.state, e.side);
-          else if (e.type === 'glass_break') sim.glass.breakPane(e.chunkKey, e.index, false);
+          else if (e.type === 'piece_break') sim.pieces.breakPiece(e.chunkKey, e.index, false);
+          else if (e.type === 'breach_plant') sim.charges.addRemote(e);
+          else if (e.type === 'breach_detonate') sim.charges.remove(e.id);
           sim.events.push(e);
         }
         return true;
@@ -115,7 +117,7 @@ export class Mirror {
         for (const k of m.cleared) sim.cleared.add(k);
         this.encounters?.applyRemote(m.enc);
         sim.doors.restore(m.doors);
-        sim.glass.restore(m.glass);
+        sim.pieces.restore(m.pieces);
         return true;
       default:
         return false;
@@ -290,6 +292,7 @@ export class Mirror {
     a.money = p.money;
     a.medkits = p.medkits;
     a.healEnd = p.healEnd;
+    [a.breachCharges, a.plantEnd] = p.breach ?? [0, -1];
     [a.flashStart, a.flashUntil, a.flashPeak] = p.flash;
     [a.lastDamagedAt, a.lastDealtAt, a.lastAttacker] = p.combat;
     a.inv = unpackInv(p.inv);

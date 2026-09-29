@@ -10,7 +10,7 @@ import { makeInventory } from '../weapons/Inventory';
 import { brushesFromPacked } from '../world/chunkBrushes';
 import { chunkKey } from '../world/chunkMath';
 import { BrushWriter } from '../world/gen/BrushWriter';
-import { DoorFlag, Material, type ChunkData } from '../world/gen/ChunkData';
+import { DoorFlag, glassPieces, Material, PieceKind, type ChunkData } from '../world/gen/ChunkData';
 import { makeActor, Team, teleport } from './Actor';
 import { DoorState, WOOD_HP } from './Doors';
 import { Simulation } from './Simulation';
@@ -49,14 +49,15 @@ function setup(flags = 0) {
     pickups: new Float32Array(0),
     vehicles: new Float32Array(0),
     doors: new Float32Array([30, 0, 30, 1, 1.6, 2.4, flags, 1]),
-    glass: new Int32Array([pane]),
+    pieces: glassPieces([pane]),
+    navPatch: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   } satisfies ChunkData;
   const sim = new Simulation(parseParams('', 1), { autoBhop: false }, TICK);
   sim.world.addChunk(data.key, brushesFromPacked(brushes, 0, 0, data.key));
   sim.doors.onChunkLoaded(data);
-  sim.glass.onChunkLoaded(data);
+  sim.pieces.onChunkLoaded(data);
   const door = sim.doors.find(data.key, 0)!;
   return { sim, data, door };
 }
@@ -209,21 +210,21 @@ describe('glass', () => {
     cmd.buttons = Buttons.ATTACK;
     cmd.pressed = Buttons.ATTACK;
     sim.step(cmd);
-    expect(sim.glass.isBroken(data.key, data.glass[0])).toBe(true);
-    expect(sim.events.drain().some((e) => e.type === 'glass_break')).toBe(true);
+    expect(sim.pieces.isBroken(data.key, data.pieces[1])).toBe(true);
+    expect(sim.events.drain().some((e) => e.type === 'piece_break')).toBe(true);
     expect(dummy.health).toBeLessThan(100);
     expect(sim.world.testBox(tr, vec3(11, 0.05, 20), STAND_MINS, STAND_MAXS, MASK_PLAYER)).toBe(false);
   });
 
   it('shatters in a blast and stays broken across reloads and saves', () => {
     const { sim, data } = setup();
-    sim.glass.breakNear(vec3(11, 1, 18), 6);
-    expect(sim.glass.isBroken(data.key, data.glass[0])).toBe(true);
-    const saved = sim.glass.list();
+    sim.pieces.breakNear(vec3(11, 1, 18), 6, PieceKind.Glass);
+    expect(sim.pieces.isBroken(data.key, data.pieces[1])).toBe(true);
+    const saved = sim.pieces.list();
     const again = setup().sim;
-    again.glass.restore(saved);
-    again.glass.onChunkUnloaded(data.key);
-    again.glass.onChunkLoaded(data);
+    again.pieces.restore(saved);
+    again.pieces.onChunkUnloaded(data.key);
+    again.pieces.onChunkLoaded(data);
     expect(again.world.testBox(tr, vec3(11, 0.05, 20), STAND_MINS, STAND_MAXS, MASK_PLAYER)).toBe(false);
   });
 });

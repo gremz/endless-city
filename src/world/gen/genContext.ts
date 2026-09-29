@@ -94,6 +94,8 @@ export interface GenContext {
   rp: Rand;
   /** Doors and window glass RNG stream (separate, so they never shift the layout). */
   rb: Rand;
+  /** Breachable wall RNG stream (separate, so adding them never shifted the rest). */
+  rx: Rand;
   district: DistrictParams;
   level: number;
   /** Lot floor height (top of lot slab). */
@@ -113,6 +115,10 @@ export interface GenContext {
   doorLeaves: number[];
   /** Brush indices of window panes. */
   glass: number[];
+  /** Whether to wall up some doorways with breachable plugs. */
+  breachable: boolean;
+  /** Brush indices of breachable wall plugs. */
+  breach: number[];
   /**
    * Window openings to trim with sills and lintels (buildingDetail): alongX (0/1), a, b along the
    * wall, c0, c1 across it, sill y, head y.
@@ -120,6 +126,8 @@ export interface GenContext {
   trims: number[];
   /** Ladder nav links: bottom x, y, z, top x, y, z (local meters), then the ladder's outward normal nx, nz. */
   ladders: number[];
+  /** Fountains, FOUNTAIN_STRIDE numbers each (chunk-local x and z): see cityFeatures.fountain. */
+  fountains: number[];
 }
 
 export interface VehicleSpot {

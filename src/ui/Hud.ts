@@ -46,6 +46,9 @@ export class Hud {
   private medkitBox: HTMLDivElement;
   private medkitCount: HTMLSpanElement;
   private healBar: HTMLDivElement;
+  private chargeBox: HTMLDivElement;
+  private chargeCount: HTMLSpanElement;
+  private plantBar: HTMLDivElement;
   private healHint: HTMLDivElement;
   private healFlash: HTMLDivElement;
   private healUntil = 0;
@@ -61,7 +64,7 @@ export class Hud {
   private carBar: HTMLDivElement;
   private carKey = '';
   private lastGap = -1;
-  private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1, kits: -1, heal: -1 };
+  private last = { hp: -1, ar: -1, helmet: false, clip: -1, res: -1, name: '', money: -1, kits: -1, heal: -1, charges: -1, plant: -1 };
   private clock = 0;
   private objective: HTMLDivElement;
   private objTitle: HTMLDivElement;
@@ -88,9 +91,12 @@ export class Hud {
     this.medkitCount = el('span.hud-kits', { text: '×0' });
     this.healBar = el('div.heal-bar');
     this.medkitBox = el('div.hud-vital.hud-medkit.none', {}, [el('span.medkit-icon'), this.medkitCount, this.healBar]);
+    this.chargeCount = el('span.hud-kits', { text: '×0' });
+    this.plantBar = el('div.heal-bar.plant-bar');
+    this.chargeBox = el('div.hud-vital.hud-medkit.none', { title: 'Breaching charges' }, [el('span.charge-icon'), this.chargeCount, this.plantBar]);
     const vitals = el('div.hud-vitals', {}, [
       this.money,
-      el('div.hud-row', {}, [el('div.hud-vital', {}, [el('span.hud-icon', { text: '✚' }), this.health]), this.armorBox, this.medkitBox]),
+      el('div.hud-row', {}, [el('div.hud-vital', {}, [el('span.hud-icon', { text: '✚' }), this.health]), this.armorBox, this.medkitBox, this.chargeBox]),
     ]);
     this.ammo = el('span.hud-ammo', { text: '20' });
     this.reserve = el('span.hud-reserve', { text: '/ 120' });
@@ -310,6 +316,21 @@ export class Hud {
       l.heal = healProgress;
     }
     this.healHint.hidden = !hint;
+  }
+
+  /** Carried breaching charges, and 0..1 progress of the one being planted (0 = not planting). */
+  setCharges(count: number, plantProgress: number): void {
+    const l = this.last;
+    if (count !== l.charges) {
+      this.chargeCount.textContent = `×${count}`;
+      l.charges = count;
+    }
+    this.chargeBox.classList.toggle('none', count <= 0 && plantProgress <= 0);
+    if (plantProgress !== l.plant) {
+      this.plantBar.style.transform = `scaleX(${plantProgress})`;
+      this.plantBar.classList.toggle('active', plantProgress > 0);
+      l.plant = plantProgress;
+    }
   }
 
   healed(): void {

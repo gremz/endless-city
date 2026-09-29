@@ -1,5 +1,5 @@
 import { chunkKey } from '../../world/chunkMath';
-import { NAV_CELL, NAV_RES, type ChunkData } from '../../world/gen/ChunkData';
+import { NAV_CELL, NAV_RES, NavFlag, type ChunkData } from '../../world/gen/ChunkData';
 import { NAV_LINK_STRIDE, NAV_STEP, spanColumns } from '../../world/gen/navBake';
 import type { StreamerListener } from '../../world/WorldStreamer';
 
@@ -40,6 +40,8 @@ const STAND = 0.6;
  * Seamless view over the layered nav of all resident chunks, addressed by global cell
  * coordinates (0.5 m) plus a height, since a column can hold several floors (street, upper
  * storeys, roofs). Unloaded cells read as unwalkable.
+ *
+ * Spans without the Walkable flag (the floor under a standing breachable plug) read as absent.
  *
  * Queries fill `qSpan`/`qFloor`/`qFlags`/`qCover`/`qChunk` instead of allocating.
  */
@@ -128,6 +130,7 @@ export class NavGrid implements StreamerListener {
     let bestD = tol * 100 + 1e-6;
     const ycm = y * 100;
     for (let s = c.col[l], e = c.col[l + 1]; s < e; s++) {
+      if (!(c.flags[s] & NavFlag.Walkable)) continue;
       const d = Math.abs(c.floor[s] - ycm);
       if (d <= bestD) {
         bestD = d;
@@ -144,7 +147,7 @@ export class NavGrid implements StreamerListener {
     const l = this.local(gx, gz);
     let best = -1;
     const lim = (y + STAND) * 100;
-    for (let s = c.col[l], e = c.col[l + 1]; s < e && c.floor[s] <= lim; s++) best = s;
+    for (let s = c.col[l], e = c.col[l + 1]; s < e && c.floor[s] <= lim; s++) if (c.flags[s] & NavFlag.Walkable) best = s;
     return this.fill(c, best);
   }
 

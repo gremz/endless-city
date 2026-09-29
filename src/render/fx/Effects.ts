@@ -297,6 +297,13 @@ export class Particles {
     this.emit(pos, 0, 0.2, 0, 34, 3.5, 2.4, IMPACT_COLORS[Material.Wood], 0.8, 8);
   }
 
+  /** A wall plug blown out: brick and block chunks flying, and a cloud of dust. */
+  rubble(pos: Vec3): void {
+    this.emit(pos, 0, 0.25, 0, 45, 5, 2.6, [0.52, 0.34, 0.27], 1.1, 9);
+    this.emit(pos, 0, 0.2, 0, 25, 4, 2.6, [0.66, 0.64, 0.6], 1, 9);
+    this.emit(pos, 0, 0.3, 0, 60, 1.5, 2.8, [0.7, 0.68, 0.63], 1.8, 0.4);
+  }
+
   /** Flashbang pop: a burst of white sparks. */
   flashPop(pos: Vec3): void {
     this.emit(pos, 0, 0, 0, 24, 6, 2.2, [1, 1, 0.95], 0.25, 2);

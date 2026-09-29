@@ -66,7 +66,14 @@ export type SimEvent =
       side: number;
       pos: Vec3;
     }
-  | { type: 'glass_break'; chunkKey: number; index: number; pos: Vec3 }
+  /** Planting a breaching charge: started, cancelled, or done (the charge is then live). */
+  | { type: 'plant'; actorId: number; phase: 'start' | 'cancel' | 'done' }
+  /** A breaching charge went live on a wall, and goes off at `detonateAt` (sim time). */
+  | { type: 'breach_plant'; id: number; actorId: number; pos: Vec3; normal: Vec3; chunkKey: number; index: number; detonateAt: number }
+  | { type: 'breach_beep'; id: number; pos: Vec3 }
+  | { type: 'breach_detonate'; id: number; pos: Vec3; normal: Vec3; chunkKey: number }
+  /** A chunk piece was destroyed (kind: PieceKind). */
+  | { type: 'piece_break'; chunkKey: number; index: number; kind: number; pos: Vec3 }
   /** Someone says a generated voice line (see ai/voiceLines.ts). */
   | { type: 'voice'; actorId: number; line: string }
   /** The opening's captured officer: held (with the execution time once the fuse is lit), freed or executed. */

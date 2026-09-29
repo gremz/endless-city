@@ -85,3 +85,14 @@ describe('upgrade recommendation', () => {
     expect(recommendUpgrade(p)).toBe(null);
   });
 });
+
+describe('buying weapons', () => {
+  it('draws a bought primary', () => {
+    const sim = makeSim();
+    sim.player.inv = makeInventory('glock');
+    expect(sim.player.inv.active).toBe('secondary');
+    expect(buy(sim, sim.player, 'ak47', false)).toBe(true);
+    expect(sim.player.inv.primary!.def.id).toBe('ak47');
+    expect(sim.player.inv.active).toBe('primary');
+  });
+});

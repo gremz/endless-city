@@ -186,6 +186,9 @@ function wallLadder(ctx: GenContext, r: Rand, b: BuildingInfo, aerial: Rect[]): 
     const a = wall.a0 + 1 + Math.round(r() * (wall.a1 - wall.a0 - 2) * 2) / 2;
     const foot = front(wall, 0, 1.6, a - 0.7, a + 0.7);
     if (!inLot(foot) || !ctx.occ.free(foot) || aerial.some((q) => overlaps(q, foot))) continue;
+    // Room to step off at the top (a rooftop box may stand right there).
+    const land = front(wall, -1.6, 0, a - 0.7, a + 0.7);
+    if (ctx.w.overlaps(land.x0, b.roofY + 0.05, land.z0, land.x1, b.roofY + 1.8, land.z1)) continue;
     ctx.w.ladder(wall.side, wall.face, a, ctx.lotY, b.roofY);
     ladderLink(ctx, wall, a, ctx.lotY, b.roofY, wall.face, 1.1, 1.1);
     ctx.occ.mark(foot, Occ.Reserved);
@@ -248,10 +251,12 @@ export function buildRooftops(ctx: GenContext, r: Rand): void {
     if (b.kind === 'block' && b.floors >= 2 && fireEscape(ctx, r, b, aerial)) return true;
     return wallLadder(ctx, r, b, aerial);
   });
-  // Bridges share access between roofs.
+  // Bridges share access between roofs, except onto a landmark roof: those end at its parapet,
+  // which players can climb but bots can't.
   for (let changed = true; changed; ) {
     changed = false;
     for (const [i, j] of links) {
+      if (bs[i].kind === 'landmark' || bs[j].kind === 'landmark') continue;
       if (access[i] !== access[j]) {
         access[i] = access[j] = true;
         changed = true;

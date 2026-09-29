@@ -1,6 +1,6 @@
 import { randInt, type Rand } from '../../core/rng';
 import { Contents, Ramp, SOLID, type RampDir } from '../../physics/brush';
-import { DOOR_H, doorLeaf, FLOOR_H, lockDoor, SLAB_T, THIN_WALL, wall, wallOpenings, WALL_T, type Opening } from './buildings';
+import { BREACH_W, breachOpening, breachSpot, DOOR_H, doorLeaf, FLOOR_H, lockDoor, SLAB_T, THIN_WALL, wall, wallOpenings, WALL_T, type Opening } from './buildings';
 import { District, DoorFlag, Landmark, Material } from './ChunkData';
 import { Occ, rect, subtractRects, type GenContext, type Rect } from './genContext';
 import { rollCarStyle, carBrushes, CAR_L, CAR_W } from './streets';
@@ -109,14 +109,14 @@ class Frame {
   wallU(u0: number, u1: number, v0: number, v1: number, y: number, h: number, ops: Opening[], mat: number, tint: number, contents = SOLID): void {
     const off = this.au(0);
     const shifted = ops.map((o) => ({ ...o, a: o.a + off, b: o.b + off }));
-    wall(this.ctx.w, !this.swap, this.au(u0), this.au(u1), this.av(v0), this.av(v1), y, h, shifted, mat, tint, contents, this.ctx.glass, contents === SOLID ? this.ctx.trims : null);
+    wall(this.ctx.w, !this.swap, this.au(u0), this.au(u1), this.av(v0), this.av(v1), y, h, shifted, mat, tint, contents, this.ctx.glass, contents === SOLID ? this.ctx.trims : null, this.ctx.breach);
   }
 
   /** A wall running along v (at u in [u0, u1]) with openings in v coordinates. */
   wallV(v0: number, v1: number, u0: number, u1: number, y: number, h: number, ops: Opening[], mat: number, tint: number, contents = SOLID): void {
     const off = this.av(0);
     const shifted = ops.map((o) => ({ ...o, a: o.a + off, b: o.b + off }));
-    wall(this.ctx.w, this.swap, this.av(v0), this.av(v1), this.au(u0), this.au(u1), y, h, shifted, mat, tint, contents, this.ctx.glass, contents === SOLID ? this.ctx.trims : null);
+    wall(this.ctx.w, this.swap, this.av(v0), this.av(v1), this.au(u0), this.au(u1), y, h, shifted, mat, tint, contents, this.ctx.glass, contents === SOLID ? this.ctx.trims : null, this.ctx.breach);
   }
 
   /** Door leaf in a wall along u (spanning u) or along v, centered at (u, v). */
@@ -247,12 +247,25 @@ function apartment(F: Frame, r: Rand, floors: number, front: 0 | 1): void {
   for (let f = 0; f < floors; f++) {
     const y = levels[f];
     const h = levels[f + 1] - y - SLAB_T;
+    /** Furniture keep-outs in front of this floor's breachable plugs. */
+    const plugZones: Rect[] = [];
     // Exterior walls with glazed windows; the far end has the main entrance on the ground floor.
     const winB = 0.9;
     const winT = 2.1;
     for (const side of [0, 1] as const) {
       const v0 = side === 0 ? 0 : D - WALL_T;
       const ops = wallOpenings(r, WALL_T, L - WALL_T, null, true, winB, winT, rb).filter((o) => !cuts.some((c) => o.a < c + 0.3 && o.b > c - 0.3));
+      // Ground floor back wall: maybe a bricked-up doorway into a room, where the ground outside is clear.
+      if (ctx.breachable && f === 0 && side !== front && ctx.rx() < 0.6) {
+        const [a0, a1] = rooms[Math.floor(ctx.rx() * rooms.length)];
+        const a = breachSpot(ctx.rx, WALL_T, L - WALL_T, ops, Math.max(a0, coreEnd) + 0.2, a1 - 0.2);
+        const out = side === 0 ? F.rect(a ?? 0, -2, (a ?? 0) + BREACH_W, -0.5) : F.rect(a ?? 0, D + 0.5, (a ?? 0) + BREACH_W, D + 2);
+        if (a !== null && ctx.occ.free(out)) {
+          ops.push(breachOpening(ctx.rx, a, mat));
+          ctx.occ.mark(side === 0 ? F.rect(a - 0.3, -2, a + BREACH_W + 0.3, 1.5) : F.rect(a - 0.3, D - 1.5, a + BREACH_W + 0.3, D + 2), Occ.Reserved);
+          plugZones.push(side === 0 ? F.rect(a - 0.5, 0, a + BREACH_W + 0.5, 1.8) : F.rect(a - 0.5, D - 1.8, a + BREACH_W + 0.5, D));
+        }
+      }
       if (f === 0 && side === front) {
         // Street door into the first front room past the core.
         const [a0, a1] = rooms[0][1] - rooms[0][0] > 3 ? rooms[0] : rooms[1];
@@ -297,10 +310,22 @@ function apartment(F: Frame, r: Rand, floors: number, front: 0 | 1): void {
       });
       F.wallU(coreEnd, L - WALL_T, cv0, cv0 + 0.1, y, h, ops, Material.Plaster, 170, THIN_WALL);
     }
+    // Partitions between rooms, some with a bricked-up doorway through to the next room.
     for (const c of cuts) {
-      F.wallV(WALL_T, vc - 1.1, c - 0.05, c + 0.05, y, h, [], Material.Plaster, 150, THIN_WALL);
-      F.wallV(vc + 1.1, D - WALL_T, c - 0.05, c + 0.05, y, h, [], Material.Plaster, 150, THIN_WALL);
+      for (const [v0, v1] of [
+        [WALL_T, vc - 1.1],
+        [vc + 1.1, D - WALL_T],
+      ]) {
+        const ops: Opening[] = [];
+        const a = ctx.breachable && ctx.rx() < 0.3 ? breachSpot(ctx.rx, v0, v1, []) : null;
+        if (a !== null) {
+          ops.push(breachOpening(ctx.rx, a, Material.Plaster));
+          keep.push(F.rect(c - 1.3, a - 0.4, c + 1.3, a + BREACH_W + 0.4));
+        }
+        F.wallV(v0, v1, c - 0.05, c + 0.05, y, h, ops, Material.Plaster, 150, THIN_WALL);
+      }
     }
+    keep.push(...plugZones);
     // Furniture (never in the core or in front of doors), and overwatch spots at front windows
     // on upper floors.
     keep.push(F.rect(0, coreV0 - 0.7, coreEnd + 0.5, coreV0 + CORE_W + 0.7));

@@ -6,9 +6,10 @@ import type { CollisionWorld } from '../physics/CollisionWorld';
 import { makeTrace, type TraceResult } from '../physics/trace';
 import { MOVE } from '../player/movementConfig';
 import { clipVelocity, eyeHeight } from '../player/pmove';
-import { WEAPONS, type GrenadeId } from '../weapons/weaponDefs';
+import { WEAPONS, type GrenadeId, type WeaponDef } from '../weapons/weaponDefs';
+import { PieceKind } from '../world/gen/ChunkData';
 import type { Actor } from './Actor';
-import { BLAST_GLASS_RADIUS } from './Glass';
+import { BLAST_GLASS_RADIUS, HE_BREACH_RADIUS } from './Pieces';
 import type { Simulation } from './Simulation';
 import { damageVehicle } from './vehicle/Vehicle';
 
@@ -372,16 +373,27 @@ export class GrenadeSystem {
     return vec3(this.tr.normal.x, this.tr.normal.y, this.tr.normal.z);
   }
 
-  private readonly onGlass = (pane: Brush) => this.sim.glass.hit(pane);
+  private readonly onGlass = (pane: Brush) => this.sim.pieces.hit(pane);
 
   private explode(p: Projectile, pos: Vec3): void {
-    const sim = this.sim;
     const from = vec3(pos.x, pos.y + 0.05, pos.z);
-    sim.glass.breakNear(from, BLAST_GLASS_RADIUS);
-    sim.doors.blast(from, HE_RADIUS);
+    // Point blank against a breachable plug: blown out first, so the blast carries through.
+    this.sim.pieces.breakNear(from, HE_BREACH_RADIUS, PieceKind.Breach);
+    this.blast(from, p.owner, WEAPONS.hegrenade, HE_RADIUS, HE_CAR_DAMAGE, BLAST_GLASS_RADIUS);
+  }
+
+  /**
+   * Explosion around `from`: panes shatter, doors take damage, actors in line of sight take
+   * `def` damage falling off to nothing at `radius` (never the owner), cars take up to
+   * `carDamage`. HE grenades and breaching charges both go off through here.
+   */
+  blast(from: Vec3, owner: Actor, def: WeaponDef, radius: number, carDamage: number, glassRadius: number): void {
+    const sim = this.sim;
+    sim.pieces.breakNear(from, glassRadius, PieceKind.Glass);
+    sim.doors.blast(from, radius);
     const to = vec3();
     for (const v of sim.actors) {
-      if (!v.alive || v === p.owner || !sim.canHit(p.owner, v)) continue;
+      if (!v.alive || v === owner || !sim.canHit(owner, v)) continue;
       // Nearest of chest and head that the blast can reach.
       let best = Infinity;
       for (const h of [1.0, eyeHeight(v.move)]) {
@@ -389,28 +401,28 @@ export class GrenadeSystem {
         to.y = v.move.pos.y + h;
         to.z = v.move.pos.z;
         const d = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
-        if (d >= HE_RADIUS || d >= best) continue;
+        if (d >= radius || d >= best) continue;
         sim.world.traceRay(this.tr, from, to, MASK_SHOT);
         if (this.tr.fraction >= 0.999) best = d;
       }
       if (best === Infinity) continue;
       sim.onHit({
-        attacker: p.owner,
+        attacker: owner,
         victim: v,
-        def: WEAPONS.hegrenade,
+        def,
         group: HitGroup.Chest,
         distance: best,
-        damageScale: 1 - best / HE_RADIUS,
+        damageScale: 1 - best / radius,
         penetrated: false,
         pos: vec3(v.move.pos.x, v.move.pos.y + 1, v.move.pos.z),
       });
     }
     // Cars in the blast (their boxes don't shield themselves).
-    const reach = HE_RADIUS + 1.5;
+    const reach = radius + 1.5;
     for (const car of sim.vehicles) {
       const c = car.car.pos;
       const d = Math.hypot(c.x - from.x, c.y + 0.6 - from.y, c.z - from.z);
-      if (d < reach) damageVehicle(sim, car, HE_CAR_DAMAGE * (1 - d / reach), p.owner.id);
+      if (d < reach) damageVehicle(sim, car, carDamage * (1 - d / reach), owner.id);
     }
   }
 

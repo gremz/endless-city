@@ -11,6 +11,8 @@ export interface Opening {
   top: number;
   /** Glazed window: gets a breakable pane. */
   glass?: boolean;
+  /** Breachable: walled up with this infill, a plug brush a breaching charge blows out. */
+  breach?: { mat: number; tint: number };
 }
 
 /** Window pane thickness. */
@@ -21,6 +23,16 @@ export const DOOR_W = 1.6;
 export const DOOR_H = 2.4;
 export const FLOOR_H = 3.5;
 export const SLAB_T = 0.25;
+/** Breachable wall plug size, and the wall kept clear either side of it. */
+export const BREACH_W = 1.5;
+/**
+ * Whether the generated city gets breachable plugs by default (GenContext.breachable). Off until
+ * missions give breaching a purpose (the gym's test walls stay); the plugs draw from their own RNG
+ * stream, so this shifts nothing else.
+ */
+export const BREACHABLE_WALLS = false;
+export const BREACH_H = 2.2;
+const BREACH_MARGIN = 0.4;
 
 /** Thin interior/house walls can be shot through. */
 export const THIN_WALL = SOLID | Contents.PENETRABLE;
@@ -46,11 +58,13 @@ export function wall(
   panes: number[] | null = null,
   /** Window openings are recorded here for sills and lintels (GenContext.trims). */
   trims: number[] | null = null,
+  /** Brush indices of breachable plugs are pushed here (GenContext.breach). */
+  plugs: number[] | null = null,
 ): void {
-  const put = (s0: number, s1: number, yb: number, yt: number) => {
+  const put = (s0: number, s1: number, yb: number, yt: number, m = mat, t = tint) => {
     if (s1 - s0 < 0.01 || yt - yb < 0.01) return;
-    if (alongX) w.box(s0, yb, c0, s1, yt, c1, mat, contents, tint);
-    else w.box(c0, yb, s0, c1, yt, s1, mat, contents, tint);
+    if (alongX) w.box(s0, yb, c0, s1, yt, c1, m, contents, t);
+    else w.box(c0, yb, s0, c1, yt, s1, m, contents, t);
   };
   const mid = (c0 + c1) / 2;
   if (trims) for (const o of openings) if (o.bottom > 0.3) trims.push(alongX ? 1 : 0, o.a, o.b, c0, c1, y0 + o.bottom, y0 + o.top);
@@ -62,6 +76,12 @@ export function wall(
     if (alongX) w.box(o.a, y0 + o.bottom, g0, o.b, y0 + o.top, g1, Material.Glass, glass, 128);
     else w.box(g0, y0 + o.bottom, o.a, g1, y0 + o.top, o.b, Material.Glass, glass, 128);
     panes.push(w.count - 1);
+  }
+  for (const o of openings) {
+    if (!o.breach || !plugs) continue;
+    const n = w.count;
+    put(o.a, o.b, y0 + o.bottom, y0 + o.top, o.breach.mat, o.breach.tint);
+    if (w.count > n) plugs.push(n);
   }
   const ops = [...openings].sort((p, q) => p.a - q.a);
   let cur = a0;
@@ -93,6 +113,34 @@ export function wallOpenings(r: Rand, a0: number, a1: number, door: number | nul
     if (r() < 0.8) out.push({ a: wa, b: wb, bottom: winBottom, top: winTop, glass: rb ? rb() < 0.8 : false });
   }
   return out;
+}
+
+/**
+ * Start of a spot for a breachable plug on a wall [a0, a1] (optionally only within [lo, hi]),
+ * clear of its other openings and corners, picked at random; null if nothing fits.
+ */
+export function breachSpot(r: Rand, a0: number, a1: number, openings: readonly Opening[], lo = a0, hi = a1): number | null {
+  const gaps: [number, number][] = [];
+  let cur = Math.max(a0 + 0.6, lo);
+  const end = Math.min(a1 - 0.6, hi);
+  for (const o of [...openings].sort((p, q) => p.a - q.a)) {
+    if (o.a - BREACH_MARGIN > cur) gaps.push([cur, Math.min(end, o.a - BREACH_MARGIN)]);
+    cur = Math.max(cur, o.b + BREACH_MARGIN);
+  }
+  if (end > cur) gaps.push([cur, end]);
+  const fits = gaps.filter(([s, e]) => e - s >= BREACH_W);
+  if (!fits.length) return null;
+  const [s, e] = fits[Math.floor(r() * fits.length)];
+  return Math.round((s + r() * (e - s - BREACH_W)) * 20) / 20;
+}
+
+/**
+ * A breachable opening at `a`: a bricked-up doorway (concrete block in brick walls), so the
+ * player can tell it apart from the wall around it.
+ */
+export function breachOpening(r: Rand, a: number, wallMat: number): Opening {
+  const infill = wallMat === Material.Brick ? { mat: Material.Concrete, tint: 175 + Math.floor(r() * 40) } : { mat: Material.Brick, tint: 40 + Math.floor(r() * 70) };
+  return { a, b: a + BREACH_W, bottom: 0, top: BREACH_H, breach: infill };
 }
 
 /** Clear zone around a door: `out` meters outside, `inn` inside, `hw` half-width along the wall. */
@@ -212,6 +260,10 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
     { side: 3, alongX: false, a0: fp.z0 + t, a1: fp.z1 - t, c0: fp.x1 - t, c1: fp.x1 },
   ];
   const leaves: number[] = [];
+  // Breachable plugs in outside walls. A partition meets the -Z/+Z walls, so those only get one
+  // when there is none; the stair wall of a two-story house never does.
+  const noPartition = rw(I) <= 10 || twoStory;
+  let plugs = 0;
   for (const s of sides) {
     let door: number | null = null;
     if (doorSides.has(s.side)) {
@@ -228,7 +280,9 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
       if (ctx.rb() < 0.65) leaves.push(doorLeaf(ctx, px, pz, s.alongX, -(nx + nz), DOOR_W, DOOR_H, 0));
     }
     const ops = wallOpenings(r, s.a0, s.a1, door, true, 1.0, 2.0, ctx.rb);
-    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, groundH, ops, mat, tint, SOLID, ctx.glass, ctx.trims);
+    const eligible = door === null && (s.side >= 2 || noPartition) && !(twoStory && s.side === stairSide);
+    if (ctx.breachable && eligible && plugs < 2 && ctx.rx() < 0.35 && outsideBreach(ctx, s, ops, mat)) plugs++;
+    wall(w, s.alongX, s.a0, s.a1, s.c0, s.c1, lotY, groundH, ops, mat, tint, SOLID, ctx.glass, ctx.trims, ctx.breach);
   }
   // With another way in, one door may be locked (bots and players can breach it).
   if (leaves.length >= 2 && ctx.rb() < 0.35) lockDoor(ctx, leaves[Math.floor(ctx.rb() * leaves.length)]);
@@ -237,7 +291,13 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   if (rw(I) > 10 && !twoStory) {
     const px = I.x0 + Math.round(rw(I) * (0.4 + r() * 0.2));
     const dz = I.z0 + 0.8 + r() * Math.max(0, rd(I) - DOOR_W - 1.6);
-    wall(w, false, I.z0, I.z1, px, px + 0.15, lotY, groundH, [{ a: dz, b: dz + DOOR_W, bottom: 0, top: DOOR_H }], Material.Plaster, 160, THIN_WALL);
+    const ops: Opening[] = [{ a: dz, b: dz + DOOR_W, bottom: 0, top: DOOR_H }];
+    const a = ctx.breachable && ctx.rx() < 0.6 ? breachSpot(ctx.rx, I.z0, I.z1, ops) : null;
+    if (a !== null) {
+      ops.push(breachOpening(ctx.rx, a, Material.Plaster));
+      ctx.occ.mark(rect(px - 1.2, a - 0.3, px + 1.35, a + BREACH_W + 0.3), Occ.Reserved);
+    }
+    wall(w, false, I.z0, I.z1, px, px + 0.15, lotY, groundH, ops, Material.Plaster, 160, THIN_WALL, null, null, ctx.breach);
   }
 
   ctx.interiors.push(I);
@@ -288,6 +348,28 @@ function house(ctx: GenContext, fp: Rect, floors: number, mat: number, tint: num
   const py = upperY + 0.02;
   ctx.perches.push((I.x0 + I.x1) / 2, py, stairSide === 0 ? I.z1 - 0.8 : I.z0 + 0.8);
   ctx.perches.push(I.x1 - 0.8, py, (I.z0 + I.z1) / 2);
+}
+
+/**
+ * Add a breachable plug to an outside wall's openings if one fits and the ground outside is
+ * clear (like a door's approach), keeping both sides clear of props. Returns whether it did.
+ */
+function outsideBreach(ctx: GenContext, s: { side: Side; alongX: boolean; a0: number; a1: number; c0: number; c1: number }, ops: Opening[], mat: number): boolean {
+  const a = breachSpot(ctx.rx, s.a0, s.a1, ops);
+  if (a === null) return false;
+  const out = s.side === 0 || s.side === 2 ? -1 : 1;
+  const face = out < 0 ? s.c0 : s.c1;
+  // The cell the wall face is in belongs to the building: look from half a meter out.
+  const n0 = face + out * 0.5;
+  const n1 = face + out * 2;
+  const across = (p: number, q: number) => [Math.min(p, q), Math.max(p, q)] as const;
+  const [o0, o1] = across(n0, n1);
+  const outside = s.alongX ? rect(a - 0.3, o0, a + BREACH_W + 0.3, o1) : rect(o0, a - 0.3, o1, a + BREACH_W + 0.3);
+  if (!ctx.occ.free(outside)) return false;
+  ops.push(breachOpening(ctx.rx, a, mat));
+  const [z0, z1] = across(face + out * 2, face - out * 1.5);
+  ctx.occ.mark(s.alongX ? rect(a - 0.3, z0, a + BREACH_W + 0.3, z1) : rect(z0, a - 0.3, z1, a + BREACH_W + 0.3), Occ.Reserved);
+  return true;
 }
 
 function warehouse(ctx: GenContext, fp: Rect, tint: number): void {

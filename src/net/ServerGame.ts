@@ -1,10 +1,11 @@
+import { Pedestrians } from '../ai/civilians/Pedestrians';
 import { EncounterManager } from '../ai/EncounterManager';
 import { CHUNK } from '../core/config';
 import type { SimEvent } from '../core/events';
 import { FixedLoop } from '../core/loop';
 import type { GameParams } from '../core/urlParams';
 import { Buttons, MAX_PITCH, type UserCmd } from '../input/UserCmd';
-import { teleport, type Actor } from '../sim/Actor';
+import { Team, teleport, type Actor } from '../sim/Actor';
 import { buy, engagedNear, OUT_OF_COMBAT } from '../sim/buy';
 import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
 import { PickupManager } from '../sim/Pickups';
@@ -113,6 +114,7 @@ export class ServerGame {
   readonly sim: Simulation;
   readonly streamer: WorldStreamer;
   readonly encounters: EncounterManager | null;
+  readonly pedestrians: Pedestrians | null = null;
   readonly pickups: PickupManager;
   readonly vehicles: Vehicles;
   private loop: FixedLoop;
@@ -140,9 +142,15 @@ export class ServerGame {
     this.streamer = new WorldStreamer(this.sim.world, source);
     this.streamer.addListener(this.sim.nav);
     this.streamer.addListener(this.sim.doors);
-    this.streamer.addListener(this.sim.glass);
+    this.streamer.addListener(this.sim.pieces);
     this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
     if (this.encounters) this.sim.systems.push(this.encounters);
+    if (this.encounters) {
+      const enc = this.encounters;
+      this.pedestrians = new Pedestrians(this.sim, this.streamer, (key) => enc.fighting(key));
+      this.pedestrians.density = params.peds ?? 1;
+      this.sim.systems.push(this.pedestrians);
+    }
     this.pickups = new PickupManager(this.sim);
     this.streamer.addListener(this.pickups);
     this.sim.systems.push(this.pickups);
@@ -481,7 +489,8 @@ export class ServerGame {
       return s;
     };
     if (this.sim.isPlayer(victim)) stat(victim).deaths++;
-    if (this.sim.isPlayer(attacker) && attacker !== victim) stat(attacker).kills++;
+    // Civilians aren't a score.
+    if (this.sim.isPlayer(attacker) && attacker !== victim && this.sim.getActor(victim)?.team !== Team.Civilian) stat(attacker).kills++;
   }
 
   private queueEvents(c: Conn, events: readonly SimEvent[]): void {
@@ -554,7 +563,7 @@ export class ServerGame {
       cleared: [...this.sim.cleared],
       enc: (this.encounters?.summaries() ?? []).map((e) => ({ key: e.key, level: e.level, cleared: e.cleared, active: e.active })),
       doors: this.sim.doors.list(),
-      glass: this.sim.glass.list(),
+      pieces: this.sim.pieces.list(),
     };
   }
 

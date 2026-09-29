@@ -3,7 +3,7 @@ import type { SimEvent } from '../core/events';
 import { vec3, type Vec3 } from '../core/math';
 import { eyeHeight } from '../player/pmove';
 import type { Simulation } from '../sim/Simulation';
-import { Material } from '../world/gen/ChunkData';
+import { Material, PieceKind } from '../world/gen/ChunkData';
 import { WEAPONS, type WeaponId } from '../weapons/weaponDefs';
 import type { AudioEngine } from './AudioEngine';
 
@@ -145,8 +145,18 @@ export class SoundEvents {
         a.play(name, { pos: e.pos, volume: vol, reverb: 0.2 }, L);
         break;
       }
-      case 'glass_break':
-        a.play('glass_break', { pos: e.pos, volume: 1.1, reverb: 0.25 }, L);
+      case 'plant':
+        if (e.actorId === me && e.phase === 'done') a.play('charge_plant', { volume: 0.7, reverb: 0.05 });
+        break;
+      case 'breach_beep':
+        a.play('breach_beep', { pos: e.pos, volume: 0.6, reverb: 0.1 }, L);
+        break;
+      case 'breach_detonate':
+        a.play('he_explode', { pos: e.pos, volume: 2.2, reverb: 0.6 }, L);
+        break;
+      case 'piece_break':
+        if (e.kind === PieceKind.Breach) a.play('wall_breach', { pos: e.pos, volume: 1.4, reverb: 0.4 }, L);
+        else if (e.kind === PieceKind.Glass) a.play('glass_break', { pos: e.pos, volume: 1.1, reverb: 0.25 }, L);
         break;
       case 'car_door':
         a.play('car_door', { pos: e.pos, volume: e.actorId === me ? 0.7 : 0.9, reverb: 0.1 }, L);

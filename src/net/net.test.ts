@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CIV_FINE } from '../ai/civilians/Pedestrians';
 import { EncounterManager } from '../ai/EncounterManager';
 import { CHUNK, TICK } from '../core/config';
 import { sfc32 } from '../core/rng';
@@ -11,7 +12,7 @@ import { PickupManager } from '../sim/Pickups';
 import { Simulation } from '../sim/Simulation';
 import { chunkKey } from '../world/chunkMath';
 import { BrushWriter } from '../world/gen/BrushWriter';
-import { Material, type ChunkData } from '../world/gen/ChunkData';
+import { glassPieces, Material, PieceKind, piecesOfKind, type ChunkData } from '../world/gen/ChunkData';
 import { bakeNav } from '../world/gen/navBake';
 import { SyncChunkSource, WorldStreamer } from '../world/WorldStreamer';
 import { WEAPONS } from '../weapons/weaponDefs';
@@ -66,7 +67,8 @@ function flatChunk(seed: number, cx: number, cz: number): ChunkData {
     // A car parked east of the spawn point, facing -Z.
     vehicles: cx === 0 && cz === 0 ? new Float32Array([50, 0, 40, 0, 2, 0]) : new Float32Array(0),
     doors: pane >= 0 ? new Float32Array([45, 0, oz + 50, 1, 1.6, 2.4, 0, 1]) : new Float32Array(0),
-    glass: pane >= 0 ? new Int32Array([pane]) : new Int32Array(0),
+    pieces: glassPieces(pane >= 0 ? [pane] : []),
+    navPatch: new Int32Array(0),
     hasEncounter: encounter,
     genMs: 0,
   };
@@ -83,7 +85,7 @@ function joinClient(server: ServerGame, name: string) {
   const streamer = new WorldStreamer(sim.world, new SyncChunkSource(7, flatChunk));
   streamer.addListener(sim.nav);
   streamer.addListener(sim.doors);
-  streamer.addListener(sim.glass);
+  streamer.addListener(sim.pieces);
   sim.replica = true;
   const encounters = new EncounterManager(sim, streamer);
   let mirror: Mirror | null = null;
@@ -91,6 +93,8 @@ function joinClient(server: ServerGame, name: string) {
   let synced = false;
   const cmd = makeCmd();
   const chat: string[] = [];
+  /** The host's latest scoreboard: [id, name, kills, deaths, money] per player. */
+  let scores: [number, string, number, number, number][] = [];
   /** Predicted position after each command, by sequence number. */
   const predicted = new Map<number, [number, number, number]>();
   return {
@@ -110,6 +114,9 @@ function joinClient(server: ServerGame, name: string) {
     get mirror() {
       return mirror;
     },
+    get scores() {
+      return scores;
+    },
     /** One frame at local time `now`: apply what arrived, then send and predict this tick's input. */
     frame(now: number) {
       if (!mirror && net.actorId >= 0) {
@@ -123,7 +130,11 @@ function joinClient(server: ServerGame, name: string) {
       streamer.apply(8, 8);
       if (prediction) prediction.active = streamer.isLoaded(sim.player.move.pos.x, sim.player.move.pos.z);
       if (mirror && prediction) {
-        for (const m of net.takeMessages()) if (!mirror.applyMessage(m) && m.t === 'chat') chat.push(`${m.from}: ${m.text}`);
+        for (const m of net.takeMessages()) {
+          if (mirror.applyMessage(m)) continue;
+          if (m.t === 'chat') chat.push(`${m.from}: ${m.text}`);
+          else if (m.t === 'scores') scores = m.s;
+        }
         const s = net.takeSnapshot();
         if (s) {
           const { x, y, z } = sim.player.move.pos;
@@ -311,6 +322,55 @@ describe('co-op over the network', () => {
     one.net.sendChat('  hello there ');
     run(server, [one, two], 2);
     expect(two.chat).toEqual(['A: hello there']);
+  });
+});
+
+describe('pedestrians online', () => {
+  it('the host runs them, guests see them as civilians, and the fine and score follow the shooter', () => {
+    const server = makeServer();
+    const host = joinClient(server, 'Host');
+    const guest = joinClient(server, 'Guest');
+    run(server, [host, guest], 64 * 20);
+    const civs = server.sim.actors.filter((a) => a.team === Team.Civilian && a.alive);
+    expect(civs.length).toBeGreaterThan(0);
+    expect(server.pedestrians!.aliveCount).toBe(civs.length);
+
+    // Guests mirror them: same ids, on the civilian team, not players, named, and where the host has them.
+    for (const c of civs) {
+      const seen = guest.sim.getActor(c.id)!;
+      expect(seen, `civilian ${c.id}`).toBeTruthy();
+      expect(seen.team).toBe(Team.Civilian);
+      expect(seen.name).toBe('Civilian');
+      expect(Math.hypot(seen.move.pos.x - c.move.pos.x, seen.move.pos.z - c.move.pos.z)).toBeLessThan(1.5);
+    }
+    expect(guest.sim.players).toHaveLength(2);
+    expect(guest.sim.players.some((p) => p.team === Team.Civilian)).toBe(false);
+    // Guests run no pedestrians of their own: nothing but the host's.
+    const ids = new Set(server.sim.actors.map((a) => a.id));
+    expect(guest.sim.actors.every((a) => ids.has(a.id))).toBe(true);
+
+    // The guest kills one: the guest pays, the host doesn't, and it's no score.
+    const shooter = server.sim.getActor(guest.net.actorId)!;
+    const other = server.sim.getActor(host.net.actorId)!;
+    shooter.money = other.money = 2000;
+    run(server, [host, guest], 8);
+    guest.sim.events.drain();
+    const victim = civs[0];
+    victim.health = 1;
+    server.sim.onHit({ attacker: shooter, victim, def: WEAPONS.glock, group: 1, distance: 5, damageScale: 1, penetrated: false, pos: victim.move.pos });
+    let events: ReturnType<typeof guest.sim.events.drain> = [];
+    run(server, [host, guest], 64 * 2, () => {
+      events = events.concat(guest.sim.events.drain());
+    });
+    expect(guest.me.money).toBe(2000 - CIV_FINE);
+    expect(shooter.money).toBe(2000 - CIV_FINE);
+    expect(other.money).toBe(2000);
+    expect(guest.sim.getActor(victim.id)?.alive).toBe(false);
+    expect(events.some((e) => e.type === 'kill' && e.victimId === victim.id && e.attackerId === shooter.id)).toBe(true);
+    expect(events.some((e) => e.type === 'message' && e.actorId === shooter.id && e.text.includes(`$${CIV_FINE}`))).toBe(true);
+    const row = guest.scores.find((r) => r[0] === shooter.id);
+    expect(row).toBeTruthy();
+    expect(row![2]).toBe(0);
   });
 });
 
@@ -516,15 +576,35 @@ describe('prediction and lag compensation', () => {
     expect(one.prediction!.corrections).toBe(0);
     one.cmd.forward = 0;
 
-    const brushes = flatChunk(7, 0, -1).glass;
-    server.sim.glass.breakPane(key, brushes[0], true);
+    const brushes = piecesOfKind(flatChunk(7, 0, -1), PieceKind.Glass);
+    server.sim.pieces.breakPiece(key, brushes[0], true);
     run(server, [one], 32);
-    expect(one.sim.glass.isBroken(key, brushes[0])).toBe(true);
+    expect(one.sim.pieces.isBroken(key, brushes[0])).toBe(true);
     // A client that joins later gets both from the world state.
     const two = joinClient(server, 'Late');
     run(server, [one, two], 64);
-    expect(two.sim.glass.isBroken(key, brushes[0])).toBe(true);
+    expect(two.sim.pieces.isBroken(key, brushes[0])).toBe(true);
     expect(two.sim.doors.list().some(([k, i, state]) => k === key && i === 0 && state === 1)).toBe(true);
+  });
+
+  it('shares breaching charges: carried, live on the wall, and going off', () => {
+    const server = makeServer();
+    const one = joinClient(server, 'Breacher');
+    run(server, [one], 48);
+    const p = server.sim.players[0];
+    p.breachCharges = 2;
+    run(server, [one], 32);
+    expect(one.me.breachCharges).toBe(2);
+    // A live charge (on the pane: any piece will do for the wiring).
+    const key = chunkKey(0, -1);
+    const pane = piecesOfKind(flatChunk(7, 0, -1), PieceKind.Glass)[0];
+    const piece = server.sim.pieces.pieceOf(server.sim.world.chunkBrushes(key)![pane])!;
+    server.sim.charges.plant(p, { piece, pos: { x: 50, y: 3.5, z: -14.1 }, normal: { x: 0, y: 0, z: -1 } });
+    run(server, [one], 16);
+    expect(one.sim.charges.active).toHaveLength(1);
+    run(server, [one], 64 * 3.2);
+    expect(one.sim.charges.active).toHaveLength(0);
+    expect(one.sim.pieces.isBroken(key, pane)).toBe(true);
   });
 
   it("hits a moving target where the shooter saw it", () => {

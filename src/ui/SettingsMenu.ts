@@ -118,6 +118,11 @@ export class SettingsMenu {
         [0.5, 'Low'],
         [1, 'High'],
       ]),
+      this.select('Pedestrians', 'pedestrians', [
+        [0, 'Off'],
+        [0.5, 'Few'],
+        [1, 'Normal'],
+      ]),
       this.check('Show FPS / debug overlay', 'showFps'),
       el('div.set-group', { text: 'Gameplay' }),
       this.check('Auto bunny-hop (hold space)', 'autoBhop'),

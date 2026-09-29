@@ -30,6 +30,8 @@ export interface Settings {
   characters: 'detailed' | 'simple';
   /** Objective line, waypoint and one-time tips. */
   objectives: boolean;
+  /** Pedestrian density (0 off, 0.5 low, 1 normal). */
+  pedestrians: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rainParticles: 1,
   characters: 'detailed',
   objectives: true,
+  pedestrians: 1,
 };
 
 /** Allowed values for the settings that are really enums (stored as strings or numbers). */
@@ -65,6 +68,7 @@ const CHOICES: Partial<Record<keyof Settings, readonly unknown[]>> = {
   weather: ['dynamic', 'clear'],
   rainParticles: [0, 0.5, 1],
   characters: ['detailed', 'simple'],
+  pedestrians: [0, 0.5, 1],
 };
 
 const KEY = 'owcs.settings.v1';

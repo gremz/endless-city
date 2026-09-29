@@ -1,5 +1,5 @@
 import { Contents, Ramp } from '../../physics/brush';
-import { BRUSH_STRIDE, NAV_CELL, NAV_RES, NavFlag, wordContents, wordRamp } from './ChunkData';
+import { BRUSH_STRIDE, NAV_CELL, NAV_PATCH_STRIDE, NAV_RES, NavFlag, packBrushWord, wordContents, wordMaterial, wordRamp } from './ChunkData';
 import { LOT0, LOT1 } from './streets';
 
 /** Half-width of a standing bot hull (16 HU = 0.406 m) plus clearance so paths never scrape corners. */
@@ -455,4 +455,92 @@ export function bakeNav(packed: Int32Array, ladders: readonly number[] = []): Na
   }
 
   return nav;
+}
+
+/** How far around a piece its nav patch reaches (hull clearance, near-wall and cover probes). */
+const PATCH_REACH = 2;
+
+export interface NavWithPieces {
+  /** The nav with every piece standing (laid out for the pieces gone: see bakeNavWithPieces). */
+  nav: NavBake;
+  /** Per piece, its patch records [lo, hi) in `records`. */
+  ranges: [number, number][];
+  /** NAV_PATCH_STRIDE ints each: span, flags and cover with the piece standing, then gone. */
+  records: Int32Array;
+  /** Walkable spans with the pieces standing that have no match once they're gone (dropped). */
+  lost: number;
+}
+
+/**
+ * Bake the nav for a chunk whose pieces (breachable plugs) open the way when destroyed. The span
+ * layout is the one with every piece gone, so destroying one only has to change flags: spans that
+ * only exist without the pieces (the floor under a plug, the doorway's approach) start with no
+ * flags, i.e. not walkable. Each piece gets patch records for the spans near it that change, baked
+ * with only that piece gone, so blowing one never opens the way through another still standing.
+ */
+export function bakeNavWithPieces(packed: Int32Array, pieces: readonly number[], ladders: readonly number[] = []): NavWithPieces {
+  const without = (gone: readonly number[]) => {
+    const out = packed.slice();
+    for (const i of gone) {
+      const o = i * BRUSH_STRIDE + 6;
+      out[o] = packBrushWord(wordRamp(out[o]), wordMaterial(out[o]), 0);
+    }
+    return out;
+  };
+  const open = bakeNav(without(pieces), ladders);
+  // Flags and cover with the pieces standing, on the open layout.
+  const { flags, cover, lost } = onLayout(bakeNav(packed, ladders), open);
+
+  const records: number[] = [];
+  const ranges: [number, number][] = [];
+  const cell = (v: number) => Math.min(NAV_RES - 1, Math.max(0, Math.floor(v / NAV_CELL)));
+  for (const i of pieces) {
+    // With only this piece gone (the rest standing), on the open layout.
+    const gone = pieces.length === 1 ? open : onLayout(bakeNav(without([i]), ladders), open);
+    const o = i * BRUSH_STRIDE;
+    const lo = records.length / NAV_PATCH_STRIDE;
+    const i0 = cell(packed[o] / 100 - PATCH_REACH);
+    const i1 = cell(packed[o + 3] / 100 + PATCH_REACH);
+    const j0 = cell(packed[o + 2] / 100 - PATCH_REACH);
+    const j1 = cell(packed[o + 5] / 100 + PATCH_REACH);
+    for (let j = j0; j <= j1; j++) {
+      for (let k = i0; k <= i1; k++) {
+        const c = j * NAV_RES + k;
+        for (let s = open.col[c]; s < open.col[c + 1]; s++) {
+          if (gone.flags[s] === flags[s] && gone.cover[s] === cover[s]) continue;
+          records.push(s, flags[s], cover[s], gone.flags[s], gone.cover[s]);
+        }
+      }
+    }
+    ranges.push([lo, records.length / NAV_PATCH_STRIDE]);
+  }
+  return { nav: { ...open, flags, cover }, ranges, records: new Int32Array(records), lost };
+}
+
+/**
+ * `from`'s flags and cover moved onto `to`'s span layout, matched by column and floor (spans of
+ * `to` with no match get none). `lost` counts walkable spans of `from` with no match in `to`.
+ */
+function onLayout(from: NavBake, to: NavBake): { flags: Uint8Array; cover: Uint8Array; lost: number } {
+  const flags = new Uint8Array(to.flags.length);
+  const cover = new Uint8Array(to.cover.length);
+  let lost = 0;
+  for (let c = 0; c + 1 < from.col.length; c++) {
+    for (let s = from.col[c]; s < from.col[c + 1]; s++) {
+      let m = -1;
+      for (let t = to.col[c]; t < to.col[c + 1]; t++) {
+        if (to.floor[t] === from.floor[s]) {
+          m = t;
+          break;
+        }
+      }
+      if (m < 0) {
+        lost++;
+        continue;
+      }
+      flags[m] = from.flags[s];
+      cover[m] = from.cover[s];
+    }
+  }
+  return { flags, cover, lost };
 }

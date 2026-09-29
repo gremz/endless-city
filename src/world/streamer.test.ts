@@ -3,7 +3,7 @@ import { LOAD_RADIUS } from '../core/config';
 import { CollisionWorld } from '../physics/CollisionWorld';
 import { chunkKey } from './chunkMath';
 import { BrushWriter } from './gen/BrushWriter';
-import type { ChunkData } from './gen/ChunkData';
+import { glassPieces, type ChunkData } from './gen/ChunkData';
 import { SyncChunkSource, WorldStreamer } from './WorldStreamer';
 
 function emptyChunk(seed: number, cx: number, cz: number): ChunkData {
@@ -28,7 +28,8 @@ function emptyChunk(seed: number, cx: number, cz: number): ChunkData {
     pickups: new Float32Array(0),
     vehicles: new Float32Array(0),
     doors: new Float32Array(0),
-    glass: new Int32Array(0),
+    pieces: glassPieces([]),
+    navPatch: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   };

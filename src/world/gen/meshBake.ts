@@ -359,97 +359,129 @@ function emitSide(
   }
 }
 
-/** Build per-material render meshes (chunk-local positions) from packed brushes. */
-export function bakeMeshes(brushes: Int32Array): MeshData[] {
-  const builders: (Builder | null)[] = new Array(MATERIAL_COUNT).fill(null);
-  const n = brushes.length / BRUSH_STRIDE;
-  const info: BrushInfo = { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0, material: 0, tile: 1, tint: 0, ao: true, r: 1, g: 1, b: 1 };
+/** Emit brush i into the builder for its material. Returns [builder, first index], or null if not rendered. */
+function emitBrush(builders: (Builder | null)[], brushes: Int32Array, i: number, info: BrushInfo): [Builder, number] | null {
+  const o = i * BRUSH_STRIDE;
+  const word = brushes[o + 6];
+  if ((wordContents(word) & Contents.VISIBLE) === 0) return null;
+  const material = wordMaterial(word);
+  const ramp = wordRamp(word);
+  const tint = brushes[o + 7];
+  info.x0 = brushes[o] / 100;
+  info.y0 = brushes[o + 1] / 100;
+  info.z0 = brushes[o + 2] / 100;
+  info.x1 = brushes[o + 3] / 100;
+  info.y1 = brushes[o + 4] / 100;
+  info.z1 = brushes[o + 5] / 100;
+  info.material = material;
+  info.tile = MATERIAL_TILE[material] ?? 2;
+  info.tint = tint;
+  info.ao = !NO_AO.has(material);
+  const palette = PALETTES[material];
+  if (palette) {
+    const c = palette[tint % palette.length];
+    const k = SHADED.has(material) ? 0.86 + 0.14 * (((tint >> 3) & 15) / 15) : 1;
+    info.r = c[0] * k;
+    info.g = c[1] * k;
+    info.b = c[2] * k;
+  } else {
+    const v = 0.84 + 0.16 * (tint / 255);
+    const warm = ((tint * 7) % 11) / 11 - 0.5;
+    info.r = v * (1 + warm * 0.04);
+    info.g = v;
+    info.b = v * (1 - warm * 0.04);
+  }
+  let bld = builders[material];
+  if (!bld) bld = builders[material] = new Builder();
+  const first = bld.idx.length;
 
-  for (let i = 0; i < n; i++) {
-    const o = i * BRUSH_STRIDE;
-    const word = brushes[o + 6];
-    if ((wordContents(word) & Contents.VISIBLE) === 0) continue;
-    const material = wordMaterial(word);
-    const ramp = wordRamp(word);
-    const tint = brushes[o + 7];
-    info.x0 = brushes[o] / 100;
-    info.y0 = brushes[o + 1] / 100;
-    info.z0 = brushes[o + 2] / 100;
-    info.x1 = brushes[o + 3] / 100;
-    info.y1 = brushes[o + 4] / 100;
-    info.z1 = brushes[o + 5] / 100;
-    info.material = material;
-    info.tile = MATERIAL_TILE[material] ?? 2;
-    info.tint = tint;
-    info.ao = !NO_AO.has(material);
-    const palette = PALETTES[material];
-    if (palette) {
-      const c = palette[tint % palette.length];
-      const k = SHADED.has(material) ? 0.86 + 0.14 * (((tint >> 3) & 15) / 15) : 1;
-      info.r = c[0] * k;
-      info.g = c[1] * k;
-      info.b = c[2] * k;
-    } else {
-      const v = 0.84 + 0.16 * (tint / 255);
-      const warm = ((tint * 7) % 11) / 11 - 0.5;
-      info.r = v * (1 + warm * 0.04);
-      info.g = v;
-      info.b = v * (1 - warm * 0.04);
-    }
-    let bld = builders[material];
-    if (!bld) bld = builders[material] = new Builder();
-
-    const { x0, y0, z0, x1, y1, z1 } = info;
-    // Top heights at the 4 corners (00, 10, 11, 01 in x/z).
-    let t00 = y1;
-    let t10 = y1;
-    let t11 = y1;
-    let t01 = y1;
-    switch (ramp) {
-      case Ramp.PosX:
-        t00 = t01 = y0;
-        break;
-      case Ramp.NegX:
-        t10 = t11 = y0;
-        break;
-      case Ramp.PosZ:
-        t00 = t10 = y0;
-        break;
-      case Ramp.NegZ:
-        t01 = t11 = y0;
-        break;
-    }
-
-    // Top (flat or sloped).
-    let tnx = 0;
-    let tny = 1;
-    let tnz = 0;
-    if (ramp !== Ramp.None) {
-      const h = y1 - y0;
-      if (ramp === Ramp.PosX) tnx = -h / (x1 - x0);
-      else if (ramp === Ramp.NegX) tnx = h / (x1 - x0);
-      else if (ramp === Ramp.PosZ) tnz = -h / (z1 - z0);
-      else tnz = h / (z1 - z0);
-      const l = Math.hypot(tnx, 1, tnz);
-      tnx /= l;
-      tny = 1 / l;
-      tnz /= l;
-    }
-    emit(bld, info, [[x0, t00, z0], [x1, t10, z0], [x1, t11, z1], [x0, t01, z1]], tnx, tny, tnz, false);
-
-    // Bottom only for floating brushes.
-    if (y0 > 0.001) emit(bld, info, [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], 0, -1, 0, false);
-
-    // Sides.
-    emitSide(bld, info, x0, z0, x1, z0, t00, t10, 0, -1); // -Z
-    emitSide(bld, info, x1, z1, x0, z1, t11, t01, 0, 1); // +Z
-    emitSide(bld, info, x0, z1, x0, z0, t01, t00, -1, 0); // -X
-    emitSide(bld, info, x1, z0, x1, z1, t10, t11, 1, 0); // +X
+  const { x0, y0, z0, x1, y1, z1 } = info;
+  // Top heights at the 4 corners (00, 10, 11, 01 in x/z).
+  let t00 = y1;
+  let t10 = y1;
+  let t11 = y1;
+  let t01 = y1;
+  switch (ramp) {
+    case Ramp.PosX:
+      t00 = t01 = y0;
+      break;
+    case Ramp.NegX:
+      t10 = t11 = y0;
+      break;
+    case Ramp.PosZ:
+      t00 = t10 = y0;
+      break;
+    case Ramp.NegZ:
+      t01 = t11 = y0;
+      break;
   }
 
+  // Top (flat or sloped).
+  let tnx = 0;
+  let tny = 1;
+  let tnz = 0;
+  if (ramp !== Ramp.None) {
+    const h = y1 - y0;
+    if (ramp === Ramp.PosX) tnx = -h / (x1 - x0);
+    else if (ramp === Ramp.NegX) tnx = h / (x1 - x0);
+    else if (ramp === Ramp.PosZ) tnz = -h / (z1 - z0);
+    else tnz = h / (z1 - z0);
+    const l = Math.hypot(tnx, 1, tnz);
+    tnx /= l;
+    tny = 1 / l;
+    tnz /= l;
+  }
+  emit(bld, info, [[x0, t00, z0], [x1, t10, z0], [x1, t11, z1], [x0, t01, z1]], tnx, tny, tnz, false);
+
+  // Bottom only for floating brushes.
+  if (y0 > 0.001) emit(bld, info, [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], 0, -1, 0, false);
+
+  // Sides.
+  emitSide(bld, info, x0, z0, x1, z0, t00, t10, 0, -1); // -Z
+  emitSide(bld, info, x1, z1, x0, z1, t11, t01, 0, 1); // +Z
+  emitSide(bld, info, x0, z1, x0, z0, t01, t00, -1, 0); // -X
+  emitSide(bld, info, x1, z0, x1, z1, t10, t11, 1, 0); // +X
+  return [bld, first];
+}
+
+const newInfo = (): BrushInfo => ({ x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0, material: 0, tile: 1, tint: 0, ao: true, r: 1, g: 1, b: 1 });
+
+function finishAll(builders: (Builder | null)[]): MeshData[] {
   const out: MeshData[] = [];
   builders.forEach((b, m) => {
     if (b && b.vertexCount > 0) out.push(b.finish(m));
+  });
+  return out;
+}
+
+/** Build per-material render meshes (chunk-local positions) from packed brushes, leaving out `skip`. */
+export function bakeMeshes(brushes: Int32Array, skip?: ReadonlySet<number>): MeshData[] {
+  const builders: (Builder | null)[] = new Array(MATERIAL_COUNT).fill(null);
+  const n = brushes.length / BRUSH_STRIDE;
+  const info = newInfo();
+  for (let i = 0; i < n; i++) if (!skip?.has(i)) emitBrush(builders, brushes, i, info);
+  return finishAll(builders);
+}
+
+/**
+ * Per-material meshes of chunk pieces (brush indices), drawn apart from the chunk so a piece can
+ * vanish: each mesh lists its pieces' index ranges in `pieces`.
+ */
+export function bakePieceMeshes(brushes: Int32Array, pieces: readonly number[]): MeshData[] {
+  const builders: (Builder | null)[] = new Array(MATERIAL_COUNT).fill(null);
+  const ranges = new Map<Builder, number[]>();
+  const info = newInfo();
+  for (const i of pieces) {
+    const at = emitBrush(builders, brushes, i, info);
+    if (!at) continue;
+    const [bld, first] = at;
+    let list = ranges.get(bld);
+    if (!list) ranges.set(bld, (list = []));
+    list.push(i, first, bld.idx.length - first);
+  }
+  const out: MeshData[] = [];
+  builders.forEach((b, m) => {
+    if (b && b.vertexCount > 0) out.push({ ...b.finish(m), pieces: new Int32Array(ranges.get(b) ?? []) });
   });
   return out;
 }

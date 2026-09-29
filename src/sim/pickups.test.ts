@@ -40,7 +40,8 @@ function setup(spots: [number, number][] = []) {
     pickups: new Float32Array(spots.flatMap(([x, z]) => [x, 0.02, z])),
     vehicles: new Float32Array(0),
     doors: new Float32Array(0),
-    glass: new Int32Array(0),
+    pieces: new Int32Array(0),
+    navPatch: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   } satisfies ChunkData;
@@ -207,13 +208,13 @@ describe('inventory drops', () => {
     expect(left[0].item).toMatchObject({ grenade: 'flashbang', count: 1 });
   });
 
-  it('walking over a gun for an empty slot takes it without switching', () => {
+  it('walking over a primary for an empty slot takes it and draws it', () => {
     const { sim, pickups } = setup();
     pickups.drop(5.3, 0, 5, { kind: 'weapon', weapon: 'm4a4', clip: 7, reserve: 9 });
     run(sim, 0.1);
     expect(sim.player.inv.primary).toMatchObject({ clip: 7, reserve: 9 });
     expect(sim.player.inv.primary!.def.id).toBe('m4a4');
-    expect(sim.player.inv.active).toBe('secondary');
+    expect(sim.player.inv.active).toBe('primary');
     expect(pickups.items).toHaveLength(0);
   });
 

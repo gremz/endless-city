@@ -13,8 +13,8 @@ export const PLAYER_FILE = 'models/characters/player.glb';
 /** Generated stand-in with the same rig and clips (`npm run models:placeholder`). */
 export const PLACEHOLDER_FILE = 'models/characters/placeholder.glb';
 
-/** Bot factions: armoured bots are terrorists, the rest gang members. */
-export type BotGroup = 'gang' | 'terrorist';
+/** Bot factions: armoured bots are terrorists, the rest gang members. Civilians are the pedestrians. */
+export type BotGroup = 'gang' | 'terrorist' | 'civilian';
 
 /**
  * Bot models, generated from the static meshes in art/characters/bots (`npm run models:bots`).
@@ -30,6 +30,12 @@ export const BOT_MODELS: readonly { id: string; source: string; group: BotGroup;
     ['Terrorist_Urban', 'terrorist'],
     ['Terrorist_Desert', 'terrorist'],
     ['Terrorist_Gasmask', 'terrorist'],
+    ['Civ_Office', 'civilian'],
+    ['Civ_Jogger', 'civilian'],
+    ['Civ_Elderly', 'civilian'],
+    ['Civ_Tourist', 'civilian'],
+    ['Civ_Student', 'civilian'],
+    ['Civ_Worker', 'civilian'],
   ] as const
 ).map(([source, group]) => ({ id: source.toLowerCase(), source, group, file: `models/characters/bots/${source.toLowerCase()}.glb` }));
 
@@ -140,7 +146,7 @@ export const MATERIALS = { uniform: 'Uniform', skin: 'Skin' } as const;
 /** Gear objects shown only when the actor has the item. */
 export const GEAR = { helmet: 'Helmet', vest: 'Vest' } as const;
 
-export type LookId = 'bot' | 'dummy' | 'elite' | 'ally';
+export type LookId = 'bot' | 'dummy' | 'elite' | 'ally' | 'civ';
 
 /** Box-bot palettes per look: [head, torso, stomach, legs, arms, gun]. */
 export const BOX_LOOKS: Record<LookId, readonly string[]> = {
@@ -149,6 +155,8 @@ export const BOX_LOOKS: Record<LookId, readonly string[]> = {
   elite: ['#26282b', '#2b3036', '#25292e', '#383c42', '#2b3036', '#141414'],
   /** Other players (co-op). */
   ally: ['#2f3f52', '#35577a', '#2f4a66', '#3a4f63', '#35577a', '#1d1d1d'],
+  /** Pedestrians. */
+  civ: ['#c89a78', '#b5645a', '#8a6a5a', '#4a5a78', '#b5645a', '#1d1d1d'],
 };
 
 /** Multiplied into the `Uniform` material's colour. */
@@ -157,6 +165,7 @@ export const UNIFORM_TINT: Record<LookId, string> = {
   dummy: '#e6d3a8',
   elite: '#50555e',
   ally: '#5f8fc4',
+  civ: '#c7a987',
 };
 
 export const BUDGET = {

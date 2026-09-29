@@ -1,4 +1,4 @@
-import type { Actor } from '../../sim/Actor';
+import { Team, type Actor, type TeamId } from '../../sim/Actor';
 import type { CharacterAsset } from './CharacterAssets';
 import type { BotGroup } from './characterSpec';
 
@@ -17,12 +17,15 @@ function hashId(id: number): number {
 }
 
 /**
- * Which variant an actor is drawn with: armoured actors from the terrorists, the rest from the
- * gang (any variant if its group has none), chosen by id.
+ * Which variant an actor is drawn with: civilians from the civilians, armoured actors from the
+ * terrorists, the rest from the gang, chosen by id. A group with no models falls back to the
+ * gang (civilians), or to any variant.
  */
-export function pickVariant(a: Pick<Actor, 'id' | 'armor'>, groups: readonly (BotGroup | undefined)[]): number {
-  const want: BotGroup = a.armor > 0 ? 'terrorist' : 'gang';
-  let candidates = groups.flatMap((g, i) => (g === want ? [i] : []));
+export function pickVariant(a: Pick<Actor, 'id' | 'armor'> & { team?: TeamId }, groups: readonly (BotGroup | undefined)[]): number {
+  const want: BotGroup = a.team === Team.Civilian ? 'civilian' : a.armor > 0 ? 'terrorist' : 'gang';
+  const of = (g: BotGroup) => groups.flatMap((x, i) => (x === g ? [i] : []));
+  let candidates = of(want);
+  if (!candidates.length && want === 'civilian') candidates = of('gang');
   if (!candidates.length) candidates = groups.map((_, i) => i);
   return candidates[hashId(a.id) % candidates.length];
 }

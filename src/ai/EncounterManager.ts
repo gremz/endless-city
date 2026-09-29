@@ -672,6 +672,11 @@ export class EncounterManager implements SimSystem {
     return out;
   }
 
+  /** A squad is out in this chunk (pedestrians keep away). */
+  fighting(key: number): boolean {
+    return !!this.states.get(key)?.squad;
+  }
+
   isCleared(key: number): boolean {
     return this.states.get(key)?.cleared ?? false;
   }

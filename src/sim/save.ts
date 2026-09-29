@@ -4,12 +4,13 @@ import { addGrenades, emptyNades, makeWeaponState, type Inventory, type WeaponIt
 import { GRENADE_IDS, isGrenadeId, WEAPONS, type GrenadeId, type WeaponId, type WeaponSlot } from '../weapons/weaponDefs';
 import type { Actor } from './Actor';
 import { MAX_MONEY } from './Economy';
+import { BREACH_MAX } from './breach';
 import { MEDKIT_MAX } from './medkit';
 import type { PickupItem, PickupManager, PickupSave, SavedPickup } from './Pickups';
 import type { Simulation } from './Simulation';
 import { VEHICLE_HEALTH } from './vehicle/Vehicle';
 import type { DoorRecord } from './Doors';
-import type { PaneRef } from './Glass';
+import type { PieceRef } from './Pieces';
 import type { SavedVehicle, VehicleSave, Vehicles } from './vehicle/Vehicles';
 
 export const SAVE_VERSION = 1;
@@ -30,6 +31,8 @@ export interface SavedPlayer {
   armor: number;
   helmet: boolean;
   medkits: number;
+  /** Breaching charges (absent in older saves). */
+  breachCharges?: number;
   primary: SavedWeapon | null;
   secondary: SavedWeapon | null;
   active: WeaponSlot;
@@ -60,7 +63,8 @@ export interface SaveData {
   /** Doors that were opened, damaged or broken (absent in older saves). */
   doors?: DoorRecord[];
   /** Broken window panes (absent in older saves). */
-  glass?: PaneRef[];
+  /** Destroyed chunk pieces (older saves call this `glass`: panes were the only pieces). */
+  pieces?: PieceRef[];
   /** Chunk keys seen on the city map. */
   explored: number[];
   /** Where the guided opening had got to (an objective step name; absent in older saves). */
@@ -102,6 +106,7 @@ export function captureSave(
       armor: p.armor,
       helmet: p.helmet,
       medkits: p.medkits,
+      breachCharges: p.breachCharges,
       primary: savedWeapon(p.inv.primary),
       secondary: savedWeapon(p.inv.secondary),
       active: p.inv.active,
@@ -111,7 +116,7 @@ export function captureSave(
     pickups: pickups.serialize(),
     vehicles: vehicles?.serialize() ?? { taken: [], cars: [] },
     doors: sim.doors.list(),
-    glass: sim.glass.list(),
+    pieces: sim.pieces.list(),
     explored: [...explored],
   };
 }
@@ -136,7 +141,7 @@ export function applyWorldSave(
   pickups.restore(save.pickups, owner);
   if (save.vehicles) vehicles?.restore(save.vehicles);
   sim.doors.restore(save.doors ?? []);
-  sim.glass.restore(save.glass ?? []);
+  sim.pieces.restore(save.pieces ?? []);
 }
 
 /**
@@ -151,6 +156,7 @@ export function applyPlayerSave(s: SavedPlayer, p: Actor, money: number): void {
   p.armor = s.armor;
   p.helmet = s.helmet;
   p.medkits = s.medkits;
+  p.breachCharges = s.breachCharges ?? 0;
   p.healEnd = -1;
   const item = (w: SavedWeapon | null): WeaponItem | null => (w ? { def: WEAPONS[w.id], clip: w.clip, reserve: w.reserve } : null);
   const inv: Inventory = {
@@ -265,12 +271,12 @@ function doorSave(v: unknown): DoorRecord[] {
   });
 }
 
-function glassSave(v: unknown): PaneRef[] {
+function pieceSave(v: unknown): PieceRef[] {
   if (v === undefined) return [];
-  if (!Array.isArray(v)) throw new Invalid('glass');
+  if (!Array.isArray(v)) throw new Invalid('pieces');
   return v.map((r) => {
-    if (!Array.isArray(r) || r.length !== 2) throw new Invalid('pane');
-    return [need(int(r[0]), 'pane'), need(int(r[1]), 'pane')];
+    if (!Array.isArray(r) || r.length !== 2) throw new Invalid('piece');
+    return [need(int(r[0]), 'piece'), need(int(r[1]), 'piece')];
   });
 }
 
@@ -295,6 +301,7 @@ export function validateSave(raw: unknown): SaveData | null {
       armor: clamp(need(num(p.armor), 'armor'), 0, 100),
       helmet: p.helmet === true,
       medkits: clamp(need(int(p.medkits), 'medkits'), 0, MEDKIT_MAX),
+      breachCharges: p.breachCharges === undefined ? 0 : clamp(need(int(p.breachCharges), 'breachCharges'), 0, BREACH_MAX),
       primary: weapon(p.primary, 'primary'),
       secondary: weapon(p.secondary, 'secondary'),
       active,
@@ -346,7 +353,7 @@ export function validateSave(raw: unknown): SaveData | null {
       pickups: { taken, drops },
       vehicles: vehicleSave(raw.vehicles),
       doors: doorSave(raw.doors),
-      glass: glassSave(raw.glass),
+      pieces: pieceSave(raw.pieces ?? raw.glass),
       explored: intList(raw.explored ?? [], 'explored'),
       ...(typeof raw.tutorial === 'string' && raw.tutorial.length <= 16 ? { tutorial: raw.tutorial } : {}),
     };

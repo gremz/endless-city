@@ -3,9 +3,10 @@ import { hash3, randRange, Salt, sfc32 } from '../../core/rng';
 import { Contents, Ramp, SOLID } from '../../physics/brush';
 import { chunkKey } from '../chunkMath';
 import { BrushWriter } from './BrushWriter';
+import { breachOpening, wall } from './buildings';
 import { District, Material, type ChunkData } from './ChunkData';
-import { vehicleSpawns } from './generateChunk';
-import { bakeMeshes } from './meshBake';
+import { pieceRecords, vehicleSpawns } from './generateChunk';
+import { bakeMeshes, bakePieceMeshes } from './meshBake';
 
 const FLOOR = SOLID | Contents.FLOOR;
 
@@ -17,8 +18,9 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
   w.box(0, -1, 0, CHUNK, 0, CHUNK, Material.Dev, FLOOR, 128);
 
   const glass: number[] = [];
+  const plugs: number[] = [];
   if (cx === 0 && cz === 0) buildCourse(w);
-  else if (cx === 1 && cz === 0) buildRange(w, glass);
+  else if (cx === 1 && cz === 0) buildRange(w, glass, plugs);
   else {
     const r = sfc32(hash3(seed, cx, cz, Salt.Layout));
     const n = 6 + Math.floor(r() * 8);
@@ -45,7 +47,8 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     key: chunkKey(cx, cz),
     seed,
     brushes,
-    meshes: bakeMeshes(brushes),
+    meshes: bakeMeshes(brushes, new Set(plugs)),
+    ...(plugs.length ? { pieceMeshes: bakePieceMeshes(brushes, plugs) } : {}),
     district: District.Gym,
     landmark: 0,
     level: 0,
@@ -63,7 +66,8 @@ export function generateGymChunk(seed: number, cx: number, cz: number): ChunkDat
     vehicles: cx === 0 && cz === 0 ? vehicleSpawns([{ style: { paint: 5, hatch: false, flip: false, look: 'intact' }, alongX: false, lane: 46, at: 12, y: 0 }], cx, cz) : new Float32Array(0),
     // The range's doorway gets a door (open it, kick it, shoot through it).
     doors: cx === 1 && cz === 0 ? new Float32Array([CHUNK + 30.15, 0, 54.8, 0, 1.6, 2.4, 0, 1]) : new Float32Array(0),
-    glass: new Int32Array(glass),
+    pieces: pieceRecords(glass, plugs, null),
+    navPatch: new Int32Array(0),
     hasEncounter: false,
     genMs: performance.now() - t0,
   };
@@ -117,7 +121,7 @@ function buildCourse(w: BrushWriter): void {
   w.ramp(52.1, 0, 48, 56, 2.6, 50.4, Ramp.NegX, Material.Metal, FLOOR, 4);
 }
 
-function buildRange(w: BrushWriter, glass: number[]): void {
+function buildRange(w: BrushWriter, glass: number[], plugs: number[]): void {
   // Shooting range: back wall, lane dividers, a doorway wall to test through-door shots.
   w.box(60, 0, 4, 60.5, 5, 60, Material.Concrete, SOLID, 128);
   for (let i = 0; i < 4; i++) w.box(10, 0, 12 + i * 12, 60, 1, 12.3 + i * 12, Material.Concrete, SOLID, 110);
@@ -132,4 +136,9 @@ function buildRange(w: BrushWriter, glass: number[]): void {
     w.box(24.13, 1, z, 24.17, 2.4, z + 2, Material.Glass, Contents.GLASS);
     glass.push(w.count - 1);
   }
+  // Two walls with bricked-up doorways to blow open with a breaching charge: a thick brick one
+  // and a thin plaster partition.
+  const mid = () => 0.5;
+  wall(w, false, 50, 58, 44, 44.3, 0, 3, [breachOpening(mid, 53.25, Material.Brick)], Material.Brick, 120, SOLID, null, null, plugs);
+  wall(w, false, 50, 58, 50, 50.15, 0, 3, [breachOpening(mid, 53.25, Material.Plaster)], Material.Plaster, 160, SOLID | Contents.PENETRABLE, null, null, plugs);
 }

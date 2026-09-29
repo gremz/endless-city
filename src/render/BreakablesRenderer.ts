@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Door } from '../sim/Doors';
 import { DoorState } from '../sim/Doors';
 import type { Simulation } from '../sim/Simulation';
-import { BRUSH_STRIDE, Material, type ChunkData } from '../world/gen/ChunkData';
+import { BRUSH_STRIDE, Material, PieceKind, piecesOfKind, type ChunkData } from '../world/gen/ChunkData';
 import type { StreamerListener } from '../world/WorldStreamer';
 import type { MaterialLibrary } from './materials';
 
@@ -23,7 +23,7 @@ export class BreakablesRenderer implements StreamerListener {
   private metal: THREE.InstancedMesh;
   private glassMat = new THREE.MeshLambertMaterial({ color: '#a9cfe0', emissive: '#1b2a33', transparent: true, opacity: 0.32, depthWrite: false });
   private paneGeo = new THREE.BoxGeometry(1, 1, 1);
-  private panes = new Map<number, { mesh: THREE.InstancedMesh; index: Int32Array; matrices: THREE.Matrix4[] }>();
+  private panes = new Map<number, { mesh: THREE.InstancedMesh; index: number[]; matrices: THREE.Matrix4[] }>();
   private glassVersion = -1;
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -59,14 +59,15 @@ export class BreakablesRenderer implements StreamerListener {
 
   onChunkLoaded(d: ChunkData, visible: boolean): void {
     this.onChunkUnloaded(d.key);
-    if (!d.glass.length) return;
-    const n = d.glass.length;
+    const glass = piecesOfKind(d, PieceKind.Glass);
+    if (!glass.length) return;
+    const n = glass.length;
     const mesh = new THREE.InstancedMesh(this.paneGeo, this.glassMat, n);
     const ox = d.cx * 64;
     const oz = d.cz * 64;
     const matrices: THREE.Matrix4[] = [];
     for (let k = 0; k < n; k++) {
-      const o = d.glass[k] * BRUSH_STRIDE;
+      const o = glass[k] * BRUSH_STRIDE;
       const b = d.brushes;
       this.pos.set(ox + (b[o] + b[o + 3]) / 200, (b[o + 1] + b[o + 4]) / 200, oz + (b[o + 2] + b[o + 5]) / 200);
       this.scale.set((b[o + 3] - b[o]) / 100, (b[o + 4] - b[o + 1]) / 100, (b[o + 5] - b[o + 2]) / 100);
@@ -77,7 +78,7 @@ export class BreakablesRenderer implements StreamerListener {
     mesh.visible = visible;
     mesh.renderOrder = 2;
     this.root.add(mesh);
-    this.panes.set(d.key, { mesh, index: d.glass, matrices });
+    this.panes.set(d.key, { mesh, index: glass, matrices });
     this.glassVersion = -1;
   }
 
@@ -96,10 +97,10 @@ export class BreakablesRenderer implements StreamerListener {
 
   update(sim: Simulation, simTime: number): void {
     // Glass: resync broken panes when anything broke.
-    if (sim.glass.version !== this.glassVersion) {
-      this.glassVersion = sim.glass.version;
+    if (sim.pieces.version !== this.glassVersion) {
+      this.glassVersion = sim.pieces.version;
       for (const [key, p] of this.panes) {
-        for (let k = 0; k < p.index.length; k++) p.mesh.setMatrixAt(k, sim.glass.isBroken(key, p.index[k]) ? this.zero : p.matrices[k]);
+        for (let k = 0; k < p.index.length; k++) p.mesh.setMatrixAt(k, sim.pieces.isBroken(key, p.index[k]) ? this.zero : p.matrices[k]);
         p.mesh.instanceMatrix.needsUpdate = true;
       }
     }

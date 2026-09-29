@@ -6,7 +6,7 @@ import type { Pickup, PickupItem } from '../sim/Pickups';
 import type { Vehicle } from '../sim/vehicle/Vehicle';
 import type { Inventory, WeaponState } from '../weapons/Inventory';
 import type { DoorRecord } from '../sim/Doors';
-import type { PaneRef } from '../sim/Glass';
+import type { PieceRef } from '../sim/Pieces';
 import type { BuyItem, GrenadeId, WeaponId, WeaponSlot } from '../weapons/weaponDefs';
 
 /**
@@ -61,7 +61,7 @@ export type ServerMsg =
   | { t: 'roster'; add: [id: number, name: string, team: number, dummy: boolean][] }
   | { t: 'ev'; e: SimEvent[] }
   | { t: 'pickups'; items: NetPickup[] }
-  | { t: 'world'; cleared: number[]; enc: NetEncounter[]; doors: DoorRecord[]; glass: PaneRef[] }
+  | { t: 'world'; cleared: number[]; enc: NetEncounter[]; doors: DoorRecord[]; pieces: PieceRef[] }
   | { t: 'chat'; from: string; text: string }
   /** Per player: actor id, name, kills, deaths, money. */
   | { t: 'scores'; s: [id: number, name: string, kills: number, deaths: number, money: number][] };
@@ -333,6 +333,8 @@ export interface PrivateState {
   money: number;
   medkits: number;
   healEnd: number;
+  /** Breaching charges carried, and when the one being planted is in place (-1: not planting). */
+  breach: [charges: number, plantEnd: number];
   flash: [start: number, until: number, peak: number];
   combat: [lastDamagedAt: number, lastDealtAt: number, lastAttacker: number];
   inv: NetInv;
@@ -469,6 +471,7 @@ export function privateState(a: Actor, swap: number): PrivateState {
     money: a.money,
     medkits: a.medkits,
     healEnd: a.healEnd,
+    breach: [a.breachCharges, a.plantEnd],
     flash: [a.flashStart, a.flashUntil, a.flashPeak],
     combat: [a.lastDamagedAt, a.lastDealtAt, a.lastAttacker],
     inv: netInv(a.inv),

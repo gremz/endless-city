@@ -56,7 +56,8 @@ function flatWorld(boxes: [number, number, number, number, number, number][] = [
     pickups: new Float32Array(0),
     vehicles: new Float32Array(0),
     doors: new Float32Array(0),
-    glass: new Int32Array(0),
+    pieces: new Int32Array(0),
+    navPatch: new Int32Array(0),
     hasEncounter: false as boolean,
     genMs: 0,
   } satisfies ChunkData;
@@ -372,7 +373,7 @@ describe('bots in landmark buildings', () => {
         sim.world.addChunk(c.key, brushesFromPacked(c.brushes, c.cx, c.cz, c.key));
         sim.nav.onChunkLoaded(c);
         sim.doors.onChunkLoaded(c);
-        sim.glass.onChunkLoaded(c);
+        sim.pieces.onChunkLoaded(c);
       }
     }
     // The top floor's window spot (the roof is higher): only the stairs lead there.
@@ -648,7 +649,7 @@ describe('opening ambush', () => {
         sim.world.addChunk(c.key, brushesFromPacked(c.brushes, c.cx, c.cz, c.key));
         sim.nav.onChunkLoaded(c);
         sim.doors.onChunkLoaded(c);
-        sim.glass.onChunkLoaded(c);
+        sim.pieces.onChunkLoaded(c);
         resident.set(c.key, { data: c, visible: true });
       }
     }

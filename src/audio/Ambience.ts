@@ -1,6 +1,7 @@
 /**
  * Weather and night ambience, synthesized live: a looping filtered-noise rain bed (muffled
- * indoors), a slow wind bed at night and sparse cricket chirps on dry nights. Thunder is a
+ * indoors), a slow wind bed at night, a splashing bed near fountains and sparse cricket chirps
+ * on dry nights. Thunder is a
  * one-shot recipe played by the audio engine.
  */
 export class Ambience {
@@ -9,6 +10,8 @@ export class Ambience {
   private rainFilter: BiquadFilterNode;
   private windGain: GainNode;
   private windFilter: BiquadFilterNode;
+  private fountainGain: GainNode;
+  private fountain = 0;
   private nextChirp = 0;
   private rain = 0;
   private night = 0;
@@ -70,6 +73,28 @@ export class Ambience {
     this.windGain.gain.value = 0;
     windSrc.connect(this.windFilter).connect(this.windGain).connect(this.out);
     windSrc.start();
+
+    // Fountain: brighter noise, band-passed around the splash, with a slow churn in the level.
+    const fountainSrc = ctx.createBufferSource();
+    fountainSrc.buffer = buf;
+    fountainSrc.loop = true;
+    fountainSrc.playbackRate.value = 1.3;
+    const fountainBand = ctx.createBiquadFilter();
+    fountainBand.type = 'bandpass';
+    fountainBand.frequency.value = 2200;
+    fountainBand.Q.value = 0.45;
+    const churn = ctx.createGain();
+    churn.gain.value = 1;
+    const churnLfo = ctx.createOscillator();
+    churnLfo.frequency.value = 0.31;
+    const churnDepth = ctx.createGain();
+    churnDepth.gain.value = 0.18;
+    churnLfo.connect(churnDepth).connect(churn.gain);
+    churnLfo.start();
+    this.fountainGain = ctx.createGain();
+    this.fountainGain.gain.value = 0;
+    fountainSrc.connect(fountainBand).connect(churn).connect(this.fountainGain).connect(this.out);
+    fountainSrc.start();
   }
 
   /** Rain amount, darkness (0..1) and whether the listener is under a roof. */
@@ -84,9 +109,20 @@ export class Ambience {
     this.windGain.gain.setTargetAtTime((night * 0.12 + rain * 0.1) * on, t, 1.5);
   }
 
+  /** Fountain loudness, 0..1 (from the distance to the nearest one). */
+  setFountain(level: number): void {
+    if (Math.abs(level - this.fountain) < 0.01) return;
+    this.fountain = level;
+    const on = this.paused ? 0.3 : 1;
+    this.fountainGain.gain.setTargetAtTime(level * level * 0.10 * on, this.ctx.currentTime, 0.3);
+  }
+
   setPaused(p: boolean): void {
     this.paused = p;
     this.set(this.rain, this.night, this.indoor);
+    const f = this.fountain;
+    this.fountain = -1;
+    this.setFountain(f);
   }
 
   /** Crickets on dry nights; call every frame. */

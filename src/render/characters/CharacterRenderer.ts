@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import type { SimEvent } from '../../core/events';
+import { FOG_FAR } from '../../core/config';
 import { lerp } from '../../core/math';
-import { Team, type Actor } from '../../sim/Actor';
+import { Team, unarmed, type Actor } from '../../sim/Actor';
 import type { WeaponId } from '../../weapons/weaponDefs';
 import type { ActorRenderer } from '../BotRenderer';
 import { getGunModel } from '../viewmodel/gunMeshes';
@@ -11,7 +12,7 @@ import type { CharacterAsset } from './CharacterAssets';
 import { CLIP_BY_NAME, GEAR, HOLD_BY_CATEGORY, NODES, READY_HOLD, type LookId } from './characterSpec';
 import { pickVariant, type CharacterVariant } from './variants';
 
-const MAX = 48;
+const MAX = 64;
 /** Weight blend time between clips (s), and a quicker one into death. */
 const FADE = 0.15;
 const DEATH_FADE = 0.08;
@@ -20,6 +21,8 @@ const LOD_DIST = 50;
 const LOD_STEP = 3;
 /** Always animate characters this close (their shadows can fall into view). */
 const NEAR = 8;
+/** Nobody's drawn past the fog. */
+const CULL_DIST = FOG_FAR;
 /** Aim bend limit, and how it splits between Spine and Chest. */
 const MAX_AIM = 1.1;
 /** Long guns drop to the ready carry above this ground speed (m/s)... */
@@ -66,6 +69,10 @@ interface Instance {
   unbent: [THREE.Quaternion, THREE.Quaternion] | null;
   /** Renderer time of the last shot (brings a long gun up from the ready carry). */
   shotAt: number;
+  /** Arm bones with their bind (hanging) rotations, for people with nothing in their hands. */
+  arms: { bone: THREE.Object3D; rest: THREE.Quaternion; upper: number }[];
+  /** The arms as the clips posed them, before letting them hang (see animate). */
+  unhung: THREE.Quaternion[] | null;
 }
 
 /**
@@ -153,6 +160,13 @@ export class CharacterRenderer implements ActorRenderer {
       if (o.name === GEAR.helmet) helmet.push(o);
       if (o.name === GEAR.vest) vest.push(o);
     });
+    const arms: Instance['arms'] = [];
+    for (const side of ['L', 'R'] as const) {
+      for (const part of ['UpperArm', 'LowerArm', 'Hand']) {
+        const bone = find(`${part}_${side}`);
+        if (bone) arms.push({ bone, rest: bone.quaternion.clone(), upper: part === 'UpperArm' ? (side === 'L' ? 1 : -1) : 0 });
+      }
+    }
     const weapon = find(NODES.weapon)!;
     const gun = new THREE.Mesh(undefined, this.gunMaterial);
     gun.rotation.x = Math.PI / 2; // gun -Z (barrel) along the socket's +Y
@@ -219,6 +233,8 @@ export class CharacterRenderer implements ActorRenderer {
       pending: 0,
       unbent: null,
       shotAt: -Infinity,
+      arms,
+      unhung: null,
     };
   }
 
@@ -328,7 +344,7 @@ export class CharacterRenderer implements ActorRenderer {
     const dist = Math.hypot(dx, dz);
     this.sphere.center.set(px, py + 0.9, pz);
     this.sphere.radius = 1.5 + dist * 0.3;
-    const visible = dist < NEAR || this.frustum.intersectsSphere(this.sphere);
+    const visible = dist < NEAR || (dist < CULL_DIST && this.frustum.intersectsSphere(this.sphere));
     inst.obj.visible = visible;
     inst.pending += frameDt;
     if (!visible) {
@@ -344,7 +360,7 @@ export class CharacterRenderer implements ActorRenderer {
   }
 
   private applyLook(a: Actor, inst: Instance): void {
-    const look: LookId = a.dummy ? 'dummy' : a.team === Team.Player ? 'ally' : a.armor > 0 && a.helmet ? 'elite' : 'bot';
+    const look: LookId = a.dummy ? 'dummy' : a.team === Team.Player ? 'ally' : a.team === Team.Civilian ? 'civ' : a.armor > 0 && a.helmet ? 'elite' : 'bot';
     if (inst.look === look) return;
     inst.look = look;
     const looks = this.asset(inst).looks;
@@ -357,7 +373,7 @@ export class CharacterRenderer implements ActorRenderer {
     for (const o of inst.vest) o.visible = a.armor > 0;
     // The gun in hand: whatever slot is active; dead bodies that dropped their guns hold nothing.
     const item = a.inv[a.inv.active];
-    const id = a.captive || (!a.alive && !a.inv.primary && !a.inv.secondary) ? null : (item?.def.id ?? null);
+    const id = unarmed(a) || (!a.alive && !a.inv.primary && !a.inv.secondary) ? null : (item?.def.id ?? null);
     if (id !== inst.gunId) {
       inst.gunId = id;
       inst.gun.visible = id !== null;
@@ -413,7 +429,7 @@ export class CharacterRenderer implements ActorRenderer {
     }
     // Pistols, knives and grenades: swap the rifle hold's arms for the item's own hold. Long guns
     // stay aimed standing still or firing, and drop to the ready carry on the move.
-    const item = a.alive && !a.captive ? a.inv[a.inv.active] : null;
+    const item = a.alive && !unarmed(a) ? a.inv[a.inv.active] : null;
     const moving = Math.hypot(inst.vx, inst.vz) > READY_SPEED;
     const firing = this.time - inst.shotAt < AIM_AFTER_SHOT;
     const hold = item ? (HOLD_BY_CATEGORY[item.def.category] ?? (moving && !firing ? READY_HOLD : undefined)) : undefined;
@@ -429,7 +445,21 @@ export class CharacterRenderer implements ActorRenderer {
       inst.chest?.quaternion.copy(inst.unbent[1]);
       inst.unbent = null;
     }
+    if (inst.unhung) {
+      inst.arms.forEach((arm, i) => arm.bone.quaternion.copy(inst.unhung![i]));
+      inst.unhung = null;
+    }
     inst.mixer.update(dt);
+
+    // Nothing to hold (the clips all carry a gun): arms hang, swinging with the stride.
+    if (a.alive && unarmed(a) && inst.arms.length) {
+      inst.unhung = inst.arms.map((arm) => arm.bone.quaternion.clone());
+      const swing = Math.sin(inst.phase * Math.PI * 2) * Math.min(1, Math.hypot(inst.vx, inst.vz) / 3) * 0.45;
+      for (const arm of inst.arms) {
+        arm.bone.quaternion.copy(arm.rest);
+        if (arm.upper) this.bend(inst, arm.bone, swing * arm.upper);
+      }
+    }
 
     // Aim: bend Spine and Chest about the character's side axis (after the clips have posed them).
     if (a.alive) {

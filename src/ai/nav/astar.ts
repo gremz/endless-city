@@ -162,7 +162,7 @@ export class AStar {
       const l = (gz - oz) % N * N + ((gx - ox) % N);
       for (let s = c.col[l], e = c.col[l + 1]; s < e; s++) {
         const d = c.floor[s] - fcm;
-        if (d <= STEP_CM && d >= -STEP_CM) return slotOff[slot] + s;
+        if (d <= STEP_CM && d >= -STEP_CM && c.flags[s] & NavFlag.Walkable) return slotOff[slot] + s;
       }
       return -1;
     };

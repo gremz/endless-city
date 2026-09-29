@@ -1,6 +1,6 @@
 import { CHUNK } from '../core/config';
 import { fnv1a } from '../core/rng';
-import { DISTRICT_NAMES, LANDMARK_NAMES, NAV_RES, NavFlag } from '../world/gen/ChunkData';
+import { BRUSH_STRIDE, DISTRICT_NAMES, LANDMARK_NAMES, NAV_RES, NavFlag, PieceKind, piecesOfKind } from '../world/gen/ChunkData';
 import { generateChunk } from '../world/gen/generateChunk';
 import { drawChunkTopdown } from '../ui/minimapRaster';
 
@@ -44,10 +44,19 @@ function draw(): void {
             const n = d.navCol[c + 1] - d.navCol[c];
             if (!n || (layer === 'upper' && n < 2)) continue;
             const f = d.navFlags[layer === 'ground' ? d.navCol[c] : d.navCol[c + 1] - 1];
+            // (The floor under a standing breachable plug: not walkable until it's blown.)
+            if (!(f & NavFlag.Walkable)) continue;
             ctx.fillStyle = f & NavFlag.Reachable ? (f & (NavFlag.CoverFull | NavFlag.CoverHalf) ? 'rgba(80,160,255,0.35)' : 'rgba(80,255,120,0.22)') : 'rgba(255,60,60,0.45)';
             ctx.fillRect(ox + i * cell, oz + j * cell, cell, cell);
           }
         }
+      }
+      // Breachable plugs, fattened so thin partitions show.
+      ctx.fillStyle = '#ff9a1f';
+      for (const i of piecesOfKind(d, PieceKind.Breach)) {
+        const o = i * BRUSH_STRIDE;
+        const [x0, z0, x1, z1] = [d.brushes[o] / 100, d.brushes[o + 2] / 100, d.brushes[o + 3] / 100, d.brushes[o + 5] / 100];
+        ctx.fillRect(ox + x0 * PX - 1.5, oz + z0 * PX - 1.5, (x1 - x0) * PX + 3, (z1 - z0) * PX + 3);
       }
       ctx.fillStyle = '#ff4';
       for (let s = 0; s < d.spawns.length; s += 3) {
@@ -68,7 +77,7 @@ function draw(): void {
       if (d.landmark) ctx.fillText(LANDMARK_NAMES[d.landmark], ox + 4, oz + 24);
     }
   }
-  $('info').textContent = `avg gen ${(totalMs / (SPAN * SPAN)).toFixed(1)} ms · ${encounters} encounters · yellow = spawn slots, magenta = perches, red = health packs`;
+  $('info').textContent = `avg gen ${(totalMs / (SPAN * SPAN)).toFixed(1)} ms · ${encounters} encounters · yellow = spawn slots, magenta = perches, red = health packs, orange = breachable walls`;
 }
 
 for (const id of ['seed', 'cx', 'cz', 'nav', 'layer']) $(id).addEventListener('change', draw);

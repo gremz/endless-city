@@ -10,6 +10,7 @@ import { CameraController } from '../player/CameraController';
 import type { EngineSource } from '../audio/Engines';
 import type { Vehicle } from '../sim/vehicle/Vehicle';
 import { ChunkRenderer } from '../render/ChunkRenderer';
+import { FountainRenderer } from '../render/FountainRenderer';
 import { MaterialLibrary } from '../render/materials';
 import { Renderer } from '../render/Renderer';
 import { Atmosphere } from '../render/Atmosphere';
@@ -42,6 +43,7 @@ import { WorkerChunkSource } from '../world/WorkerChunkSource';
 import { SyncChunkSource, WorldStreamer, type ChunkSource } from '../world/WorldStreamer';
 import { Presentation } from './Presentation';
 import { Intro, titleOrbit, type CamPose, type IntroAnchors } from './Intro';
+import { Pedestrians } from '../ai/civilians/Pedestrians';
 import { EncounterManager } from '../ai/EncounterManager';
 import { isBarkVoice, isRecorded, lineSeconds, VOICE_BY_ID, VOICE_LINES, VOICES, voiceFile } from '../ai/voiceLines';
 import { AudioEngine } from '../audio/AudioEngine';
@@ -62,6 +64,7 @@ import type { NetClient } from '../net/NetClient';
 import { Prediction } from '../net/Prediction';
 import { applyPlayerSave, applyWorldSave, captureSave, type SaveData } from '../sim/save';
 import { VehicleRenderer } from '../render/VehicleRenderer';
+import { breachTarget } from '../sim/breach';
 import { DoorState, KICK_SPEED } from '../sim/Doors';
 import { BreakablesRenderer } from '../render/BreakablesRenderer';
 import { carSpeed, forwardSpeed } from '../sim/vehicle/carPhysics';
@@ -135,11 +138,14 @@ export class Game {
   private roofFrom = new THREE.Vector3();
   private roofTo = new THREE.Vector3();
   readonly encounters: EncounterManager | null;
+  /** Ambient civilians (solo: the host runs them in co-op). */
+  readonly pedestrians: Pedestrians | null = null;
   readonly pickups: PickupManager;
   /** Car lifecycle (null online: the host runs it). */
   readonly vehicles: Vehicles | null = null;
   private vehicleRenderer: VehicleRenderer;
   private breakables: BreakablesRenderer;
+  private fountains: FountainRenderer;
   /** Id of the car we were driving last frame (-1 on foot). */
   private drivingId = -1;
   private death: { killer: number; text: string } | null = null;
@@ -206,6 +212,8 @@ export class Game {
     this.renderer.scene.add(this.vehicleRenderer.root);
     this.breakables = new BreakablesRenderer(this.materials, this.settings.shadows > 0);
     this.renderer.scene.add(this.breakables.root);
+    this.fountains = new FountainRenderer();
+    this.renderer.scene.add(this.fountains.root);
 
     const source: ChunkSource =
       params.world === 'city'
@@ -215,8 +223,9 @@ export class Game {
     this.streamer.addListener(this.chunkRenderer);
     this.streamer.addListener(this.sim.nav);
     this.streamer.addListener(this.sim.doors);
-    this.streamer.addListener(this.sim.glass);
+    this.streamer.addListener(this.sim.pieces);
     this.streamer.addListener(this.breakables);
+    this.streamer.addListener(this.fountains);
     this.sim.replica = !!online;
     this.encounters = params.world === 'city' ? new EncounterManager(this.sim, this.streamer) : null;
     this.pickups = new PickupManager(this.sim);
@@ -225,7 +234,12 @@ export class Game {
       this.mirror = new Mirror(this.sim, this.me.id, this.pickups, this.encounters, true);
       this.prediction = new Prediction(this.sim, this.me);
     } else {
-      if (this.encounters) this.sim.systems.push(this.encounters);
+      if (this.encounters) {
+        const enc = this.encounters;
+        this.sim.systems.push(enc);
+        this.pedestrians = new Pedestrians(this.sim, this.streamer, (key) => enc.fighting(key));
+        this.sim.systems.push(this.pedestrians);
+      }
       this.streamer.addListener(this.pickups);
       this.sim.systems.push(this.pickups);
       this.vehicles = new Vehicles(this.sim);
@@ -403,6 +417,12 @@ export class Game {
         };
     this.sim.updateEnv();
     if (this.weather) this.weather.density = s.rainParticles;
+    if (this.pedestrians) {
+      this.pedestrians.density = p.peds ?? s.pedestrians;
+      if (this.pedestrians.density <= 0) this.pedestrians.clear();
+    }
+    // Spray thins out with the particle setting but never quite stops (it's the water, not rain).
+    if (this.fountains) this.fountains.density = 0.4 + 0.6 * s.rainParticles;
     if (this.debug) {
       const want = this.params.debug || s.showFps;
       if (want !== this.debug.visible) this.debug.toggle();
@@ -466,7 +486,9 @@ export class Game {
       d(58, 42, 100, true);
       d(28, 42);
       d(40, 55); // through the doorway
+      d(47, 54); // between the breachable walls
       p.inv = makeInventory('glock', 'ak47');
+      p.breachCharges = 2;
     } else if (this.params.world === 'gym') {
       this.input.yaw = Math.PI; // face +Z (towards the test course)
       this.sim.spawnDummy(32, 0.05, 30, 0, 100, true);
@@ -845,12 +867,15 @@ export class Game {
     const env = this.sim.env;
     this.vehicleRenderer.update(this.sim.vehicles, alpha, this.sim.time, frameMs / 1000, car?.id ?? -1, env.darkness);
     this.breakables.update(this.sim, this.sim.time + alpha * this.sim.dt);
+    this.chunkRenderer.syncPieces(this.sim.pieces);
     this.materials.animate(performance.now() / 1000);
+    this.fountains.update(performance.now() / 1000, frameMs / 1000, cam.position, env.daylight);
     this.atmosphere.update(env, frameMs / 1000, cam, p.alive && p.flashlight && !car);
     this.presentation.setWorldLight(this.atmosphere.viewmodelLight, env.daylight);
     this.presentation.torches = this.botTorches(env.darkness);
     this.weather.update(env.rain, Math.min(frameMs / 1000, 0.1), cam.position);
     this.audio.setAmbience(env.rain, env.darkness, this.roofAt(cam.position.x, cam.position.z) > cam.position.y + 0.3);
+    this.audio.setFountain(Math.max(0, 1 - this.fountains.nearest(cam.position.x, cam.position.y, cam.position.z) / 25));
     // Audio listener follows the camera.
     cam.getWorldDirection(this.fwd);
     this.up.set(0, 1, 0).applyQuaternion(cam.quaternion);
@@ -976,12 +1001,17 @@ export class Game {
     let prompt: string | null = null;
     // E gets into a car before it swaps guns.
     const door = p.alive && p.vehicle < 0 ? this.sim.doors.target(p) : null;
+    const plug = p.alive && p.vehicle < 0 && !door ? breachTarget(this.sim, p) : null;
     if (enterableVehicle(this.sim, p)) prompt = 'Drive';
     else if (door) {
       const running = Math.hypot(p.move.vel.x, p.move.vel.z) > KICK_SPEED;
       if (door.state === DoorState.Open) prompt = 'Close door';
       else if (running) prompt = 'Kick door';
       else prompt = door.locked ? 'Locked: kick it or shoot it' : 'Open door';
+    } else if (plug) {
+      // Nothing to say while a charge on it counts down.
+      if (p.plantEnd >= 0) prompt = 'Planting charge: keep holding';
+      else if (!this.sim.charges.on(plug.piece.chunkKey, plug.piece.index)) prompt = p.breachCharges > 0 ? 'Hold to plant a breaching charge' : 'Breachable wall: buy a breaching charge (Gear)';
     } else if (swap?.item.kind === 'weapon' && p.alive && p.vehicle < 0) {
       const def = WEAPONS[swap.item.weapon];
       const cur = p.inv[def.slot];
@@ -1148,6 +1178,7 @@ export class Game {
       ['speed', `${(Math.hypot(m.vel.x, m.vel.z) / HU).toFixed(0)} HU/s  vy ${(m.vel.y / HU).toFixed(0)}`],
       ['state', `${m.onGround ? 'ground' : 'air'}${m.ducked ? ' ducked' : ''}${m.noclip ? ' NOCLIP' : ''}  stuck ${m.stuckEvents}`],
       ['bots', `${this.encounters?.aliveCount ?? 0} alive  paths ${this.encounters?.pathQueries ?? 0}  snaps ${stuckSnaps}`],
+      ['peds', `${this.pedestrians?.aliveCount ?? 0} / ${this.pedestrians?.target() ?? 0}`],
       ['money', `$${p.money}  cleared ${this.sim.cleared.size}`],
       ['cars', this.carDebug()],
       ...this.netDebug(),
@@ -1289,6 +1320,7 @@ export class Game {
     this.chunkRenderer.dispose();
     this.vehicleRenderer.dispose();
     this.breakables.dispose();
+    this.fountains.dispose();
     this.materials.dispose();
     this.renderer.dispose();
     this.ui.replaceChildren();

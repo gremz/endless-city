@@ -19,8 +19,9 @@ import { applyDamage, bulletDamage } from './damage';
 import { Economy, START_MONEY } from './Economy';
 import { envAt, type Env, type EnvOverride } from './Environment';
 import { DoorSystem } from './Doors';
-import { GlassSystem } from './Glass';
+import { ChunkPieces } from './Pieces';
 import { GrenadeSystem } from './Grenades';
+import { ChargeSystem, tryPlant, updatePlant } from './breach';
 import { updateHeal } from './medkit';
 import { damageVehicle, driveVehicle, exitVehicle, storeVehiclePrev, useVehicle, occupantIds, seatActor, seatOf, type Vehicle } from './vehicle/Vehicle';
 
@@ -51,7 +52,10 @@ export class Simulation implements WeaponContext {
   readonly systems: SimSystem[] = [];
   readonly grenades = new GrenadeSystem(this);
   readonly doors = new DoorSystem(this);
-  readonly glass = new GlassSystem(this);
+  /** Destructible parts of the city (window panes, breachable walls). */
+  readonly pieces = new ChunkPieces(this);
+  /** Live breaching charges. */
+  readonly charges = new ChargeSystem(this);
   /** Driveable cars in the loaded world (Vehicles spawns them; online clients mirror them). */
   readonly vehicles: Vehicle[] = [];
   /** Time of day and weather, recomputed every tick from the clock. */
@@ -73,7 +77,7 @@ export class Simulation implements WeaponContext {
    */
   predicting = false;
   /**
-   * Online client: doors and glass change only when the host says so (they are still in the
+   * Online client: doors and pieces change only when the host says so (they are still in the
    * collision world, for prediction).
    */
   replica = false;
@@ -241,6 +245,7 @@ export class Simulation implements WeaponContext {
     for (const s of this.systems) s.update(this);
     this.doors.update();
     this.grenades.update();
+    this.charges.update();
     this.separateActors();
 
     // Dummies: stand still, respawn a moment after dying.
@@ -271,8 +276,9 @@ export class Simulation implements WeaponContext {
     if (cmd.pressed & Buttons.USE) {
       const was = p.vehicle;
       useVehicle(this, p);
-      // E opens a door when it didn't get into or out of a car (and then picks nothing up).
-      if (p.vehicle !== was || (p.vehicle < 0 && this.doors.use(p))) this.vehicleUsers.add(p.id);
+      // E opens a door or plants a breaching charge when it didn't get into or out of a car (and
+      // then picks nothing up).
+      if (p.vehicle !== was || (p.vehicle < 0 && (this.doors.use(p) || tryPlant(p, this)))) this.vehicleUsers.add(p.id);
     }
     const car = this.vehicleOf(p);
     if (car) {
@@ -292,7 +298,10 @@ export class Simulation implements WeaponContext {
       p.flashlight = !p.flashlight;
       this.events.push({ type: 'flashlight', actorId: p.id, on: p.flashlight });
     }
-    if (heal) updateHeal(p, cmd, this);
+    if (heal) {
+      updateHeal(p, cmd, this);
+      updatePlant(p, cmd, this);
+    }
     if (this.lagComp) this.lagComp(p, cmd, () => updateWeapon(p, cmd, this));
     else updateWeapon(p, cmd, this);
     this.footsteps(p);
@@ -404,7 +413,7 @@ export class Simulation implements WeaponContext {
   }
 
   onGlassHit(pane: Brush): void {
-    this.glass.hit(pane);
+    this.pieces.hit(pane);
   }
 
   onHit(info: HitInfo): void {
@@ -473,6 +482,8 @@ export class Simulation implements WeaponContext {
     a.helmet = false;
     a.medkits = 0;
     a.healEnd = -1;
+    a.breachCharges = 0;
+    a.plantEnd = -1;
     a.flashUntil = -10;
     a.flashlight = false;
   }

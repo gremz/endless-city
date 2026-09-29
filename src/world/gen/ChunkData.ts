@@ -6,6 +6,9 @@
 /** Brush record: x0 y0 z0 x1 y1 z1 (cm, x/z chunk-local, y absolute), packed, tint. */
 export const BRUSH_STRIDE = 8;
 
+/** Fountain record: x, z, basin inner half-size, water y, bowl inner half-size, bowl water y, spout top y. */
+export const FOUNTAIN_STRIDE = 7;
+
 export const Material = {
   Concrete: 0,
   Plaster: 1,
@@ -72,6 +75,8 @@ export interface MeshData {
   uvs: Float32Array;
   colors: Uint8Array;
   indices: Uint32Array;
+  /** Piece meshes only: brush index, first index and index count of each piece in `indices`. */
+  pieces?: Int32Array;
 }
 
 export const Landmark = { None: 0, Apartment: 1, Office: 2, Garage: 3, Park: 4, Plaza: 5, River: 6 } as const;
@@ -104,6 +109,8 @@ export interface ChunkData {
   seed: number;
   brushes: Int32Array;
   meshes: MeshData[];
+  /** Meshes of pieces that can vanish (breachable plugs), drawn apart from `meshes`. */
+  pieceMeshes?: MeshData[];
   district: number;
   /** Landmark building in this chunk (Landmark), 0 for none. */
   landmark: number;
@@ -130,8 +137,12 @@ export interface ChunkData {
   vehicles: Float32Array;
   /** Doors, DOOR_STRIDE floats each. */
   doors: Float32Array;
-  /** Brush indices (into `brushes`) of breakable window panes. */
-  glass: Int32Array;
+  /** Fountains, FOUNTAIN_STRIDE floats each (world meters; see cityFeatures.fountain). */
+  fountains?: Float32Array;
+  /** Breakable pieces, PIECE_STRIDE ints each (see PieceKind). */
+  pieces: Int32Array;
+  /** Nav changes when breach pieces open, NAV_PATCH_STRIDE ints each (see generateChunk). */
+  navPatch: Int32Array;
   hasEncounter: boolean;
   /** The scripted opening ambush, in view of the spawn drop-in point (see encounters.ts). */
   opening?: boolean;
@@ -152,6 +163,44 @@ export const VEHICLE_STRIDE = 6;
 export const DOOR_STRIDE = 8;
 export const DoorFlag = { Metal: 1, Locked: 2 } as const;
 
+/**
+ * Chunk pieces: parts of the city that can be destroyed for good (see sim/Pieces.ts). A piece is
+ * one brush, identified by its index in the chunk's brushes, so a save can name it.
+ */
+export const PieceKind = {
+  /** A window pane: shot or blasted out, rendered by the glass renderer. */
+  Glass: 0,
+  /** A door-sized plug in a wall that a breaching charge (or a point-blank HE) blows out. */
+  Breach: 1,
+} as const;
+export type PieceKindId = (typeof PieceKind)[keyof typeof PieceKind];
+
+/**
+ * Piece record in ChunkData.pieces: kind, brush index, and the range of its nav patch records
+ * [patchStart, patchEnd) in ChunkData.navPatch (empty when it doesn't change the nav).
+ */
+export const PIECE_STRIDE = 4;
+
+/**
+ * Nav patch record in ChunkData.navPatch: span id, then the span's flags and cover with the piece
+ * standing and with it gone.
+ */
+export const NAV_PATCH_STRIDE = 5;
+
+/** Piece records for window panes (brush indices), with no nav patches. */
+export function glassPieces(panes: readonly number[] | Int32Array): Int32Array {
+  const out = new Int32Array(panes.length * PIECE_STRIDE);
+  for (let k = 0; k < panes.length; k++) out.set([PieceKind.Glass, panes[k], 0, 0], k * PIECE_STRIDE);
+  return out;
+}
+
+/** Brush indices of the pieces of one kind. */
+export function piecesOfKind(d: Pick<ChunkData, 'pieces'>, kind: number): number[] {
+  const out: number[] = [];
+  for (let o = 0; o < d.pieces.length; o += PIECE_STRIDE) if (d.pieces[o] === kind) out.push(d.pieces[o + 1]);
+  return out;
+}
+
 export function transferList(d: ChunkData): ArrayBuffer[] {
   const out: ArrayBuffer[] = [
     d.brushes.buffer as ArrayBuffer,
@@ -166,9 +215,11 @@ export function transferList(d: ChunkData): ArrayBuffer[] {
     d.pickups.buffer as ArrayBuffer,
     d.vehicles.buffer as ArrayBuffer,
     d.doors.buffer as ArrayBuffer,
-    d.glass.buffer as ArrayBuffer,
+    d.pieces.buffer as ArrayBuffer,
+    d.navPatch.buffer as ArrayBuffer,
   ];
-  for (const m of d.meshes) {
+  for (const m of [...d.meshes, ...(d.pieceMeshes ?? [])]) {
+    if (m.pieces) out.push(m.pieces.buffer as ArrayBuffer);
     out.push(
       m.positions.buffer as ArrayBuffer,
       m.normals.buffer as ArrayBuffer,

@@ -385,18 +385,19 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   molotov: { ...grenade('molotov', 'Molotov', 400, 8, 2), armorPen: 1 },
 };
 
-export type BuyItem = WeaponId | 'kevlar' | 'helmet' | 'ammo_primary' | 'ammo_secondary';
+export type BuyItem = WeaponId | 'kevlar' | 'helmet' | 'breach' | 'ammo_primary' | 'ammo_secondary';
 
 export const BUY_MENU: { title: string; items: BuyItem[] }[] = [
   { title: 'Pistols', items: ['glock', 'deagle'] },
   { title: 'SMGs', items: ['mp9', 'ump45'] },
   { title: 'Rifles', items: ['m4a4', 'ak47', 'awp'] },
+  // Breaching charges ('breach') are off the menu until missions give them a purpose.
   { title: 'Gear', items: ['kevlar', 'helmet'] },
   { title: 'Grenades', items: ['flashbang', 'smokegrenade', 'hegrenade', 'molotov'] },
   { title: 'Ammo', items: ['ammo_primary', 'ammo_secondary'] },
 ];
 
-export const GEAR_PRICES = { kevlar: 650, helmet: 1000 } as const;
+export const GEAR_PRICES = { kevlar: 650, helmet: 1000, breach: 300 } as const;
 
 /**
  * Not a weapon: what run-over hits and wrecked-car injuries are credited with (kill feed "Car",
@@ -406,6 +407,9 @@ export const CAR_HIT: WeaponDef = { ...WEAPONS.knife, id: 'car' as WeaponId, nam
 
 /** Not a weapon: what falling damage is credited with (kill feed "Fall"). Armor doesn't help. */
 export const FALL_HIT: WeaponDef = { ...WEAPONS.knife, id: 'fall' as WeaponId, name: 'Fall', killReward: 0, damage: 0, armorPen: 1, rangeMod: 1 };
+
+/** Not a weapon you hold: a planted breaching charge going off. */
+export const BREACH_HIT: WeaponDef = { ...WEAPONS.hegrenade, id: 'breach' as WeaponId, name: 'Breaching charge', damage: 120 };
 
 /** Not a weapon: a door kicked into someone standing behind it. */
 export const KICK_HIT: WeaponDef = { ...WEAPONS.knife, id: 'kick' as WeaponId, name: 'Door kick', damage: 20, armorPen: 1, rangeMod: 1 };

@@ -69,14 +69,57 @@ function tone(
   o.stop(at + opts.dur);
 }
 
-/** Gunshot: sharp click + band-limited crack + low thump + long tail. */
+/** Soft-clip curve: tanh(k·x) normalised so ±1 maps to ±1. */
+function driveCurve(k: number): Float32Array<ArrayBuffer> {
+  const n = 1024;
+  const c = new Float32Array(n);
+  const norm = Math.tanh(k);
+  for (let i = 0; i < n; i++) c[i] = Math.tanh(k * ((i / (n - 1)) * 2 - 1)) / norm;
+  return c;
+}
+
+/**
+ * Gunshot: a broadband muzzle blast, a band-limited crack and a noise "boom" are driven hard into
+ * a saturator (recorded gunshots are always clipped; that grit is most of what reads as gunfire),
+ * then a faint action clack, a rolling tail and two dull slapback echoes off nearby walls.
+ */
 function gun(p: { crack: number; crackQ: number; thump: number; body: number; tail: number; tailFreq: number; gain: number }): Build {
   return (ctx, out, seed) => {
     const detune = 1 + ((seed % 7) - 3) * 0.012;
-    noise(ctx, out, seed * 3 + 1, { dur: 0.004, gain: 0.9 * p.gain, type: 'highpass', freq: 3000, decay: 0.001 });
-    noise(ctx, out, seed * 3 + 2, { dur: 0.25, gain: 1.0 * p.gain, type: 'bandpass', freq: p.crack * detune, q: p.crackQ, decay: p.body, freqEnd: p.crack * 0.5 });
-    tone(ctx, out, { f0: p.thump * 2.2 * detune, f1: p.thump * detune, sweep: 0.06, gain: 0.9 * p.gain, decay: 0.05, dur: 0.3 });
-    noise(ctx, out, seed * 3 + 3, { at: 0.01, dur: p.tail * 3, gain: 0.35 * p.gain, type: 'lowpass', freq: p.tailFreq, decay: p.tail, freqEnd: p.tailFreq * 0.4 });
+    const drive = ctx.createWaveShaper();
+    drive.curve = driveCurve(4);
+    drive.oversample = '4x';
+    const post = ctx.createGain();
+    post.gain.value = 0.75 * p.gain;
+    drive.connect(post).connect(out);
+
+    // Blast: full-range, very short — the impact.
+    noise(ctx, drive, seed * 5 + 1, { dur: 0.02, gain: 1.6, type: 'highpass', freq: 150, decay: 0.004 });
+    // Crack: the calibre's character, sweeping down as it decays.
+    noise(ctx, drive, seed * 5 + 2, { dur: 0.2, gain: 1.1, type: 'bandpass', freq: p.crack * detune, q: p.crackQ, decay: p.body, freqEnd: p.crack * 0.4 });
+    // Boom: low-passed noise rather than a sine sweep, so it doesn't read as a synth kick.
+    noise(ctx, drive, seed * 5 + 3, { dur: 0.35, gain: 1.8, type: 'lowpass', freq: p.thump * 2 * detune, q: 1.2, decay: p.body * 2.2, freqEnd: p.thump * 0.8 });
+    // A little sub weight under the boom.
+    tone(ctx, drive, { f0: p.thump * 1.2 * detune, f1: p.thump * 0.55, sweep: 0.12, gain: 0.5, decay: p.body * 2.5, dur: 0.4 });
+
+    // Clean layers after the saturator.
+    noise(ctx, out, seed * 5 + 4, { at: 0.028 + (seed % 3) * 0.004, dur: 0.02, gain: 0.1 * p.gain, type: 'bandpass', freq: 3600, q: 5, decay: 0.006 });
+    noise(ctx, out, seed * 5 + 5, { at: 0.012, dur: p.tail * 3, gain: 0.3 * p.gain, type: 'lowpass', freq: p.tailFreq, decay: p.tail, freqEnd: p.tailFreq * 0.35 });
+
+    // Slapback: the driven shot bounced off a couple of walls, duller and quieter each time.
+    for (const [delay, level, cutoff] of [
+      [0.085 + (seed % 4) * 0.011, 0.28, 2600],
+      [0.19 + (seed % 3) * 0.017, 0.14, 1400],
+    ] as const) {
+      const d = ctx.createDelay(0.5);
+      d.delayTime.value = delay;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = cutoff;
+      const g = ctx.createGain();
+      g.gain.value = level;
+      post.connect(d).connect(lp).connect(g).connect(out);
+    }
   };
 }
 
@@ -395,6 +438,31 @@ export const RECIPES: Record<string, Recipe> = {
         tone(ctx, out, { at: 0.01 + i * 0.045 + ((s * 7 + i * 13) % 10) / 400, f0: 3000 + ((s * 5 + i * 11) % 13) * 300, gain: 0.07, decay: 0.04, dur: 0.15, type: 'triangle' });
       }
       noise(ctx, out, s + 50, { at: 0.2, dur: 1, gain: 0.2, type: 'highpass', freq: 5000, attack: 0.05, decay: 0.35 });
+    },
+  },
+  // Breaching charge: a short electronic chirp while it counts down.
+  breach_beep: {
+    duration: 0.15,
+    build: (ctx, out) => tone(ctx, out, { f0: 2350, gain: 0.35, decay: 0.03, dur: 0.12, type: 'square' }),
+  },
+  // Pressing a charge onto a wall: tape tearing and a click.
+  charge_plant: {
+    duration: 0.6,
+    build: (ctx, out, s) => {
+      noise(ctx, out, s, { dur: 0.22, gain: 0.3, type: 'bandpass', freq: 2600, q: 1.2, attack: 0.02, decay: 0.08 });
+      noise(ctx, out, s + 1, { at: 0.3, dur: 0.03, gain: 0.4, type: 'bandpass', freq: 3200, q: 4, decay: 0.01 });
+    },
+  },
+  // A wall section coming down: a heavy thud, bricks tumbling, dust hiss.
+  wall_breach: {
+    duration: 2.2,
+    variants: 2,
+    build: (ctx, out, s) => {
+      tone(ctx, out, { f0: 80, f1: 30, sweep: 0.2, gain: 1.1, decay: 0.15, dur: 0.8 });
+      for (let i = 0; i < 14; i++) {
+        noise(ctx, out, s * 17 + i, { at: 0.05 + i * 0.06 + ((s * 3 + i * 7) % 5) / 60, dur: 0.06, gain: 0.35 - i * 0.015, type: 'bandpass', freq: 350 + ((i * 53) % 7) * 120, q: 2, decay: 0.03 });
+      }
+      noise(ctx, out, s + 60, { at: 0.1, dur: 1.8, gain: 0.25, type: 'lowpass', freq: 1400, attack: 0.1, decay: 0.5, freqEnd: 300 });
     },
   },
   // Police radio squelch: a key-up chirp and a burst of static.

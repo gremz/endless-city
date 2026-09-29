@@ -8,7 +8,7 @@ import { addGrenades, grenadeTotal, makeInventory } from '../weapons/Inventory';
 import { brushesFromPacked } from '../world/chunkBrushes';
 import { chunkKey } from '../world/chunkMath';
 import { BrushWriter } from '../world/gen/BrushWriter';
-import { Material, type ChunkData } from '../world/gen/ChunkData';
+import { glassPieces, Material, type ChunkData } from '../world/gen/ChunkData';
 import type { WorldStreamer } from '../world/WorldStreamer';
 import { makeActor, Team } from './Actor';
 import { PACK_RESPAWN, PickupManager } from './Pickups';
@@ -40,7 +40,8 @@ function chunk(): ChunkData {
     pickups: new Float32Array([5, 0.02, 5]),
     vehicles: new Float32Array(0),
     doors: new Float32Array(0),
-    glass: new Int32Array(0),
+    pieces: glassPieces([]),
+    navPatch: new Int32Array(0),
     hasEncounter: false,
     genMs: 0,
   };
@@ -89,6 +90,7 @@ function played(): { save: SaveData; time: number } {
   p.armor = 80;
   p.helmet = true;
   p.medkits = 2;
+  p.breachCharges = 2;
   p.yaw = 1.25;
   p.pitch = -0.2;
   sim.player.money = 4321;
@@ -99,7 +101,7 @@ function played(): { save: SaveData; time: number } {
   ]);
   // A door kicked open in chunk (3, 0) and a window shot out there (not loaded right now).
   sim.doors.restore([[chunkKey(3, 0), 2, 1, -1, 90, 0]]);
-  sim.glass.restore([[chunkKey(3, 0), 17]]);
+  sim.pieces.restore([[chunkKey(3, 0), 17]]);
   const save = JSON.parse(JSON.stringify(captureSave(sim, sim.player, pickups, encounters, null, [chunkKey(0, 0), chunkKey(1, 0)], 1234))) as unknown;
   const valid = validateSave(save);
   expect(valid).not.toBeNull();
@@ -121,7 +123,7 @@ describe('save games', () => {
     expect(sim.time).toBe(time);
     expect(sim.player.money).toBe(4321);
     expect([...sim.cleared]).toEqual([chunkKey(1, 0)]);
-    expect(p).toMatchObject({ alive: true, health: 64, armor: 80, helmet: true, medkits: 2, yaw: 1.25, pitch: -0.2 });
+    expect(p).toMatchObject({ alive: true, health: 64, armor: 80, helmet: true, medkits: 2, breachCharges: 2, yaw: 1.25, pitch: -0.2 });
     expect(p.inv.active).toBe('primary');
     expect(p.inv.primary).toMatchObject({ clip: 11, reserve: 33 });
     expect(p.inv.primary!.def.id).toBe('m4a4');
@@ -144,7 +146,7 @@ describe('save games', () => {
     expect(encounters.states.get(chunkKey(2, 0))).toMatchObject({ remaining: 2, cleared: false, level: 2, cx: 2, cz: 0 });
     expect(save.explored).toEqual([chunkKey(0, 0), chunkKey(1, 0)]);
     expect(sim.doors.list()).toEqual([[chunkKey(3, 0), 2, 1, -1, 90, 0]]);
-    expect(sim.glass.isBroken(chunkKey(3, 0), 17)).toBe(true);
+    expect(sim.pieces.isBroken(chunkKey(3, 0), 17)).toBe(true);
   });
 
   it('rejects saves it cannot trust', () => {
@@ -163,7 +165,17 @@ describe('save games', () => {
     expect(edit((s) => (s.pickups.drops[0].item = { kind: 'weapon', weapon: 'knife', clip: 0, reserve: 0 }))).toBeNull();
     expect(edit((s) => delete s.cleared)).toBeNull();
     expect(edit((s) => (s.doors = [[1, 2, 3]]))).toBeNull();
-    expect(edit((s) => (s.glass = 'all'))).toBeNull();
+    expect(edit((s) => (s.pieces = 'all'))).toBeNull();
+    expect(edit((s) => (s.pieces = [[1, 2, 3]]))).toBeNull();
+  });
+
+  it('loads broken windows from older saves (the `glass` field)', () => {
+    const { save } = played();
+    const old = JSON.parse(JSON.stringify(save));
+    old.glass = old.pieces;
+    delete old.pieces;
+    const valid = validateSave(old);
+    expect(valid?.pieces).toEqual([[chunkKey(3, 0), 17]]);
   });
 
   it('loads older saves without grenades, and grenade drops', () => {
@@ -190,11 +202,13 @@ describe('save games', () => {
     s.money = 1e9;
     s.player.health = 500;
     s.player.medkits = 40;
+    s.player.breachCharges = 9;
     s.player.primary.reserve = 9999;
     const v = validateSave(s)!;
     expect(v.money).toBe(16000);
     expect(v.player.health).toBe(100);
     expect(v.player.medkits).toBe(3);
+    expect(v.player.breachCharges).toBe(2);
     expect(v.player.primary!.reserve).toBe(90);
   });
 });

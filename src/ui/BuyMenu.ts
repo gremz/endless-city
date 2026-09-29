@@ -14,6 +14,7 @@ export interface BuyMenuModel {
 const NAMES: Record<string, string> = {
   kevlar: 'Kevlar Vest',
   helmet: 'Kevlar + Helmet',
+  breach: 'Breaching Charge',
   ammo_primary: 'Primary ammo',
   ammo_secondary: 'Secondary ammo',
 };

@@ -3,6 +3,7 @@ import { addGrenades, grenadeRoom, grenadeTotal, giveWeapon, type WeaponItem } f
 import { equipSlot } from '../weapons/WeaponSystem';
 import { GEAR_PRICES, GRENADE_CAP, GRENADE_TOTAL_CAP, isGrenadeId, WEAPONS, type BuyItem, type WeaponSlot } from '../weapons/weaponDefs';
 import type { Actor } from './Actor';
+import { BREACH_MAX } from './breach';
 import type { Simulation } from './Simulation';
 
 export type { BuyItem };
@@ -43,6 +44,7 @@ export function buyZoneStatus(sim: Simulation, p: Actor, engagedNearby: boolean)
 
 export function priceOf(p: Actor, item: BuyItem): number {
   if (item === 'kevlar') return GEAR_PRICES.kevlar;
+  if (item === 'breach') return GEAR_PRICES.breach;
   if (item === 'helmet') return p.armor >= 100 && !p.helmet ? 350 : GEAR_PRICES.helmet;
   if (isAmmo(item)) {
     // Priced per magazine needed to fill the reserve back up.
@@ -61,6 +63,7 @@ export function unavailableReason(p: Actor, item: BuyItem): string | null {
     if (!w) return item === 'ammo_primary' ? 'No primary weapon' : 'No secondary weapon';
     return w.reserve >= w.def.reserve ? 'Ammo full' : null;
   }
+  if (item === 'breach') return p.breachCharges >= BREACH_MAX ? `Carrying ${BREACH_MAX} already` : null;
   if (isGrenadeId(item)) {
     const inv = p.inv;
     if (grenadeRoom(inv, item) > 0) return null;
@@ -70,7 +73,7 @@ export function unavailableReason(p: Actor, item: BuyItem): string | null {
   return ownsItem(p, item) ? 'Already owned' : null;
 }
 
-function ownsItem(p: Actor, item: Exclude<BuyItem, 'ammo_primary' | 'ammo_secondary'>): boolean {
+function ownsItem(p: Actor, item: Exclude<BuyItem, 'ammo_primary' | 'ammo_secondary' | 'breach'>): boolean {
   if (item === 'kevlar') return p.armor >= 100;
   if (item === 'helmet') return p.armor >= 100 && p.helmet;
   const def = WEAPONS[item];
@@ -96,6 +99,8 @@ export function buy(sim: Simulation, p: Actor, item: BuyItem, engagedNearby: boo
   } else if (item === 'helmet') {
     p.armor = 100;
     p.helmet = true;
+  } else if (item === 'breach') {
+    p.breachCharges++;
   } else if (isAmmo(item)) {
     const w = ammoTarget(p, item)!;
     w.reserve = w.def.reserve;

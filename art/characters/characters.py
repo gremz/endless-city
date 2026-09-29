@@ -1,4 +1,4 @@
-"""Low-poly gang member and terrorist characters (T-pose, unarmed) for Blender 4.0+.
+"""Low-poly gang member, terrorist and civilian characters (T-pose, unarmed) for Blender 4.0+.
 
 Run headless:
     blender --background --python characters.py -- <output_dir>
@@ -29,8 +29,8 @@ scene = bpy.context.scene
 # legs.style:  pants | shorts          (baggy, pockets, socks are optional flags)
 # shoes:       sneakers | boots
 # hands:       skin | gloves
-# head items:  hair, beard, beanie, cap_back, bandana, balaclava, sunglasses, goggles, gasmask
-# extras:      chain, belt, chest_rig, plate_carrier, backpack, knee_pads
+# head items:  hair, beard, beanie, cap, cap_back, bandana, balaclava, sunglasses, goggles, gasmask
+# extras:      chain, belt, tie, hivis, chest_rig, plate_carrier, backpack, knee_pads
 # colors:      material colours keyed by part (top, shirt, pants, shoe, sole, hair, hat, mask, ...)
 
 CHARACTERS = [
@@ -81,6 +81,38 @@ CHARACTERS = [
          colors=dict(top="#3E3A33", button="#1A1A1A", pants="#2C2C2C", shoe="#1F1B17",
                      gloves="#1A1A1A", hat="#232323", mask="#1E1E1E", lens="#4A6B6B",
                      filter="#6B6B6B", rig="#3F4430", pouch="#4A5038")),
+
+    # Pedestrians: bright, everyday clothes so they read as bystanders at a glance.
+    dict(name="Civ_Office", group="Civilians", skin="#E8C3A4",
+         top="jacket", legs=dict(style="pants"), shoes="boots", hands="skin",
+         head=["hair"], extras=["tie", "belt"],
+         colors=dict(top="#2E3A4F", shirt="#E9ECEF", pants="#2E3A4F", shoe="#141414",
+                     hair="#4A3222", tie="#8E2430", belt="#1A1512", buckle="#A8A8A8")),
+    dict(name="Civ_Jogger", group="Civilians", skin="#A86B47",
+         top="tank", legs=dict(style="shorts", socks=True), shoes="sneakers", hands="skin",
+         head=["hair", "cap"], extras=[],
+         colors=dict(top="#E4572E", pants="#1E1E24", sock="#F2F2F2", shoe="#2D7DD2",
+                     sole="#FFFFFF", hair="#1A1410", hat="#F2F2F2")),
+    dict(name="Civ_Elderly", group="Civilians", skin="#F0CDB4",
+         top="coat", legs=dict(style="pants"), shoes="boots", hands="skin",
+         head=["hair", "sunglasses"], extras=[],
+         colors=dict(top="#8C7A5B", button="#3B2F22", pants="#5A5A5E", shoe="#4A3322",
+                     hair="#CFCFCF", glasses="#7F97A8")),
+    dict(name="Civ_Tourist", group="Civilians", skin="#F2C9A8",
+         top="tee", legs=dict(style="shorts", pockets=True), shoes="sneakers", hands="skin",
+         head=["hair", "cap", "sunglasses"], extras=["backpack"],
+         colors=dict(top="#3FA7C9", pants="#C8B48A", shoe="#EDEDED", sole="#FAFAFA",
+                     hair="#B5823C", hat="#D94F3D", glasses="#101010", pack="#556B2F")),
+    dict(name="Civ_Student", group="Civilians", skin="#6B4430",
+         top="hoodie", legs=dict(style="pants", baggy=True), shoes="sneakers", hands="skin",
+         head=["hair"], extras=["backpack"],
+         colors=dict(top="#7A4FA0", string="#EDEDED", pants="#35507A", shoe="#D8D8D8",
+                     sole="#FAFAFA", hair="#120E0C", pack="#2B2B2B")),
+    dict(name="Civ_Worker", group="Civilians", skin="#C99A72",
+         top="tee", legs=dict(style="pants", pockets=True), shoes="boots", hands="gloves",
+         head=["cap", "beard"], extras=["hivis"],
+         colors=dict(top="#5B6770", pants="#3C4A5C", shoe="#5A4030", gloves="#8A7A55",
+                     hat="#F2C230", hair="#3B2A1E", hivis="#F5D311", stripe="#DADADA")),
 ]
 
 
@@ -315,6 +347,9 @@ def build(c):
     if "beanie" in head:
         dome("Beanie", (0, 0.003, 1.625), (0.107, 0.117, 0.115), m("hat"))
         segment("BeanieRim", (0, 0.003, 1.62), (0, 0.003, 1.655), 0.113, 0.113, m("hat"), sides=8)
+    if "cap" in head:
+        dome("Cap", (0, 0.003, 1.635), (0.104, 0.114, 0.09), m("hat"))
+        box("CapBrim", (-0.065, 0.065), (-0.19, -0.08), (1.632, 1.646), m("hat"))
     if "cap_back" in head:
         dome("Cap", (0, 0.003, 1.635), (0.104, 0.114, 0.09), m("hat"))
         box("CapBrim", (-0.065, 0.065), (0.08, 0.19), (1.632, 1.646), m("hat"))
@@ -347,6 +382,15 @@ def build(c):
         by = 0.122 if style == "coat" else 0.118
         box("Belt", (-0.192, 0.192), (-by, by), bz, m("belt"))
         box("Buckle", (-0.028, 0.028), (-by - 0.01, -by + 0.004), (bz[0] + 0.01, bz[1] - 0.01), m("buckle"))
+    if "tie" in extras:
+        box("TieKnot", (-0.02, 0.02), (front_y - 0.016, front_y + 0.004), (1.37, 1.41), m("tie"))
+        box("Tie", (-0.03, 0.03), (front_y - 0.012, front_y + 0.004), (1.08, 1.37), m("tie"),
+            top_scale=(0.6, 1))
+    if "hivis" in extras:
+        box("HiVis", (-0.195, 0.195), (-0.122, 0.122), (0.95, 1.40), m("hivis"), top_scale=(1.18, 1.04))
+        for i, bz in enumerate((1.02, 1.16)):
+            box(f"HiVisStripe.{i}", (-0.2, 0.2), (-0.136, -0.12), (bz, bz + 0.035), m("stripe"))
+            box(f"HiVisStripeBack.{i}", (-0.2, 0.2), (0.12, 0.136), (bz, bz + 0.035), m("stripe"))
     if "chest_rig" in extras:
         box("ChestRig", (-0.16, 0.16), (-0.135, -0.10), (1.0, 1.2), m("rig"))
         for i, px in enumerate((-0.1, 0.0, 0.1)):

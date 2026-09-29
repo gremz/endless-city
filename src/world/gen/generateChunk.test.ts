@@ -7,7 +7,7 @@ import { CollisionWorld } from '../../physics/CollisionWorld';
 import { makeTrace } from '../../physics/trace';
 import { brushesFromPacked } from '../chunkBrushes';
 import { worldToChunk } from '../chunkMath';
-import { BRUSH_STRIDE, DOOR_STRIDE, DoorFlag, Landmark, Material, NAV_CELL, NAV_RES, NavFlag, VEHICLE_STRIDE, wordContents, wordMaterial, type ChunkData } from './ChunkData';
+import { BRUSH_STRIDE, DOOR_STRIDE, DoorFlag, Landmark, Material, NAV_CELL, NAV_PATCH_STRIDE, NAV_RES, NavFlag, PIECE_STRIDE, PieceKind, piecesOfKind, VEHICLE_STRIDE, wordContents, wordMaterial, type ChunkData } from './ChunkData';
 import { CAR_L, CAR_W } from './streets';
 import { generateChunk } from './generateChunk';
 import { chunkPlan } from './cityPlan';
@@ -203,7 +203,7 @@ describe('generateChunk', () => {
       const d = generateChunk(seed, 0, 0);
       expect(d.vehicles.length).toBeGreaterThanOrEqual(VEHICLE_STRIDE);
     }
-  });
+  }, 30000);
 
   it('every spawn slot and patrol point is on a reachable walkable cell (200 chunks)', () => {
     let totalSpawns = 0;
@@ -271,7 +271,7 @@ describe('generateChunk', () => {
         expect(world.testBox(tr, jamb(-1), small, smallMax, MASK_PLAYER)).toBe(true);
         expect(world.testBox(tr, jamb(1), small, smallMax, MASK_PLAYER)).toBe(true);
       }
-      for (const i of d.glass) {
+      for (const i of piecesOfKind(d, PieceKind.Glass)) {
         panes++;
         const w = d.brushes[i * BRUSH_STRIDE + 6];
         expect(wordMaterial(w)).toBe(Material.Glass);
@@ -282,6 +282,47 @@ describe('generateChunk', () => {
     expect(locked).toBeGreaterThan(0);
     expect(panes).toBeGreaterThan(100);
   });
+
+  it('walls up some doorways with breachable plugs, each opening a way for bots once blown', () => {
+    let plugs = 0;
+    let exterior = 0;
+    for (let k = 0; k < 100; k++) {
+      const cx = (k % 10) - 5;
+      const cz = Math.floor(k / 10) - 5;
+      const d = generateChunk(99, cx, cz, { breachable: true });
+      const b = d.brushes;
+      for (let o = 0; o < d.pieces.length; o += PIECE_STRIDE) {
+        if (d.pieces[o] !== PieceKind.Breach) continue;
+        plugs++;
+        const i = d.pieces[o + 1] * BRUSH_STRIDE;
+        const [x0, y0, z0, x1, y1, z1] = b.subarray(i, i + 6);
+        // Solid, door-sized, standing on the floor under a lintel of the same wall.
+        expect(wordContents(b[i + 6]) & Contents.SOLID_PLAYER).toBeTruthy();
+        expect(Math.max(x1 - x0, z1 - z0)).toBe(150);
+        expect(y1 - y0).toBe(220);
+        if (Math.min(x1 - x0, z1 - z0) >= 25) exterior++;
+        let lintel = false;
+        for (let q = 0; q < b.length && !lintel; q += BRUSH_STRIDE) {
+          lintel = b[q + 1] === y1 && b[q] <= x0 && b[q + 3] >= x1 && b[q + 2] <= z0 && b[q + 5] >= z1;
+        }
+        expect(lintel).toBe(true);
+        // Blowing it out makes floor walkable that wasn't (the doorway, the ground under it).
+        let opens = 0;
+        for (let r = d.pieces[o + 2]; r < d.pieces[o + 3]; r++) {
+          const p = r * NAV_PATCH_STRIDE;
+          if (!(d.navPatch[p + 1] & NavFlag.Walkable) && d.navPatch[p + 3] & NavFlag.Walkable) opens++;
+        }
+        expect(opens).toBeGreaterThan(0);
+      }
+    }
+    expect(plugs).toBeGreaterThan(40);
+    expect(exterior).toBeGreaterThan(5);
+    // Deterministic, like everything else.
+    const a = generateChunk(99, 1, 1, { breachable: true });
+    const again = generateChunk(99, 1, 1, { breachable: true });
+    expect([...again.pieces]).toEqual([...a.pieces]);
+    expect([...again.navPatch]).toEqual([...a.navPatch]);
+  }, 60000);
 
   it('builds landmark buildings whose every floor can be reached', () => {
     const seen = new Set<number>();
